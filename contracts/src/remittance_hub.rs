@@ -30,14 +30,14 @@ impl RemittanceHubContract {
         to: Address,
         amount: i128,
         currency: Symbol,
-    ) -> Result<u32, RemittanceError> {
+    ) -> Result<u64, RemittanceError> {
         from.require_auth();
 
         if amount <= 0 {
             return Err(RemittanceError::InvalidAmount);
         }
 
-        let remittance_id = env.ledger().sequence();
+        let remittance_id = env.ledger().sequence() as u64;
         
         let remittance = RemittanceData {
             from: from.clone(),
@@ -63,7 +63,7 @@ impl RemittanceHubContract {
         amount
     }
 
-    pub fn complete_remittance(env: Env, remittance_id: u32, caller: Address) -> Result<(), RemittanceError> {
+    pub fn complete_remittance(env: Env, remittance_id: u64, caller: Address) -> Result<(), RemittanceError> {
         caller.require_auth();
 
         let mut remittance: RemittanceData = env
@@ -82,7 +82,7 @@ impl RemittanceHubContract {
         Ok(())
     }
 
-    pub fn get_remittance(env: Env, remittance_id: u32) -> Option<RemittanceData> {
+    pub fn get_remittance(env: Env, remittance_id: u64) -> Option<RemittanceData> {
         env.storage().persistent().get(&remittance_id)
     }
 }
