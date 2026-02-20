@@ -21,6 +21,13 @@ pub enum Error {
     InsufficientAmount = 15,
     AlreadyFunded = 16,
     DepositOverflow = 17,
+    ConditionsNotMet = 18,
+    UnauthorizedCaller = 19,
+    InsufficientFunds = 20,
+    ConversionFailed = 21,
+    InvalidFeePercentage = 22,
+    PartialReleaseNotAllowed = 23,
+    ArithmeticOverflow = 24,
 }
 
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -56,13 +63,16 @@ pub struct Escrow {
     pub recipient: Address,
     pub amount: i128,
     pub deposited_amount: i128,
+    pub released_amount: i128,
     pub asset: Asset,
     pub release_conditions: ReleaseCondition,
     pub status: EscrowStatus,
     pub created_at: u64,
     pub last_deposit_at: u64,
+    pub release_timestamp: u64,
     pub escrow_id: u64,
     pub memo: String,
+    pub allow_partial_release: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -72,6 +82,8 @@ pub enum DataKey {
     Escrow(u64),
     Admin,
     SupportedAssets,
+    PlatformFeePercentage,
+    ReentrancyGuard,
 }
 
 #[contract]
@@ -87,6 +99,8 @@ impl PaymentEscrowContract {
         env.storage().instance().set(&DataKey::Admin, &admin);
         env.storage().instance().set(&DataKey::EscrowCounter, &0u64);
         env.storage().instance().set(&DataKey::SupportedAssets, &Vec::<Asset>::new(&env));
+        env.storage().instance().set(&DataKey::PlatformFeePercentage, &0i128);
+        env.storage().instance().set(&DataKey::ReentrancyGuard, &false);
     }
 
     pub fn add_supported_asset(env: Env, admin: Address, asset: Asset) {
@@ -100,6 +114,29 @@ impl PaymentEscrowContract {
         let mut assets: Vec<Asset> = env.storage().instance().get(&DataKey::SupportedAssets).unwrap();
         assets.push_back(asset);
         env.storage().instance().set(&DataKey::SupportedAssets, &assets);
+    }
+
+    pub fn set_platform_fee(env: Env, admin: Address, fee_percentage: i128) -> Result<(), Error> {
+        admin.require_auth();
+        
+        let stored_admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
+        if admin != stored_admin {
+            return Err(Error::Unauthorized);
+        }
+
+        if fee_percentage < 0 || fee_percentage > 10000 {
+            return Err(Error::InvalidFeePercentage);
+        }
+
+        env.storage().instance().set(&DataKey::PlatformFeePercentage, &fee_percentage);
+        
+        env.events().publish((symbol_short!("fee_set"),), fee_percentage);
+        
+        Ok(())
+    }
+
+    pub fn get_platform_fee(env: Env) -> i128 {
+        env.storage().instance().get(&DataKey::PlatformFeePercentage).unwrap_or(0)
     }
 
     pub fn create_escrow(
@@ -142,6 +179,7 @@ impl PaymentEscrowContract {
             recipient,
             amount,
             deposited_amount: 0,
+            released_amount: 0,
             asset,
             release_conditions: ReleaseCondition {
                 expiration_timestamp,
@@ -151,8 +189,10 @@ impl PaymentEscrowContract {
             status: EscrowStatus::Pending,
             created_at: env.ledger().timestamp(),
             last_deposit_at: 0,
+            release_timestamp: 0,
             escrow_id: counter,
             memo,
+            allow_partial_release: false,
         };
 
         env.storage().instance().set(&DataKey::Escrow(counter), &escrow);
@@ -238,27 +278,196 @@ impl PaymentEscrowContract {
     pub fn release_escrow(env: Env, escrow_id: u64, caller: Address, token_address: Address) -> Result<(), Error> {
         caller.require_auth();
 
+        let guard: bool = env.storage().instance().get(&DataKey::ReentrancyGuard).unwrap_or(false);
+        if guard {
+            return Err(Error::UnauthorizedCaller);
+        }
+        env.storage().instance().set(&DataKey::ReentrancyGuard, &true);
+
         let mut escrow: Escrow = env.storage().instance().get(&DataKey::Escrow(escrow_id)).ok_or(Error::EscrowNotFound)?;
 
-        if escrow.status != EscrowStatus::Approved {
+        if escrow.status != EscrowStatus::Approved && escrow.status != EscrowStatus::Funded {
+            env.storage().instance().set(&DataKey::ReentrancyGuard, &false);
             return Err(Error::NotApproved);
         }
 
-        if env.ledger().timestamp() > escrow.release_conditions.expiration_timestamp {
+        if escrow.status == EscrowStatus::Released && !escrow.allow_partial_release {
+            env.storage().instance().set(&DataKey::ReentrancyGuard, &false);
+            return Err(Error::AlreadyReleased);
+        }
+
+        let current_time = env.ledger().timestamp();
+        if current_time > escrow.release_conditions.expiration_timestamp {
             escrow.status = EscrowStatus::Expired;
             env.storage().instance().set(&DataKey::Escrow(escrow_id), &escrow);
+            env.storage().instance().set(&DataKey::ReentrancyGuard, &false);
             return Err(Error::Expired);
+        }
+
+        let stored_admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
+        if caller != escrow.recipient && caller != stored_admin && caller != escrow.sender {
+            env.storage().instance().set(&DataKey::ReentrancyGuard, &false);
+            return Err(Error::UnauthorizedCaller);
+        }
+
+        if escrow.deposited_amount == 0 {
+            env.storage().instance().set(&DataKey::ReentrancyGuard, &false);
+            return Err(Error::InsufficientFunds);
+        }
+
+        let available_amount = escrow.deposited_amount.checked_sub(escrow.released_amount)
+            .ok_or(Error::ArithmeticOverflow)?;
+
+        if available_amount <= 0 {
+            env.storage().instance().set(&DataKey::ReentrancyGuard, &false);
+            return Err(Error::InsufficientFunds);
+        }
+
+        let fee_percentage = Self::get_platform_fee(env.clone());
+        let fee_amount = available_amount.checked_mul(fee_percentage)
+            .ok_or(Error::ArithmeticOverflow)?
+            .checked_div(10000)
+            .ok_or(Error::ArithmeticOverflow)?;
+
+        let recipient_amount = available_amount.checked_sub(fee_amount)
+            .ok_or(Error::ArithmeticOverflow)?;
+
+        if recipient_amount <= 0 {
+            env.storage().instance().set(&DataKey::ReentrancyGuard, &false);
+            return Err(Error::InsufficientAmount);
         }
 
         let token_client = token::Client::new(&env, &token_address);
         let contract_address = env.current_contract_address();
         
-        token_client.transfer(&contract_address, &escrow.recipient, &escrow.deposited_amount);
+        token_client.transfer(&contract_address, &escrow.recipient, &recipient_amount);
 
+        if fee_amount > 0 {
+            token_client.transfer(&contract_address, &stored_admin, &fee_amount);
+        }
+
+        escrow.released_amount = escrow.released_amount.checked_add(available_amount)
+            .ok_or(Error::ArithmeticOverflow)?;
         escrow.status = EscrowStatus::Released;
+        escrow.release_timestamp = current_time;
+        
         env.storage().instance().set(&DataKey::Escrow(escrow_id), &escrow);
 
-        env.events().publish((symbol_short!("released"), escrow_id), caller);
+        env.events().publish(
+            (symbol_short!("released"), escrow_id),
+            (caller.clone(), recipient_amount, fee_amount, current_time)
+        );
+
+        env.storage().instance().set(&DataKey::ReentrancyGuard, &false);
+
+        Ok(())
+    }
+
+    pub fn release_partial(
+        env: Env,
+        escrow_id: u64,
+        caller: Address,
+        token_address: Address,
+        release_amount: i128,
+    ) -> Result<(), Error> {
+        caller.require_auth();
+
+        if release_amount <= 0 {
+            return Err(Error::InvalidAmount);
+        }
+
+        let guard: bool = env.storage().instance().get(&DataKey::ReentrancyGuard).unwrap_or(false);
+        if guard {
+            return Err(Error::UnauthorizedCaller);
+        }
+        env.storage().instance().set(&DataKey::ReentrancyGuard, &true);
+
+        let mut escrow: Escrow = env.storage().instance().get(&DataKey::Escrow(escrow_id)).ok_or(Error::EscrowNotFound)?;
+
+        if !escrow.allow_partial_release {
+            env.storage().instance().set(&DataKey::ReentrancyGuard, &false);
+            return Err(Error::PartialReleaseNotAllowed);
+        }
+
+        if escrow.status != EscrowStatus::Approved && escrow.status != EscrowStatus::Funded && escrow.status != EscrowStatus::Released {
+            env.storage().instance().set(&DataKey::ReentrancyGuard, &false);
+            return Err(Error::InvalidStatus);
+        }
+
+        let current_time = env.ledger().timestamp();
+        if current_time > escrow.release_conditions.expiration_timestamp {
+            escrow.status = EscrowStatus::Expired;
+            env.storage().instance().set(&DataKey::Escrow(escrow_id), &escrow);
+            env.storage().instance().set(&DataKey::ReentrancyGuard, &false);
+            return Err(Error::Expired);
+        }
+
+        let stored_admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
+        if caller != escrow.recipient && caller != stored_admin {
+            env.storage().instance().set(&DataKey::ReentrancyGuard, &false);
+            return Err(Error::UnauthorizedCaller);
+        }
+
+        let available_amount = escrow.deposited_amount.checked_sub(escrow.released_amount)
+            .ok_or(Error::ArithmeticOverflow)?;
+
+        if release_amount > available_amount {
+            env.storage().instance().set(&DataKey::ReentrancyGuard, &false);
+            return Err(Error::InsufficientFunds);
+        }
+
+        let fee_percentage = Self::get_platform_fee(env.clone());
+        let fee_amount = release_amount.checked_mul(fee_percentage)
+            .ok_or(Error::ArithmeticOverflow)?
+            .checked_div(10000)
+            .ok_or(Error::ArithmeticOverflow)?;
+
+        let recipient_amount = release_amount.checked_sub(fee_amount)
+            .ok_or(Error::ArithmeticOverflow)?;
+
+        let token_client = token::Client::new(&env, &token_address);
+        let contract_address = env.current_contract_address();
+        
+        token_client.transfer(&contract_address, &escrow.recipient, &recipient_amount);
+
+        if fee_amount > 0 {
+            token_client.transfer(&contract_address, &stored_admin, &fee_amount);
+        }
+
+        escrow.released_amount = escrow.released_amount.checked_add(release_amount)
+            .ok_or(Error::ArithmeticOverflow)?;
+        
+        if escrow.released_amount >= escrow.deposited_amount {
+            escrow.status = EscrowStatus::Released;
+        }
+        
+        escrow.release_timestamp = current_time;
+        
+        env.storage().instance().set(&DataKey::Escrow(escrow_id), &escrow);
+
+        env.events().publish(
+            (symbol_short!("partial"), escrow_id),
+            (caller.clone(), recipient_amount, fee_amount, escrow.released_amount)
+        );
+
+        env.storage().instance().set(&DataKey::ReentrancyGuard, &false);
+
+        Ok(())
+    }
+
+    pub fn enable_partial_release(env: Env, escrow_id: u64, caller: Address) -> Result<(), Error> {
+        caller.require_auth();
+
+        let mut escrow: Escrow = env.storage().instance().get(&DataKey::Escrow(escrow_id)).ok_or(Error::EscrowNotFound)?;
+
+        if caller != escrow.sender {
+            return Err(Error::Unauthorized);
+        }
+
+        escrow.allow_partial_release = true;
+        env.storage().instance().set(&DataKey::Escrow(escrow_id), &escrow);
+
+        env.events().publish((symbol_short!("part_enab"), escrow_id), caller);
 
         Ok(())
     }
@@ -363,10 +572,12 @@ mod test {
         let escrow_data = escrow.unwrap();
         assert_eq!(escrow_data.amount, 1000);
         assert_eq!(escrow_data.deposited_amount, 0);
+        assert_eq!(escrow_data.released_amount, 0);
         assert_eq!(escrow_data.sender, sender);
         assert_eq!(escrow_data.recipient, recipient);
         assert_eq!(escrow_data.status, EscrowStatus::Pending);
         assert_eq!(escrow_data.created_at, 1000);
+        assert_eq!(escrow_data.allow_partial_release, false);
     }
 
     #[test]
@@ -637,5 +848,180 @@ mod test {
 
         let sender_balance_after = token.balance(&sender);
         assert_eq!(sender_balance_after - sender_balance_before, 1000);
+    }
+
+    #[test]
+    fn test_set_platform_fee() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let contract_id = env.register_contract(None, PaymentEscrowContract);
+        let client = PaymentEscrowContractClient::new(&env, &contract_id);
+
+        let admin = Address::generate(&env);
+        client.initialize(&admin);
+
+        client.set_platform_fee(&admin, &250);
+        
+        let fee = client.get_platform_fee();
+        assert_eq!(fee, 250);
+    }
+
+    #[test]
+    fn test_release_with_fee() {
+        let env = Env::default();
+        env.mock_all_auths();
+        env.ledger().with_mut(|li| {
+            li.timestamp = 1000;
+        });
+
+        let admin = Address::generate(&env);
+        let sender = Address::generate(&env);
+        let recipient = Address::generate(&env);
+
+        let (token, token_admin) = create_token_contract(&env, &admin);
+        token_admin.mint(&sender, &5000);
+
+        let contract_id = env.register_contract(None, PaymentEscrowContract);
+        let client = PaymentEscrowContractClient::new(&env, &contract_id);
+
+        client.initialize(&admin);
+
+        let asset = Asset {
+            code: String::from_str(&env, "USDC"),
+            issuer: admin.clone(),
+        };
+
+        client.add_supported_asset(&admin, &asset);
+        client.set_platform_fee(&admin, &250);
+
+        let escrow_id = client.create_escrow(
+            &sender,
+            &recipient,
+            &1000,
+            &asset,
+            &2000,
+            &String::from_str(&env, "Test")
+        );
+
+        client.deposit(&escrow_id, &sender, &1000, &token.address);
+        client.approve_escrow(&escrow_id, &admin);
+
+        let recipient_balance_before = token.balance(&recipient);
+        let admin_balance_before = token.balance(&admin);
+        
+        client.release_escrow(&escrow_id, &recipient, &token.address);
+        
+        let escrow = client.get_escrow(&escrow_id).unwrap();
+        assert_eq!(escrow.status, EscrowStatus::Released);
+        assert_eq!(escrow.released_amount, 1000);
+
+        let recipient_balance_after = token.balance(&recipient);
+        let admin_balance_after = token.balance(&admin);
+        
+        let fee = 1000 * 250 / 10000;
+        assert_eq!(recipient_balance_after - recipient_balance_before, 1000 - fee);
+        assert_eq!(admin_balance_after - admin_balance_before, fee);
+    }
+
+    #[test]
+    fn test_partial_release() {
+        let env = Env::default();
+        env.mock_all_auths();
+        env.ledger().with_mut(|li| {
+            li.timestamp = 1000;
+        });
+
+        let admin = Address::generate(&env);
+        let sender = Address::generate(&env);
+        let recipient = Address::generate(&env);
+
+        let (token, token_admin) = create_token_contract(&env, &admin);
+        token_admin.mint(&sender, &5000);
+
+        let contract_id = env.register_contract(None, PaymentEscrowContract);
+        let client = PaymentEscrowContractClient::new(&env, &contract_id);
+
+        client.initialize(&admin);
+
+        let asset = Asset {
+            code: String::from_str(&env, "USDC"),
+            issuer: admin.clone(),
+        };
+
+        client.add_supported_asset(&admin, &asset);
+
+        let escrow_id = client.create_escrow(
+            &sender,
+            &recipient,
+            &1000,
+            &asset,
+            &2000,
+            &String::from_str(&env, "Test")
+        );
+
+        client.deposit(&escrow_id, &sender, &1000, &token.address);
+        client.approve_escrow(&escrow_id, &admin);
+        client.enable_partial_release(&escrow_id, &sender);
+
+        let recipient_balance_before = token.balance(&recipient);
+        
+        client.release_partial(&escrow_id, &recipient, &token.address, &400);
+        
+        let escrow = client.get_escrow(&escrow_id).unwrap();
+        assert_eq!(escrow.released_amount, 400);
+        
+        let recipient_balance_after = token.balance(&recipient);
+        assert_eq!(recipient_balance_after - recipient_balance_before, 400);
+
+        client.release_partial(&escrow_id, &recipient, &token.address, &600);
+        
+        let escrow = client.get_escrow(&escrow_id).unwrap();
+        assert_eq!(escrow.released_amount, 1000);
+        assert_eq!(escrow.status, EscrowStatus::Released);
+    }
+
+    #[test]
+    fn test_release_unauthorized_caller() {
+        let env = Env::default();
+        env.mock_all_auths();
+        env.ledger().with_mut(|li| {
+            li.timestamp = 1000;
+        });
+
+        let admin = Address::generate(&env);
+        let sender = Address::generate(&env);
+        let recipient = Address::generate(&env);
+        let unauthorized = Address::generate(&env);
+
+        let (token, token_admin) = create_token_contract(&env, &admin);
+        token_admin.mint(&sender, &5000);
+
+        let contract_id = env.register_contract(None, PaymentEscrowContract);
+        let client = PaymentEscrowContractClient::new(&env, &contract_id);
+
+        client.initialize(&admin);
+
+        let asset = Asset {
+            code: String::from_str(&env, "USDC"),
+            issuer: admin.clone(),
+        };
+
+        client.add_supported_asset(&admin, &asset);
+
+        let escrow_id = client.create_escrow(
+            &sender,
+            &recipient,
+            &1000,
+            &asset,
+            &2000,
+            &String::from_str(&env, "Test")
+        );
+
+        client.deposit(&escrow_id, &sender, &1000, &token.address);
+        client.approve_escrow(&escrow_id, &admin);
+
+        let result = client.try_release_escrow(&escrow_id, &unauthorized, &token.address);
+        assert_eq!(result, Err(Ok(Error::UnauthorizedCaller)));
     }
 }
