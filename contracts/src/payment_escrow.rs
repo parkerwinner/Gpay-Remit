@@ -32,6 +32,12 @@ pub enum Error {
     UnauthorizedRefund = 26,
     NoFundsAvailable = 27,
     InvalidRefundAmount = 28,
+    SignatureMismatch = 29,
+    OracleFailure = 30,
+    InvalidProof = 31,
+    TimestampNotReached = 32,
+    ApprovalRequired = 33,
+    OracleDataMissing = 34,
 }
 
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -55,6 +61,39 @@ pub enum RefundReason {
     AdminAction,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[contracttype]
+pub enum ConditionType {
+    Timestamp,
+    Approval,
+    OraclePrice,
+    MultiSignature,
+    KYCVerified,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[contracttype]
+pub enum ConditionOperator {
+    And,
+    Or,
+}
+
+#[derive(Clone)]
+#[contracttype]
+pub struct Condition {
+    pub condition_type: ConditionType,
+    pub required: bool,
+    pub verified: bool,
+    pub threshold_value: i128,
+}
+
+#[derive(Clone)]
+#[contracttype]
+pub struct VerificationResult {
+    pub all_passed: bool,
+    pub failed_conditions: Vec<ConditionType>,
+}
+
 #[derive(Clone)]
 #[contracttype]
 pub struct Asset {
@@ -68,6 +107,10 @@ pub struct ReleaseCondition {
     pub expiration_timestamp: u64,
     pub recipient_approval: bool,
     pub oracle_confirmation: bool,
+    pub conditions: Vec<Condition>,
+    pub operator: ConditionOperator,
+    pub min_approvals: u32,
+    pub current_approvals: u32,
 }
 
 #[derive(Clone)]
@@ -227,6 +270,10 @@ impl PaymentEscrowContract {
                 expiration_timestamp,
                 recipient_approval: false,
                 oracle_confirmation: false,
+                conditions: Vec::new(&env),
+                operator: ConditionOperator::And,
+                min_approvals: 1,
+                current_approvals: 0,
             },
             status: EscrowStatus::Pending,
             created_at: env.ledger().timestamp(),
@@ -511,6 +558,192 @@ impl PaymentEscrowContract {
         env.storage().instance().set(&DataKey::Escrow(escrow_id), &escrow);
 
         env.events().publish((symbol_short!("part_enab"), escrow_id), caller);
+
+        Ok(())
+    }
+
+    pub fn add_condition(
+        env: Env,
+        escrow_id: u64,
+        caller: Address,
+        condition_type: ConditionType,
+        required: bool,
+        threshold_value: i128,
+    ) -> Result<(), Error> {
+        caller.require_auth();
+
+        let mut escrow: Escrow = env.storage().instance().get(&DataKey::Escrow(escrow_id)).ok_or(Error::EscrowNotFound)?;
+
+        let stored_admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
+        if caller != escrow.sender && caller != stored_admin {
+            return Err(Error::Unauthorized);
+        }
+
+        if escrow.status != EscrowStatus::Pending && escrow.status != EscrowStatus::Funded {
+            return Err(Error::InvalidStatus);
+        }
+
+        let condition = Condition {
+            condition_type,
+            required,
+            verified: false,
+            threshold_value,
+        };
+
+        escrow.release_conditions.conditions.push_back(condition);
+        env.storage().instance().set(&DataKey::Escrow(escrow_id), &escrow);
+
+        env.events().publish((symbol_short!("cond_add"), escrow_id), condition_type);
+
+        Ok(())
+    }
+
+    pub fn set_condition_operator(
+        env: Env,
+        escrow_id: u64,
+        caller: Address,
+        operator: ConditionOperator,
+    ) -> Result<(), Error> {
+        caller.require_auth();
+
+        let mut escrow: Escrow = env.storage().instance().get(&DataKey::Escrow(escrow_id)).ok_or(Error::EscrowNotFound)?;
+
+        let stored_admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
+        if caller != escrow.sender && caller != stored_admin {
+            return Err(Error::Unauthorized);
+        }
+
+        escrow.release_conditions.operator = operator;
+        env.storage().instance().set(&DataKey::Escrow(escrow_id), &escrow);
+
+        env.events().publish((symbol_short!("cond_op"), escrow_id), operator);
+
+        Ok(())
+    }
+
+    pub fn verify_conditions(
+        env: Env,
+        escrow_id: u64,
+        proof_data: i128,
+    ) -> Result<VerificationResult, Error> {
+        let mut escrow: Escrow = env.storage().instance().get(&DataKey::Escrow(escrow_id)).ok_or(Error::EscrowNotFound)?;
+
+        let current_time = env.ledger().timestamp();
+        let mut failed_conditions = Vec::new(&env);
+        let mut passed_count = 0;
+        let mut required_count = 0;
+
+        for i in 0..escrow.release_conditions.conditions.len() {
+            let mut condition = escrow.release_conditions.conditions.get(i).unwrap();
+            let condition_type_copy = condition.condition_type;
+            let is_required = condition.required;
+            
+            if is_required {
+                required_count += 1;
+            }
+
+            let verified = match condition.condition_type {
+                ConditionType::Timestamp => {
+                    current_time >= escrow.release_conditions.expiration_timestamp
+                },
+                ConditionType::Approval => {
+                    escrow.release_conditions.current_approvals >= escrow.release_conditions.min_approvals
+                },
+                ConditionType::OraclePrice => {
+                    if proof_data > 0 {
+                        proof_data >= condition.threshold_value
+                    } else {
+                        false
+                    }
+                },
+                ConditionType::MultiSignature => {
+                    escrow.release_conditions.current_approvals >= escrow.release_conditions.min_approvals
+                },
+                ConditionType::KYCVerified => {
+                    escrow.release_conditions.recipient_approval
+                },
+            };
+
+            condition.verified = verified;
+            escrow.release_conditions.conditions.set(i, condition);
+
+            if verified {
+                passed_count += 1;
+            } else if is_required {
+                failed_conditions.push_back(condition_type_copy);
+            }
+        }
+
+        env.storage().instance().set(&DataKey::Escrow(escrow_id), &escrow);
+
+        let all_passed = match escrow.release_conditions.operator {
+            ConditionOperator::And => {
+                failed_conditions.is_empty() && (required_count == 0 || passed_count >= required_count)
+            },
+            ConditionOperator::Or => {
+                passed_count > 0
+            },
+        };
+
+        let result = VerificationResult {
+            all_passed,
+            failed_conditions,
+        };
+
+        env.events().publish(
+            (symbol_short!("verified"), escrow_id),
+            (all_passed, passed_count)
+        );
+
+        Ok(result)
+    }
+
+    pub fn add_approval(
+        env: Env,
+        escrow_id: u64,
+        approver: Address,
+    ) -> Result<(), Error> {
+        approver.require_auth();
+
+        let mut escrow: Escrow = env.storage().instance().get(&DataKey::Escrow(escrow_id)).ok_or(Error::EscrowNotFound)?;
+
+        let stored_admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
+        if approver != stored_admin && approver != escrow.recipient && approver != escrow.sender {
+            return Err(Error::Unauthorized);
+        }
+
+        escrow.release_conditions.current_approvals = escrow.release_conditions.current_approvals.checked_add(1)
+            .unwrap_or(escrow.release_conditions.current_approvals);
+
+        env.storage().instance().set(&DataKey::Escrow(escrow_id), &escrow);
+
+        env.events().publish(
+            (symbol_short!("approval"), escrow_id),
+            (approver, escrow.release_conditions.current_approvals)
+        );
+
+        Ok(())
+    }
+
+    pub fn set_min_approvals(
+        env: Env,
+        escrow_id: u64,
+        caller: Address,
+        min_approvals: u32,
+    ) -> Result<(), Error> {
+        caller.require_auth();
+
+        let mut escrow: Escrow = env.storage().instance().get(&DataKey::Escrow(escrow_id)).ok_or(Error::EscrowNotFound)?;
+
+        let stored_admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
+        if caller != escrow.sender && caller != stored_admin {
+            return Err(Error::Unauthorized);
+        }
+
+        escrow.release_conditions.min_approvals = min_approvals;
+        env.storage().instance().set(&DataKey::Escrow(escrow_id), &escrow);
+
+        env.events().publish((symbol_short!("min_appr"), escrow_id), min_approvals);
 
         Ok(())
     }
@@ -1475,5 +1708,289 @@ mod test {
 
         let result = client.try_refund_escrow(&escrow_id, &sender, &token.address, &RefundReason::Expiration);
         assert_eq!(result, Err(Ok(Error::AlreadyReleased)));
+    }
+
+    #[test]
+    fn test_add_condition() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let contract_id = env.register_contract(None, PaymentEscrowContract);
+        let client = PaymentEscrowContractClient::new(&env, &contract_id);
+
+        let admin = Address::generate(&env);
+        let sender = Address::generate(&env);
+        let recipient = Address::generate(&env);
+
+        client.initialize(&admin);
+
+        let asset = Asset {
+            code: String::from_str(&env, "USDC"),
+            issuer: admin.clone(),
+        };
+
+        client.add_supported_asset(&admin, &asset);
+
+        let escrow_id = client.create_escrow(
+            &sender,
+            &recipient,
+            &1000,
+            &asset,
+            &2000,
+            &String::from_str(&env, "Test")
+        );
+
+        client.add_condition(&escrow_id, &sender, &ConditionType::OraclePrice, &true, &100);
+
+        let escrow = client.get_escrow(&escrow_id).unwrap();
+        assert_eq!(escrow.release_conditions.conditions.len(), 1);
+    }
+
+    #[test]
+    fn test_verify_conditions_timestamp() {
+        let env = Env::default();
+        env.mock_all_auths();
+        env.ledger().with_mut(|li| {
+            li.timestamp = 1000;
+        });
+
+        let contract_id = env.register_contract(None, PaymentEscrowContract);
+        let client = PaymentEscrowContractClient::new(&env, &contract_id);
+
+        let admin = Address::generate(&env);
+        let sender = Address::generate(&env);
+        let recipient = Address::generate(&env);
+
+        client.initialize(&admin);
+
+        let asset = Asset {
+            code: String::from_str(&env, "USDC"),
+            issuer: admin.clone(),
+        };
+
+        client.add_supported_asset(&admin, &asset);
+
+        let escrow_id = client.create_escrow(
+            &sender,
+            &recipient,
+            &1000,
+            &asset,
+            &2000,
+            &String::from_str(&env, "Test")
+        );
+
+        client.add_condition(&escrow_id, &sender, &ConditionType::Timestamp, &true, &0);
+
+        env.ledger().with_mut(|li| {
+            li.timestamp = 2500;
+        });
+
+        let result = client.verify_conditions(&escrow_id, &0);
+        assert_eq!(result.all_passed, true);
+    }
+
+    #[test]
+    fn test_verify_conditions_approval() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let contract_id = env.register_contract(None, PaymentEscrowContract);
+        let client = PaymentEscrowContractClient::new(&env, &contract_id);
+
+        let admin = Address::generate(&env);
+        let sender = Address::generate(&env);
+        let recipient = Address::generate(&env);
+
+        client.initialize(&admin);
+
+        let asset = Asset {
+            code: String::from_str(&env, "USDC"),
+            issuer: admin.clone(),
+        };
+
+        client.add_supported_asset(&admin, &asset);
+
+        let escrow_id = client.create_escrow(
+            &sender,
+            &recipient,
+            &1000,
+            &asset,
+            &2000,
+            &String::from_str(&env, "Test")
+        );
+
+        client.add_condition(&escrow_id, &sender, &ConditionType::Approval, &true, &0);
+        client.set_min_approvals(&escrow_id, &sender, &2);
+
+        client.add_approval(&escrow_id, &admin);
+        client.add_approval(&escrow_id, &recipient);
+
+        let result = client.verify_conditions(&escrow_id, &0);
+        assert_eq!(result.all_passed, true);
+    }
+
+    #[test]
+    fn test_verify_conditions_oracle_price() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let contract_id = env.register_contract(None, PaymentEscrowContract);
+        let client = PaymentEscrowContractClient::new(&env, &contract_id);
+
+        let admin = Address::generate(&env);
+        let sender = Address::generate(&env);
+        let recipient = Address::generate(&env);
+
+        client.initialize(&admin);
+
+        let asset = Asset {
+            code: String::from_str(&env, "USDC"),
+            issuer: admin.clone(),
+        };
+
+        client.add_supported_asset(&admin, &asset);
+
+        let escrow_id = client.create_escrow(
+            &sender,
+            &recipient,
+            &1000,
+            &asset,
+            &2000,
+            &String::from_str(&env, "Test")
+        );
+
+        client.add_condition(&escrow_id, &sender, &ConditionType::OraclePrice, &true, &100);
+
+        let result = client.verify_conditions(&escrow_id, &150);
+        assert_eq!(result.all_passed, true);
+
+        let result_fail = client.verify_conditions(&escrow_id, &50);
+        assert_eq!(result_fail.all_passed, false);
+    }
+
+    #[test]
+    fn test_verify_conditions_and_operator() {
+        let env = Env::default();
+        env.mock_all_auths();
+        env.ledger().with_mut(|li| {
+            li.timestamp = 1000;
+        });
+
+        let contract_id = env.register_contract(None, PaymentEscrowContract);
+        let client = PaymentEscrowContractClient::new(&env, &contract_id);
+
+        let admin = Address::generate(&env);
+        let sender = Address::generate(&env);
+        let recipient = Address::generate(&env);
+
+        client.initialize(&admin);
+
+        let asset = Asset {
+            code: String::from_str(&env, "USDC"),
+            issuer: admin.clone(),
+        };
+
+        client.add_supported_asset(&admin, &asset);
+
+        let escrow_id = client.create_escrow(
+            &sender,
+            &recipient,
+            &1000,
+            &asset,
+            &2000,
+            &String::from_str(&env, "Test")
+        );
+
+        client.add_condition(&escrow_id, &sender, &ConditionType::Timestamp, &true, &0);
+        client.add_condition(&escrow_id, &sender, &ConditionType::OraclePrice, &true, &100);
+        client.set_condition_operator(&escrow_id, &sender, &ConditionOperator::And);
+
+        env.ledger().with_mut(|li| {
+            li.timestamp = 2500;
+        });
+
+        let result = client.verify_conditions(&escrow_id, &150);
+        assert_eq!(result.all_passed, true);
+    }
+
+    #[test]
+    fn test_verify_conditions_or_operator() {
+        let env = Env::default();
+        env.mock_all_auths();
+        env.ledger().with_mut(|li| {
+            li.timestamp = 1000;
+        });
+
+        let contract_id = env.register_contract(None, PaymentEscrowContract);
+        let client = PaymentEscrowContractClient::new(&env, &contract_id);
+
+        let admin = Address::generate(&env);
+        let sender = Address::generate(&env);
+        let recipient = Address::generate(&env);
+
+        client.initialize(&admin);
+
+        let asset = Asset {
+            code: String::from_str(&env, "USDC"),
+            issuer: admin.clone(),
+        };
+
+        client.add_supported_asset(&admin, &asset);
+
+        let escrow_id = client.create_escrow(
+            &sender,
+            &recipient,
+            &1000,
+            &asset,
+            &2000,
+            &String::from_str(&env, "Test")
+        );
+
+        client.add_condition(&escrow_id, &sender, &ConditionType::Timestamp, &true, &0);
+        client.add_condition(&escrow_id, &sender, &ConditionType::OraclePrice, &true, &100);
+        client.set_condition_operator(&escrow_id, &sender, &ConditionOperator::Or);
+
+        let result = client.verify_conditions(&escrow_id, &150);
+        assert_eq!(result.all_passed, true);
+    }
+
+    #[test]
+    fn test_multi_signature_approval() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let contract_id = env.register_contract(None, PaymentEscrowContract);
+        let client = PaymentEscrowContractClient::new(&env, &contract_id);
+
+        let admin = Address::generate(&env);
+        let sender = Address::generate(&env);
+        let recipient = Address::generate(&env);
+
+        client.initialize(&admin);
+
+        let asset = Asset {
+            code: String::from_str(&env, "USDC"),
+            issuer: admin.clone(),
+        };
+
+        client.add_supported_asset(&admin, &asset);
+
+        let escrow_id = client.create_escrow(
+            &sender,
+            &recipient,
+            &1000,
+            &asset,
+            &2000,
+            &String::from_str(&env, "Test")
+        );
+
+        client.set_min_approvals(&escrow_id, &sender, &3);
+        
+        client.add_approval(&escrow_id, &admin);
+        client.add_approval(&escrow_id, &sender);
+        client.add_approval(&escrow_id, &recipient);
+
+        let escrow = client.get_escrow(&escrow_id).unwrap();
+        assert_eq!(escrow.release_conditions.current_approvals, 3);
     }
 }
