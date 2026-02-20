@@ -38,6 +38,8 @@ pub enum Error {
     TimestampNotReached = 32,
     ApprovalRequired = 33,
     OracleDataMissing = 34,
+    FeeExceedsAmount = 35,
+    InvalidRate = 36,
 }
 
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -76,6 +78,36 @@ pub enum ConditionType {
 pub enum ConditionOperator {
     And,
     Or,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[contracttype]
+pub enum FeeType {
+    Platform,
+    Forex,
+    Compliance,
+    Network,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[contracttype]
+pub struct FeeBreakdown {
+    pub platform_fee: i128,
+    pub forex_fee: i128,
+    pub compliance_fee: i128,
+    pub network_fee: i128,
+    pub total_fee: i128,
+}
+
+#[derive(Clone)]
+#[contracttype]
+pub struct FeeStructure {
+    pub platform_percentage: i128,
+    pub forex_percentage: i128,
+    pub compliance_flat: i128,
+    pub network_flat: i128,
+    pub min_fee: i128,
+    pub max_fee: i128,
 }
 
 #[derive(Clone)]
@@ -144,6 +176,13 @@ pub enum DataKey {
     PlatformFeePercentage,
     ReentrancyGuard,
     ProcessingFeePercentage,
+    FeeStructure,
+    FeeWallet,
+    ForexFeePercentage,
+    ComplianceFlatFee,
+    NetworkFlatFee,
+    MinFee,
+    MaxFee,
 }
 
 #[contract]
@@ -221,6 +260,133 @@ impl PaymentEscrowContract {
 
     pub fn get_processing_fee(env: Env) -> i128 {
         env.storage().instance().get(&DataKey::ProcessingFeePercentage).unwrap_or(0)
+    }
+
+    pub fn set_fee_wallet(env: Env, admin: Address, fee_wallet: Address) -> Result<(), Error> {
+        admin.require_auth();
+        
+        let stored_admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
+        if admin != stored_admin {
+            return Err(Error::Unauthorized);
+        }
+
+        env.storage().instance().set(&DataKey::FeeWallet, &fee_wallet);
+        
+        env.events().publish((symbol_short!("fee_wal"),), fee_wallet);
+        
+        Ok(())
+    }
+
+    pub fn get_fee_wallet(env: Env) -> Option<Address> {
+        env.storage().instance().get(&DataKey::FeeWallet)
+    }
+
+    pub fn set_forex_fee(env: Env, admin: Address, fee_percentage: i128) -> Result<(), Error> {
+        admin.require_auth();
+        
+        let stored_admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
+        if admin != stored_admin {
+            return Err(Error::Unauthorized);
+        }
+
+        if fee_percentage < 0 || fee_percentage > 10000 {
+            return Err(Error::InvalidRate);
+        }
+
+        env.storage().instance().set(&DataKey::ForexFeePercentage, &fee_percentage);
+        
+        env.events().publish((symbol_short!("forex_f"),), fee_percentage);
+        
+        Ok(())
+    }
+
+    pub fn set_compliance_fee(env: Env, admin: Address, flat_fee: i128) -> Result<(), Error> {
+        admin.require_auth();
+        
+        let stored_admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
+        if admin != stored_admin {
+            return Err(Error::Unauthorized);
+        }
+
+        if flat_fee < 0 {
+            return Err(Error::InvalidAmount);
+        }
+
+        env.storage().instance().set(&DataKey::ComplianceFlatFee, &flat_fee);
+        
+        env.events().publish((symbol_short!("comp_fee"),), flat_fee);
+        
+        Ok(())
+    }
+
+    pub fn set_fee_limits(env: Env, admin: Address, min_fee: i128, max_fee: i128) -> Result<(), Error> {
+        admin.require_auth();
+        
+        let stored_admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
+        if admin != stored_admin {
+            return Err(Error::Unauthorized);
+        }
+
+        if min_fee < 0 || max_fee < min_fee {
+            return Err(Error::InvalidAmount);
+        }
+
+        env.storage().instance().set(&DataKey::MinFee, &min_fee);
+        env.storage().instance().set(&DataKey::MaxFee, &max_fee);
+        
+        env.events().publish((symbol_short!("fee_lim"),), (min_fee, max_fee));
+        
+        Ok(())
+    }
+
+    fn calculate_fees(env: &Env, amount: i128) -> Result<FeeBreakdown, Error> {
+        let platform_percentage = env.storage().instance().get(&DataKey::PlatformFeePercentage).unwrap_or(0);
+        let forex_percentage = env.storage().instance().get(&DataKey::ForexFeePercentage).unwrap_or(0);
+        let compliance_flat = env.storage().instance().get(&DataKey::ComplianceFlatFee).unwrap_or(0);
+        let network_flat = env.storage().instance().get(&DataKey::NetworkFlatFee).unwrap_or(0);
+
+        let platform_fee = amount.checked_mul(platform_percentage)
+            .ok_or(Error::ArithmeticOverflow)?
+            .checked_div(10000)
+            .ok_or(Error::ArithmeticOverflow)?;
+
+        let forex_fee = amount.checked_mul(forex_percentage)
+            .ok_or(Error::ArithmeticOverflow)?
+            .checked_div(10000)
+            .ok_or(Error::ArithmeticOverflow)?;
+
+        let mut total_fee = platform_fee.checked_add(forex_fee)
+            .ok_or(Error::ArithmeticOverflow)?
+            .checked_add(compliance_flat)
+            .ok_or(Error::ArithmeticOverflow)?
+            .checked_add(network_flat)
+            .ok_or(Error::ArithmeticOverflow)?;
+
+        let min_fee = env.storage().instance().get(&DataKey::MinFee).unwrap_or(0);
+        let max_fee = env.storage().instance().get(&DataKey::MaxFee).unwrap_or(i128::MAX);
+
+        if total_fee < min_fee {
+            total_fee = min_fee;
+        }
+        if total_fee > max_fee {
+            total_fee = max_fee;
+        }
+
+        if total_fee >= amount {
+            return Err(Error::FeeExceedsAmount);
+        }
+
+        Ok(FeeBreakdown {
+            platform_fee,
+            forex_fee,
+            compliance_fee: compliance_flat,
+            network_fee: network_flat,
+            total_fee,
+        })
+    }
+
+    pub fn get_fee_breakdown(env: Env, amount: i128) -> Result<FeeBreakdown, Error> {
+        Self::calculate_fees(&env, amount)
     }
 
     pub fn create_escrow(
@@ -1992,5 +2158,126 @@ mod test {
 
         let escrow = client.get_escrow(&escrow_id).unwrap();
         assert_eq!(escrow.release_conditions.current_approvals, 3);
+    }
+
+    #[test]
+    fn test_calculate_fees() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let contract_id = env.register_contract(None, PaymentEscrowContract);
+        let client = PaymentEscrowContractClient::new(&env, &contract_id);
+
+        let admin = Address::generate(&env);
+        client.initialize(&admin);
+
+        client.set_platform_fee(&admin, &250);
+        client.set_forex_fee(&admin, &100);
+        client.set_compliance_fee(&admin, &10);
+
+        let breakdown = client.get_fee_breakdown(&1000);
+        
+        let expected_platform = 1000 * 250 / 10000;
+        let expected_forex = 1000 * 100 / 10000;
+        let expected_compliance = 10;
+        let expected_total = expected_platform + expected_forex + expected_compliance;
+
+        assert_eq!(breakdown.platform_fee, expected_platform);
+        assert_eq!(breakdown.forex_fee, expected_forex);
+        assert_eq!(breakdown.compliance_fee, expected_compliance);
+        assert_eq!(breakdown.total_fee, expected_total);
+    }
+
+    #[test]
+    fn test_fee_limits() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let contract_id = env.register_contract(None, PaymentEscrowContract);
+        let client = PaymentEscrowContractClient::new(&env, &contract_id);
+
+        let admin = Address::generate(&env);
+        client.initialize(&admin);
+
+        client.set_platform_fee(&admin, &100);
+        client.set_fee_limits(&admin, &50, &200);
+
+        let breakdown_low = client.get_fee_breakdown(&100);
+        assert_eq!(breakdown_low.total_fee, 50);
+
+        let breakdown_high = client.get_fee_breakdown(&100000);
+        assert_eq!(breakdown_high.total_fee, 200);
+    }
+
+    #[test]
+    fn test_set_fee_wallet() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let contract_id = env.register_contract(None, PaymentEscrowContract);
+        let client = PaymentEscrowContractClient::new(&env, &contract_id);
+
+        let admin = Address::generate(&env);
+        let fee_wallet = Address::generate(&env);
+
+        client.initialize(&admin);
+        client.set_fee_wallet(&admin, &fee_wallet);
+
+        let stored_wallet = client.get_fee_wallet();
+        assert!(stored_wallet.is_some());
+        assert_eq!(stored_wallet.unwrap(), fee_wallet);
+    }
+
+    #[test]
+    fn test_fee_exceeds_amount() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let contract_id = env.register_contract(None, PaymentEscrowContract);
+        let client = PaymentEscrowContractClient::new(&env, &contract_id);
+
+        let admin = Address::generate(&env);
+        client.initialize(&admin);
+
+        client.set_platform_fee(&admin, &9000);
+        client.set_forex_fee(&admin, &2000);
+
+        let result = client.try_get_fee_breakdown(&1000);
+        assert_eq!(result, Err(Ok(Error::FeeExceedsAmount)));
+    }
+
+    #[test]
+    fn test_forex_fee_configuration() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let contract_id = env.register_contract(None, PaymentEscrowContract);
+        let client = PaymentEscrowContractClient::new(&env, &contract_id);
+
+        let admin = Address::generate(&env);
+        client.initialize(&admin);
+
+        client.set_forex_fee(&admin, &150);
+
+        let breakdown = client.get_fee_breakdown(&1000);
+        let expected_forex = 1000 * 150 / 10000;
+        assert_eq!(breakdown.forex_fee, expected_forex);
+    }
+
+    #[test]
+    fn test_compliance_flat_fee() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let contract_id = env.register_contract(None, PaymentEscrowContract);
+        let client = PaymentEscrowContractClient::new(&env, &contract_id);
+
+        let admin = Address::generate(&env);
+        client.initialize(&admin);
+
+        client.set_compliance_fee(&admin, &25);
+
+        let breakdown = client.get_fee_breakdown(&1000);
+        assert_eq!(breakdown.compliance_fee, 25);
     }
 }
