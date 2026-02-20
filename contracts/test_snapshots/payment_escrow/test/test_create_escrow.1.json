@@ -247,6 +247,14 @@
                             },
                             {
                               "key": {
+                                "symbol": "multi_party_enabled"
+                              },
+                              "val": {
+                                "bool": false
+                              }
+                            },
+                            {
+                              "key": {
                                 "symbol": "recipient"
                               },
                               "val": {
@@ -927,6 +935,14 @@
                   },
                   "val": {
                     "string": "Payment for services"
+                  }
+                },
+                {
+                  "key": {
+                    "symbol": "multi_party_enabled"
+                  },
+                  "val": {
+                    "bool": false
                   }
                 },
                 {

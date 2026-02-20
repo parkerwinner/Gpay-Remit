@@ -1,4 +1,4 @@
-use soroban_sdk::{contract, contractimpl, contracttype, contracterror, token, Address, Env, String, Vec, symbol_short};
+use soroban_sdk::{contract, contractimpl, contracttype, contracterror, token, Address, Env, String, Vec, Map, symbol_short};
 
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
@@ -40,6 +40,13 @@ pub enum Error {
     OracleDataMissing = 34,
     FeeExceedsAmount = 35,
     InvalidRate = 36,
+    AlreadyApproved = 37,
+    QuorumNotMet = 38,
+    ApproverNotWhitelisted = 39,
+    ApprovalExpired = 40,
+    EscrowFinalized = 41,
+    InvalidApproverCount = 42,
+    ApprovalNotFound = 43,
 }
 
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -164,6 +171,17 @@ pub struct Escrow {
     pub escrow_id: u64,
     pub memo: String,
     pub allow_partial_release: bool,
+    pub multi_party_enabled: bool,
+}
+
+#[derive(Clone)]
+#[contracttype]
+pub struct MultiPartyConfig {
+    pub required_approvals: u32,
+    pub approval_timeout: u64,
+    pub whitelisted_approvers: Vec<Address>,
+    pub approvals: Map<Address, bool>,
+    pub finalized: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -183,6 +201,7 @@ pub enum DataKey {
     NetworkFlatFee,
     MinFee,
     MaxFee,
+    EscrowApprovals(u64),
 }
 
 #[contract]
@@ -449,6 +468,7 @@ impl PaymentEscrowContract {
             escrow_id: counter,
             memo,
             allow_partial_release: false,
+            multi_party_enabled: false,
         };
 
         env.storage().instance().set(&DataKey::Escrow(counter), &escrow);
@@ -552,6 +572,23 @@ impl PaymentEscrowContract {
             return Err(Error::AlreadyReleased);
         }
 
+        if escrow.multi_party_enabled {
+            let config_opt: Option<MultiPartyConfig> = env.storage().instance()
+                .get(&DataKey::EscrowApprovals(escrow_id));
+            match config_opt {
+                Some(config) => {
+                    if config.approvals.len() < config.required_approvals {
+                        env.storage().instance().set(&DataKey::ReentrancyGuard, &false);
+                        return Err(Error::QuorumNotMet);
+                    }
+                }
+                None => {
+                    env.storage().instance().set(&DataKey::ReentrancyGuard, &false);
+                    return Err(Error::QuorumNotMet);
+                }
+            }
+        }
+
         let current_time = env.ledger().timestamp();
         if current_time > escrow.release_conditions.expiration_timestamp {
             escrow.status = EscrowStatus::Expired;
@@ -608,6 +645,13 @@ impl PaymentEscrowContract {
         escrow.release_timestamp = current_time;
         
         env.storage().instance().set(&DataKey::Escrow(escrow_id), &escrow);
+
+        if escrow.multi_party_enabled {
+            if let Some(mut config) = env.storage().instance().get::<_, MultiPartyConfig>(&DataKey::EscrowApprovals(escrow_id)) {
+                config.finalized = true;
+                env.storage().instance().set(&DataKey::EscrowApprovals(escrow_id), &config);
+            }
+        }
 
         env.events().publish(
             (symbol_short!("released"), escrow_id),
@@ -952,8 +996,25 @@ impl PaymentEscrowContract {
             return Err(Error::InvalidStatus);
         }
 
+        if escrow.multi_party_enabled {
+            let config_opt: Option<MultiPartyConfig> = env.storage().instance()
+                .get(&DataKey::EscrowApprovals(escrow_id));
+            match config_opt {
+                Some(config) => {
+                    if config.approvals.len() < config.required_approvals {
+                        env.storage().instance().set(&DataKey::ReentrancyGuard, &false);
+                        return Err(Error::QuorumNotMet);
+                    }
+                }
+                None => {
+                    env.storage().instance().set(&DataKey::ReentrancyGuard, &false);
+                    return Err(Error::QuorumNotMet);
+                }
+            }
+        }
+
         let current_time = env.ledger().timestamp();
-        
+
         if reason == RefundReason::Expiration {
             if current_time <= escrow.release_conditions.expiration_timestamp {
                 env.storage().instance().set(&DataKey::ReentrancyGuard, &false);
@@ -997,6 +1058,13 @@ impl PaymentEscrowContract {
         escrow.refund_timestamp = current_time;
         
         env.storage().instance().set(&DataKey::Escrow(escrow_id), &escrow);
+
+        if escrow.multi_party_enabled {
+            if let Some(mut config) = env.storage().instance().get::<_, MultiPartyConfig>(&DataKey::EscrowApprovals(escrow_id)) {
+                config.finalized = true;
+                env.storage().instance().set(&DataKey::EscrowApprovals(escrow_id), &config);
+            }
+        }
 
         env.events().publish(
             (symbol_short!("refunded"), escrow_id),
@@ -1097,6 +1165,262 @@ impl PaymentEscrowContract {
         env.storage().instance().set(&DataKey::ReentrancyGuard, &false);
 
         Ok(())
+    }
+
+    pub fn setup_multi_party_approval(
+        env: Env,
+        escrow_id: u64,
+        caller: Address,
+        approvers: Vec<Address>,
+        required_approvals: u32,
+        approval_timeout: u64,
+    ) -> Result<(), Error> {
+        caller.require_auth();
+
+        let mut escrow: Escrow = env.storage().instance()
+            .get(&DataKey::Escrow(escrow_id))
+            .ok_or(Error::EscrowNotFound)?;
+
+        let stored_admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
+        if caller != escrow.sender && caller != stored_admin {
+            return Err(Error::Unauthorized);
+        }
+
+        if escrow.status != EscrowStatus::Pending && escrow.status != EscrowStatus::Funded {
+            return Err(Error::InvalidStatus);
+        }
+
+        if escrow.multi_party_enabled {
+            return Err(Error::InvalidStatus);
+        }
+
+        if required_approvals == 0 || required_approvals > approvers.len() {
+            return Err(Error::InvalidApproverCount);
+        }
+
+        let config = MultiPartyConfig {
+            required_approvals,
+            approval_timeout,
+            whitelisted_approvers: approvers,
+            approvals: Map::new(&env),
+            finalized: false,
+        };
+
+        escrow.multi_party_enabled = true;
+        env.storage().instance().set(&DataKey::Escrow(escrow_id), &escrow);
+        env.storage().instance().set(&DataKey::EscrowApprovals(escrow_id), &config);
+
+        env.events().publish(
+            (symbol_short!("mp_setup"), escrow_id),
+            (required_approvals, approval_timeout),
+        );
+
+        Ok(())
+    }
+
+    pub fn add_approver(
+        env: Env,
+        escrow_id: u64,
+        caller: Address,
+        new_approver: Address,
+    ) -> Result<(), Error> {
+        caller.require_auth();
+
+        let escrow: Escrow = env.storage().instance()
+            .get(&DataKey::Escrow(escrow_id))
+            .ok_or(Error::EscrowNotFound)?;
+
+        let stored_admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
+        if caller != escrow.sender && caller != stored_admin {
+            return Err(Error::Unauthorized);
+        }
+
+        let mut config: MultiPartyConfig = env.storage().instance()
+            .get(&DataKey::EscrowApprovals(escrow_id))
+            .ok_or(Error::ConditionsNotMet)?;
+
+        if config.finalized {
+            return Err(Error::EscrowFinalized);
+        }
+
+        for i in 0..config.whitelisted_approvers.len() {
+            if config.whitelisted_approvers.get(i).unwrap() == new_approver {
+                return Err(Error::AlreadyApproved);
+            }
+        }
+
+        config.whitelisted_approvers.push_back(new_approver.clone());
+        env.storage().instance().set(&DataKey::EscrowApprovals(escrow_id), &config);
+
+        env.events().publish(
+            (symbol_short!("appr_add"), escrow_id),
+            new_approver,
+        );
+
+        Ok(())
+    }
+
+    pub fn remove_approver(
+        env: Env,
+        escrow_id: u64,
+        caller: Address,
+        approver: Address,
+    ) -> Result<(), Error> {
+        caller.require_auth();
+
+        let escrow: Escrow = env.storage().instance()
+            .get(&DataKey::Escrow(escrow_id))
+            .ok_or(Error::EscrowNotFound)?;
+
+        let stored_admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
+        if caller != escrow.sender && caller != stored_admin {
+            return Err(Error::Unauthorized);
+        }
+
+        let mut config: MultiPartyConfig = env.storage().instance()
+            .get(&DataKey::EscrowApprovals(escrow_id))
+            .ok_or(Error::ConditionsNotMet)?;
+
+        if config.finalized {
+            return Err(Error::EscrowFinalized);
+        }
+
+        let mut found = false;
+        let mut new_approvers = Vec::new(&env);
+        for i in 0..config.whitelisted_approvers.len() {
+            let addr = config.whitelisted_approvers.get(i).unwrap();
+            if addr == approver {
+                found = true;
+            } else {
+                new_approvers.push_back(addr);
+            }
+        }
+
+        if !found {
+            return Err(Error::ApproverNotWhitelisted);
+        }
+
+        if new_approvers.len() < config.required_approvals {
+            return Err(Error::InvalidApproverCount);
+        }
+
+        config.approvals.remove(approver.clone());
+        config.whitelisted_approvers = new_approvers;
+        env.storage().instance().set(&DataKey::EscrowApprovals(escrow_id), &config);
+
+        env.events().publish(
+            (symbol_short!("appr_rem"), escrow_id),
+            approver,
+        );
+
+        Ok(())
+    }
+
+    pub fn multi_party_approve(
+        env: Env,
+        escrow_id: u64,
+        approver: Address,
+    ) -> Result<bool, Error> {
+        approver.require_auth();
+
+        let escrow: Escrow = env.storage().instance()
+            .get(&DataKey::Escrow(escrow_id))
+            .ok_or(Error::EscrowNotFound)?;
+
+        if !escrow.multi_party_enabled {
+            return Err(Error::ConditionsNotMet);
+        }
+
+        let mut config: MultiPartyConfig = env.storage().instance()
+            .get(&DataKey::EscrowApprovals(escrow_id))
+            .ok_or(Error::ConditionsNotMet)?;
+
+        if config.finalized {
+            return Err(Error::EscrowFinalized);
+        }
+
+        let current_time = env.ledger().timestamp();
+        if config.approval_timeout > 0 && current_time > config.approval_timeout {
+            return Err(Error::ApprovalExpired);
+        }
+
+        let mut is_whitelisted = false;
+        for i in 0..config.whitelisted_approvers.len() {
+            if config.whitelisted_approvers.get(i).unwrap() == approver {
+                is_whitelisted = true;
+                break;
+            }
+        }
+
+        if !is_whitelisted {
+            return Err(Error::ApproverNotWhitelisted);
+        }
+
+        if config.approvals.contains_key(approver.clone()) {
+            return Err(Error::AlreadyApproved);
+        }
+
+        config.approvals.set(approver.clone(), true);
+        let approval_count = config.approvals.len();
+        let quorum_met = approval_count >= config.required_approvals;
+
+        env.storage().instance().set(&DataKey::EscrowApprovals(escrow_id), &config);
+
+        env.events().publish(
+            (symbol_short!("mp_appr"), escrow_id),
+            (approver, approval_count),
+        );
+
+        if quorum_met {
+            env.events().publish(
+                (symbol_short!("quorum"), escrow_id),
+                (approval_count, config.required_approvals),
+            );
+        }
+
+        Ok(quorum_met)
+    }
+
+    pub fn revoke_approval(
+        env: Env,
+        escrow_id: u64,
+        approver: Address,
+    ) -> Result<(), Error> {
+        approver.require_auth();
+
+        let escrow: Escrow = env.storage().instance()
+            .get(&DataKey::Escrow(escrow_id))
+            .ok_or(Error::EscrowNotFound)?;
+
+        if !escrow.multi_party_enabled {
+            return Err(Error::ConditionsNotMet);
+        }
+
+        let mut config: MultiPartyConfig = env.storage().instance()
+            .get(&DataKey::EscrowApprovals(escrow_id))
+            .ok_or(Error::ConditionsNotMet)?;
+
+        if config.finalized {
+            return Err(Error::EscrowFinalized);
+        }
+
+        if !config.approvals.contains_key(approver.clone()) {
+            return Err(Error::ApprovalNotFound);
+        }
+
+        config.approvals.remove(approver.clone());
+        env.storage().instance().set(&DataKey::EscrowApprovals(escrow_id), &config);
+
+        env.events().publish(
+            (symbol_short!("mp_revok"), escrow_id),
+            approver,
+        );
+
+        Ok(())
+    }
+
+    pub fn get_multi_party_status(env: Env, escrow_id: u64) -> Option<MultiPartyConfig> {
+        env.storage().instance().get(&DataKey::EscrowApprovals(escrow_id))
     }
 }
 
@@ -2279,5 +2603,678 @@ mod test {
 
         let breakdown = client.get_fee_breakdown(&1000);
         assert_eq!(breakdown.compliance_fee, 25);
+    }
+
+    // === Multi-Party Approval Tests ===
+
+    fn setup_escrow_for_multi_party(env: &Env) -> (PaymentEscrowContractClient, Address, Address, Address, u64, token::Client, Address) {
+        env.mock_all_auths();
+        env.ledger().with_mut(|li| {
+            li.timestamp = 1000;
+        });
+
+        let admin = Address::generate(env);
+        let sender = Address::generate(env);
+        let recipient = Address::generate(env);
+
+        let (token, token_admin) = create_token_contract(env, &admin);
+        token_admin.mint(&sender, &10000);
+
+        let contract_id = env.register_contract(None, PaymentEscrowContract);
+        let client = PaymentEscrowContractClient::new(env, &contract_id);
+
+        client.initialize(&admin);
+
+        let asset = Asset {
+            code: String::from_str(env, "USDC"),
+            issuer: admin.clone(),
+        };
+
+        client.add_supported_asset(&admin, &asset);
+
+        let escrow_id = client.create_escrow(
+            &sender,
+            &recipient,
+            &5000,
+            &asset,
+            &10000,
+            &String::from_str(env, "Multi-party test"),
+        );
+
+        client.deposit(&escrow_id, &sender, &5000, &token.address);
+
+        let token_address = token.address.clone();
+        (client, admin, sender, recipient, escrow_id, token, token_address)
+    }
+
+    #[test]
+    fn test_setup_multi_party_approval() {
+        let env = Env::default();
+        let (client, admin, sender, recipient, escrow_id, _token, _token_addr) =
+            setup_escrow_for_multi_party(&env);
+
+        let approver1 = Address::generate(&env);
+        let mut approvers = Vec::new(&env);
+        approvers.push_back(sender.clone());
+        approvers.push_back(recipient.clone());
+        approvers.push_back(approver1.clone());
+
+        client.setup_multi_party_approval(&escrow_id, &admin, &approvers, &2, &5000);
+
+        let escrow = client.get_escrow(&escrow_id).unwrap();
+        assert_eq!(escrow.multi_party_enabled, true);
+
+        let config = client.get_multi_party_status(&escrow_id).unwrap();
+        assert_eq!(config.required_approvals, 2);
+        assert_eq!(config.approval_timeout, 5000);
+        assert_eq!(config.whitelisted_approvers.len(), 3);
+        assert_eq!(config.approvals.len(), 0);
+        assert_eq!(config.finalized, false);
+    }
+
+    #[test]
+    fn test_setup_multi_party_invalid_quorum() {
+        let env = Env::default();
+        let (client, admin, sender, recipient, escrow_id, _token, _token_addr) =
+            setup_escrow_for_multi_party(&env);
+
+        let mut approvers = Vec::new(&env);
+        approvers.push_back(sender.clone());
+        approvers.push_back(recipient.clone());
+
+        // required_approvals > approvers count
+        let result = client.try_setup_multi_party_approval(&escrow_id, &admin, &approvers, &5, &5000);
+        assert_eq!(result, Err(Ok(Error::InvalidApproverCount)));
+
+        // required_approvals == 0
+        let result = client.try_setup_multi_party_approval(&escrow_id, &admin, &approvers, &0, &5000);
+        assert_eq!(result, Err(Ok(Error::InvalidApproverCount)));
+    }
+
+    #[test]
+    fn test_setup_multi_party_duplicate_rejected() {
+        let env = Env::default();
+        let (client, admin, sender, recipient, escrow_id, _token, _token_addr) =
+            setup_escrow_for_multi_party(&env);
+
+        let mut approvers = Vec::new(&env);
+        approvers.push_back(sender.clone());
+        approvers.push_back(recipient.clone());
+
+        client.setup_multi_party_approval(&escrow_id, &admin, &approvers, &2, &5000);
+
+        // Cannot setup again
+        let result = client.try_setup_multi_party_approval(&escrow_id, &admin, &approvers, &2, &5000);
+        assert_eq!(result, Err(Ok(Error::InvalidStatus)));
+    }
+
+    #[test]
+    fn test_multi_party_approve_single() {
+        let env = Env::default();
+        let (client, admin, sender, recipient, escrow_id, _token, _token_addr) =
+            setup_escrow_for_multi_party(&env);
+
+        let mut approvers = Vec::new(&env);
+        approvers.push_back(sender.clone());
+        approvers.push_back(recipient.clone());
+        approvers.push_back(admin.clone());
+
+        client.setup_multi_party_approval(&escrow_id, &admin, &approvers, &2, &5000);
+
+        let quorum_met = client.multi_party_approve(&escrow_id, &sender);
+        assert_eq!(quorum_met, false);
+
+        let config = client.get_multi_party_status(&escrow_id).unwrap();
+        assert_eq!(config.approvals.len(), 1);
+    }
+
+    #[test]
+    fn test_multi_party_quorum_met() {
+        let env = Env::default();
+        let (client, admin, sender, recipient, escrow_id, _token, _token_addr) =
+            setup_escrow_for_multi_party(&env);
+
+        let mut approvers = Vec::new(&env);
+        approvers.push_back(sender.clone());
+        approvers.push_back(recipient.clone());
+        approvers.push_back(admin.clone());
+
+        client.setup_multi_party_approval(&escrow_id, &admin, &approvers, &2, &5000);
+
+        let result1 = client.multi_party_approve(&escrow_id, &sender);
+        assert_eq!(result1, false);
+
+        let result2 = client.multi_party_approve(&escrow_id, &recipient);
+        assert_eq!(result2, true);
+
+        let config = client.get_multi_party_status(&escrow_id).unwrap();
+        assert_eq!(config.approvals.len(), 2);
+    }
+
+    #[test]
+    fn test_multi_party_duplicate_approval_rejected() {
+        let env = Env::default();
+        let (client, admin, sender, recipient, escrow_id, _token, _token_addr) =
+            setup_escrow_for_multi_party(&env);
+
+        let mut approvers = Vec::new(&env);
+        approvers.push_back(sender.clone());
+        approvers.push_back(recipient.clone());
+
+        client.setup_multi_party_approval(&escrow_id, &admin, &approvers, &2, &5000);
+
+        client.multi_party_approve(&escrow_id, &sender);
+
+        let result = client.try_multi_party_approve(&escrow_id, &sender);
+        assert_eq!(result, Err(Ok(Error::AlreadyApproved)));
+    }
+
+    #[test]
+    fn test_multi_party_non_whitelisted_rejected() {
+        let env = Env::default();
+        let (client, admin, sender, recipient, escrow_id, _token, _token_addr) =
+            setup_escrow_for_multi_party(&env);
+
+        let outsider = Address::generate(&env);
+        let mut approvers = Vec::new(&env);
+        approvers.push_back(sender.clone());
+        approvers.push_back(recipient.clone());
+
+        client.setup_multi_party_approval(&escrow_id, &admin, &approvers, &2, &5000);
+
+        let result = client.try_multi_party_approve(&escrow_id, &outsider);
+        assert_eq!(result, Err(Ok(Error::ApproverNotWhitelisted)));
+    }
+
+    #[test]
+    fn test_multi_party_approval_expired() {
+        let env = Env::default();
+        let (client, admin, sender, recipient, escrow_id, _token, _token_addr) =
+            setup_escrow_for_multi_party(&env);
+
+        let mut approvers = Vec::new(&env);
+        approvers.push_back(sender.clone());
+        approvers.push_back(recipient.clone());
+
+        client.setup_multi_party_approval(&escrow_id, &admin, &approvers, &2, &5000);
+
+        // Advance time beyond approval timeout
+        env.ledger().with_mut(|li| {
+            li.timestamp = 6000;
+        });
+
+        let result = client.try_multi_party_approve(&escrow_id, &sender);
+        assert_eq!(result, Err(Ok(Error::ApprovalExpired)));
+    }
+
+    #[test]
+    fn test_multi_party_no_timeout() {
+        let env = Env::default();
+        let (client, admin, sender, recipient, escrow_id, _token, _token_addr) =
+            setup_escrow_for_multi_party(&env);
+
+        let mut approvers = Vec::new(&env);
+        approvers.push_back(sender.clone());
+        approvers.push_back(recipient.clone());
+
+        // timeout = 0 means no timeout
+        client.setup_multi_party_approval(&escrow_id, &admin, &approvers, &2, &0);
+
+        env.ledger().with_mut(|li| {
+            li.timestamp = 999999;
+        });
+
+        // Should still work with no timeout
+        let result = client.multi_party_approve(&escrow_id, &sender);
+        assert_eq!(result, false);
+    }
+
+    #[test]
+    fn test_revoke_approval() {
+        let env = Env::default();
+        let (client, admin, sender, recipient, escrow_id, _token, _token_addr) =
+            setup_escrow_for_multi_party(&env);
+
+        let mut approvers = Vec::new(&env);
+        approvers.push_back(sender.clone());
+        approvers.push_back(recipient.clone());
+        approvers.push_back(admin.clone());
+
+        client.setup_multi_party_approval(&escrow_id, &admin, &approvers, &2, &5000);
+
+        client.multi_party_approve(&escrow_id, &sender);
+        client.multi_party_approve(&escrow_id, &recipient);
+
+        let config = client.get_multi_party_status(&escrow_id).unwrap();
+        assert_eq!(config.approvals.len(), 2);
+
+        client.revoke_approval(&escrow_id, &sender);
+
+        let config = client.get_multi_party_status(&escrow_id).unwrap();
+        assert_eq!(config.approvals.len(), 1);
+    }
+
+    #[test]
+    fn test_revoke_approval_not_found() {
+        let env = Env::default();
+        let (client, admin, sender, recipient, escrow_id, _token, _token_addr) =
+            setup_escrow_for_multi_party(&env);
+
+        let mut approvers = Vec::new(&env);
+        approvers.push_back(sender.clone());
+        approvers.push_back(recipient.clone());
+
+        client.setup_multi_party_approval(&escrow_id, &admin, &approvers, &2, &5000);
+
+        let result = client.try_revoke_approval(&escrow_id, &sender);
+        assert_eq!(result, Err(Ok(Error::ApprovalNotFound)));
+    }
+
+    #[test]
+    fn test_revoke_after_finalized_rejected() {
+        let env = Env::default();
+        let (client, admin, sender, recipient, escrow_id, _token, token_addr) =
+            setup_escrow_for_multi_party(&env);
+
+        let mut approvers = Vec::new(&env);
+        approvers.push_back(sender.clone());
+        approvers.push_back(recipient.clone());
+
+        client.setup_multi_party_approval(&escrow_id, &admin, &approvers, &2, &5000);
+
+        client.multi_party_approve(&escrow_id, &sender);
+        client.multi_party_approve(&escrow_id, &recipient);
+
+        client.approve_escrow(&escrow_id, &admin);
+        client.release_escrow(&escrow_id, &recipient, &token_addr);
+
+        let config = client.get_multi_party_status(&escrow_id).unwrap();
+        assert_eq!(config.finalized, true);
+
+        let result = client.try_revoke_approval(&escrow_id, &sender);
+        assert_eq!(result, Err(Ok(Error::EscrowFinalized)));
+    }
+
+    #[test]
+    fn test_release_blocked_without_quorum() {
+        let env = Env::default();
+        let (client, admin, sender, recipient, escrow_id, _token, token_addr) =
+            setup_escrow_for_multi_party(&env);
+
+        let mut approvers = Vec::new(&env);
+        approvers.push_back(sender.clone());
+        approvers.push_back(recipient.clone());
+        approvers.push_back(admin.clone());
+
+        client.setup_multi_party_approval(&escrow_id, &admin, &approvers, &2, &5000);
+        client.approve_escrow(&escrow_id, &admin);
+
+        // Only 1 approval, need 2
+        client.multi_party_approve(&escrow_id, &sender);
+
+        let result = client.try_release_escrow(&escrow_id, &recipient, &token_addr);
+        assert_eq!(result, Err(Ok(Error::QuorumNotMet)));
+    }
+
+    #[test]
+    fn test_release_succeeds_with_quorum() {
+        let env = Env::default();
+        let (client, admin, sender, recipient, escrow_id, token, token_addr) =
+            setup_escrow_for_multi_party(&env);
+
+        let mut approvers = Vec::new(&env);
+        approvers.push_back(sender.clone());
+        approvers.push_back(recipient.clone());
+        approvers.push_back(admin.clone());
+
+        client.setup_multi_party_approval(&escrow_id, &admin, &approvers, &2, &5000);
+        client.approve_escrow(&escrow_id, &admin);
+
+        client.multi_party_approve(&escrow_id, &sender);
+        client.multi_party_approve(&escrow_id, &recipient);
+
+        let recipient_balance_before = token.balance(&recipient);
+        client.release_escrow(&escrow_id, &recipient, &token_addr);
+
+        let escrow = client.get_escrow(&escrow_id).unwrap();
+        assert_eq!(escrow.status, EscrowStatus::Released);
+
+        let recipient_balance_after = token.balance(&recipient);
+        assert_eq!(recipient_balance_after - recipient_balance_before, 5000);
+    }
+
+    #[test]
+    fn test_refund_blocked_without_quorum() {
+        let env = Env::default();
+        let (client, admin, sender, recipient, escrow_id, _token, token_addr) =
+            setup_escrow_for_multi_party(&env);
+
+        let mut approvers = Vec::new(&env);
+        approvers.push_back(sender.clone());
+        approvers.push_back(recipient.clone());
+
+        client.setup_multi_party_approval(&escrow_id, &admin, &approvers, &2, &5000);
+
+        client.multi_party_approve(&escrow_id, &sender);
+
+        let result = client.try_refund_escrow(&escrow_id, &sender, &token_addr, &RefundReason::SenderRequest);
+        assert_eq!(result, Err(Ok(Error::QuorumNotMet)));
+    }
+
+    #[test]
+    fn test_refund_succeeds_with_quorum() {
+        let env = Env::default();
+        let (client, admin, sender, recipient, escrow_id, token, token_addr) =
+            setup_escrow_for_multi_party(&env);
+
+        let mut approvers = Vec::new(&env);
+        approvers.push_back(sender.clone());
+        approvers.push_back(recipient.clone());
+
+        client.setup_multi_party_approval(&escrow_id, &admin, &approvers, &2, &5000);
+
+        client.multi_party_approve(&escrow_id, &sender);
+        client.multi_party_approve(&escrow_id, &recipient);
+
+        let sender_balance_before = token.balance(&sender);
+        client.refund_escrow(&escrow_id, &sender, &token_addr, &RefundReason::SenderRequest);
+
+        let escrow = client.get_escrow(&escrow_id).unwrap();
+        assert_eq!(escrow.status, EscrowStatus::Refunded);
+
+        let sender_balance_after = token.balance(&sender);
+        assert_eq!(sender_balance_after - sender_balance_before, 5000);
+    }
+
+    #[test]
+    fn test_add_approver_dynamic() {
+        let env = Env::default();
+        let (client, admin, sender, recipient, escrow_id, _token, _token_addr) =
+            setup_escrow_for_multi_party(&env);
+
+        let mut approvers = Vec::new(&env);
+        approvers.push_back(sender.clone());
+        approvers.push_back(recipient.clone());
+
+        client.setup_multi_party_approval(&escrow_id, &admin, &approvers, &2, &5000);
+
+        let new_approver = Address::generate(&env);
+        client.add_approver(&escrow_id, &admin, &new_approver);
+
+        let config = client.get_multi_party_status(&escrow_id).unwrap();
+        assert_eq!(config.whitelisted_approvers.len(), 3);
+
+        // New approver can now approve
+        let result = client.multi_party_approve(&escrow_id, &new_approver);
+        assert_eq!(result, false);
+    }
+
+    #[test]
+    fn test_add_approver_duplicate_rejected() {
+        let env = Env::default();
+        let (client, admin, sender, recipient, escrow_id, _token, _token_addr) =
+            setup_escrow_for_multi_party(&env);
+
+        let mut approvers = Vec::new(&env);
+        approvers.push_back(sender.clone());
+        approvers.push_back(recipient.clone());
+
+        client.setup_multi_party_approval(&escrow_id, &admin, &approvers, &2, &5000);
+
+        let result = client.try_add_approver(&escrow_id, &admin, &sender);
+        assert_eq!(result, Err(Ok(Error::AlreadyApproved)));
+    }
+
+    #[test]
+    fn test_remove_approver() {
+        let env = Env::default();
+        let (client, admin, sender, recipient, escrow_id, _token, _token_addr) =
+            setup_escrow_for_multi_party(&env);
+
+        let approver3 = Address::generate(&env);
+        let mut approvers = Vec::new(&env);
+        approvers.push_back(sender.clone());
+        approvers.push_back(recipient.clone());
+        approvers.push_back(approver3.clone());
+
+        client.setup_multi_party_approval(&escrow_id, &admin, &approvers, &2, &5000);
+
+        client.remove_approver(&escrow_id, &admin, &approver3);
+
+        let config = client.get_multi_party_status(&escrow_id).unwrap();
+        assert_eq!(config.whitelisted_approvers.len(), 2);
+
+        // Removed approver can no longer approve
+        let result = client.try_multi_party_approve(&escrow_id, &approver3);
+        assert_eq!(result, Err(Ok(Error::ApproverNotWhitelisted)));
+    }
+
+    #[test]
+    fn test_remove_approver_clears_existing_approval() {
+        let env = Env::default();
+        let (client, admin, sender, recipient, escrow_id, _token, _token_addr) =
+            setup_escrow_for_multi_party(&env);
+
+        let approver3 = Address::generate(&env);
+        let mut approvers = Vec::new(&env);
+        approvers.push_back(sender.clone());
+        approvers.push_back(recipient.clone());
+        approvers.push_back(approver3.clone());
+
+        client.setup_multi_party_approval(&escrow_id, &admin, &approvers, &2, &5000);
+
+        client.multi_party_approve(&escrow_id, &approver3);
+        let config = client.get_multi_party_status(&escrow_id).unwrap();
+        assert_eq!(config.approvals.len(), 1);
+
+        client.remove_approver(&escrow_id, &admin, &approver3);
+        let config = client.get_multi_party_status(&escrow_id).unwrap();
+        assert_eq!(config.approvals.len(), 0);
+    }
+
+    #[test]
+    fn test_remove_approver_violating_quorum_rejected() {
+        let env = Env::default();
+        let (client, admin, sender, recipient, escrow_id, _token, _token_addr) =
+            setup_escrow_for_multi_party(&env);
+
+        let mut approvers = Vec::new(&env);
+        approvers.push_back(sender.clone());
+        approvers.push_back(recipient.clone());
+
+        // 2 approvers, 2 required -> can't remove any
+        client.setup_multi_party_approval(&escrow_id, &admin, &approvers, &2, &5000);
+
+        let result = client.try_remove_approver(&escrow_id, &admin, &sender);
+        assert_eq!(result, Err(Ok(Error::InvalidApproverCount)));
+    }
+
+    #[test]
+    fn test_approve_on_non_multi_party_escrow_rejected() {
+        let env = Env::default();
+        let (client, _admin, sender, _recipient, escrow_id, _token, _token_addr) =
+            setup_escrow_for_multi_party(&env);
+
+        // No multi-party setup done
+        let result = client.try_multi_party_approve(&escrow_id, &sender);
+        assert_eq!(result, Err(Ok(Error::ConditionsNotMet)));
+    }
+
+    #[test]
+    fn test_revoke_on_non_multi_party_escrow_rejected() {
+        let env = Env::default();
+        let (client, _admin, sender, _recipient, escrow_id, _token, _token_addr) =
+            setup_escrow_for_multi_party(&env);
+
+        let result = client.try_revoke_approval(&escrow_id, &sender);
+        assert_eq!(result, Err(Ok(Error::ConditionsNotMet)));
+    }
+
+    #[test]
+    fn test_approve_after_finalized_rejected() {
+        let env = Env::default();
+        let (client, admin, sender, recipient, escrow_id, _token, token_addr) =
+            setup_escrow_for_multi_party(&env);
+
+        let mut approvers = Vec::new(&env);
+        approvers.push_back(sender.clone());
+        approvers.push_back(recipient.clone());
+        approvers.push_back(admin.clone());
+
+        client.setup_multi_party_approval(&escrow_id, &admin, &approvers, &2, &5000);
+
+        client.multi_party_approve(&escrow_id, &sender);
+        client.multi_party_approve(&escrow_id, &recipient);
+
+        client.approve_escrow(&escrow_id, &admin);
+        client.release_escrow(&escrow_id, &recipient, &token_addr);
+
+        // After release, config is finalized
+        let result = client.try_multi_party_approve(&escrow_id, &admin);
+        assert_eq!(result, Err(Ok(Error::EscrowFinalized)));
+    }
+
+    #[test]
+    fn test_multi_party_full_flow_2_of_3() {
+        let env = Env::default();
+        let (client, admin, sender, recipient, escrow_id, token, token_addr) =
+            setup_escrow_for_multi_party(&env);
+
+        let compliance_officer = Address::generate(&env);
+        let mut approvers = Vec::new(&env);
+        approvers.push_back(sender.clone());
+        approvers.push_back(recipient.clone());
+        approvers.push_back(compliance_officer.clone());
+
+        // 2-of-3 quorum
+        client.setup_multi_party_approval(&escrow_id, &sender, &approvers, &2, &0);
+
+        // Sender approves
+        let q1 = client.multi_party_approve(&escrow_id, &sender);
+        assert_eq!(q1, false);
+
+        // Compliance officer approves -> quorum met
+        let q2 = client.multi_party_approve(&escrow_id, &compliance_officer);
+        assert_eq!(q2, true);
+
+        // Approve and release
+        client.approve_escrow(&escrow_id, &admin);
+        let recipient_balance_before = token.balance(&recipient);
+        client.release_escrow(&escrow_id, &recipient, &token_addr);
+
+        let escrow = client.get_escrow(&escrow_id).unwrap();
+        assert_eq!(escrow.status, EscrowStatus::Released);
+
+        let recipient_balance_after = token.balance(&recipient);
+        assert_eq!(recipient_balance_after - recipient_balance_before, 5000);
+
+        // Config is finalized
+        let config = client.get_multi_party_status(&escrow_id).unwrap();
+        assert_eq!(config.finalized, true);
+    }
+
+    #[test]
+    fn test_multi_party_revoke_then_reapprove() {
+        let env = Env::default();
+        let (client, admin, sender, recipient, escrow_id, _token, _token_addr) =
+            setup_escrow_for_multi_party(&env);
+
+        let mut approvers = Vec::new(&env);
+        approvers.push_back(sender.clone());
+        approvers.push_back(recipient.clone());
+        approvers.push_back(admin.clone());
+
+        client.setup_multi_party_approval(&escrow_id, &admin, &approvers, &2, &5000);
+
+        client.multi_party_approve(&escrow_id, &sender);
+        client.multi_party_approve(&escrow_id, &recipient);
+
+        // Revoke sender's approval
+        client.revoke_approval(&escrow_id, &sender);
+        let config = client.get_multi_party_status(&escrow_id).unwrap();
+        assert_eq!(config.approvals.len(), 1);
+
+        // Sender can re-approve
+        let result = client.multi_party_approve(&escrow_id, &sender);
+        assert_eq!(result, true);
+
+        let config = client.get_multi_party_status(&escrow_id).unwrap();
+        assert_eq!(config.approvals.len(), 2);
+    }
+
+    #[test]
+    fn test_multi_party_setup_unauthorized() {
+        let env = Env::default();
+        let (client, _admin, sender, recipient, escrow_id, _token, _token_addr) =
+            setup_escrow_for_multi_party(&env);
+
+        let unauthorized = Address::generate(&env);
+        let mut approvers = Vec::new(&env);
+        approvers.push_back(sender.clone());
+        approvers.push_back(recipient.clone());
+
+        let result = client.try_setup_multi_party_approval(&escrow_id, &unauthorized, &approvers, &2, &5000);
+        assert_eq!(result, Err(Ok(Error::Unauthorized)));
+    }
+
+    #[test]
+    fn test_release_revoke_breaks_quorum() {
+        let env = Env::default();
+        let (client, admin, sender, recipient, escrow_id, _token, token_addr) =
+            setup_escrow_for_multi_party(&env);
+
+        let mut approvers = Vec::new(&env);
+        approvers.push_back(sender.clone());
+        approvers.push_back(recipient.clone());
+
+        client.setup_multi_party_approval(&escrow_id, &admin, &approvers, &2, &5000);
+        client.approve_escrow(&escrow_id, &admin);
+
+        client.multi_party_approve(&escrow_id, &sender);
+        client.multi_party_approve(&escrow_id, &recipient);
+
+        // Revoke one, breaking quorum
+        client.revoke_approval(&escrow_id, &sender);
+
+        let result = client.try_release_escrow(&escrow_id, &recipient, &token_addr);
+        assert_eq!(result, Err(Ok(Error::QuorumNotMet)));
+
+        // Re-approve to restore quorum
+        client.multi_party_approve(&escrow_id, &sender);
+
+        client.release_escrow(&escrow_id, &recipient, &token_addr);
+        let escrow = client.get_escrow(&escrow_id).unwrap();
+        assert_eq!(escrow.status, EscrowStatus::Released);
+    }
+
+    #[test]
+    fn test_get_multi_party_status_none() {
+        let env = Env::default();
+        let (client, _admin, _sender, _recipient, escrow_id, _token, _token_addr) =
+            setup_escrow_for_multi_party(&env);
+
+        let status = client.get_multi_party_status(&escrow_id);
+        assert!(status.is_none());
+    }
+
+    #[test]
+    fn test_refund_finalized_after_quorum() {
+        let env = Env::default();
+        let (client, admin, sender, recipient, escrow_id, _token, token_addr) =
+            setup_escrow_for_multi_party(&env);
+
+        let mut approvers = Vec::new(&env);
+        approvers.push_back(sender.clone());
+        approvers.push_back(recipient.clone());
+
+        client.setup_multi_party_approval(&escrow_id, &admin, &approvers, &2, &5000);
+
+        client.multi_party_approve(&escrow_id, &sender);
+        client.multi_party_approve(&escrow_id, &recipient);
+
+        client.refund_escrow(&escrow_id, &sender, &token_addr, &RefundReason::SenderRequest);
+
+        let config = client.get_multi_party_status(&escrow_id).unwrap();
+        assert_eq!(config.finalized, true);
     }
 }
