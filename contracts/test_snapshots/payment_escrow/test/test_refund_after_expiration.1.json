@@ -215,6 +215,13 @@
                 },
                 {
                   "address": "CCABDO7UZXYE4W6GVSEGSNNZTKSLFQGKXXQTH6OX7M7GKZ4Z6CUJNGZN"
+                },
+                {
+                  "vec": [
+                    {
+                      "symbol": "Expiration"
+                    }
+                  ]
                 }
               ]
             }
@@ -607,6 +614,25 @@
                             },
                             {
                               "key": {
+                                "symbol": "refund_timestamp"
+                              },
+                              "val": {
+                                "u64": 2500
+                              }
+                            },
+                            {
+                              "key": {
+                                "symbol": "refunded_amount"
+                              },
+                              "val": {
+                                "i128": {
+                                  "hi": 0,
+                                  "lo": 1000
+                                }
+                              }
+                            },
+                            {
+                              "key": {
                                 "symbol": "release_conditions"
                               },
                               "val": {
@@ -697,6 +723,21 @@
                           "vec": [
                             {
                               "symbol": "PlatformFeePercentage"
+                            }
+                          ]
+                        },
+                        "val": {
+                          "i128": {
+                            "hi": 0,
+                            "lo": 0
+                          }
+                        }
+                      },
+                      {
+                        "key": {
+                          "vec": [
+                            {
+                              "symbol": "ProcessingFeePercentage"
                             }
                           ]
                         },
@@ -1756,6 +1797,13 @@
                 },
                 {
                   "address": "CCABDO7UZXYE4W6GVSEGSNNZTKSLFQGKXXQTH6OX7M7GKZ4Z6CUJNGZN"
+                },
+                {
+                  "vec": [
+                    {
+                      "symbol": "Expiration"
+                    }
+                  ]
                 }
               ]
             }
@@ -1872,7 +1920,30 @@
               }
             ],
             "data": {
-              "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
+              "vec": [
+                {
+                  "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
+                },
+                {
+                  "i128": {
+                    "hi": 0,
+                    "lo": 1000
+                  }
+                },
+                {
+                  "i128": {
+                    "hi": 0,
+                    "lo": 0
+                  }
+                },
+                {
+                  "vec": [
+                    {
+                      "symbol": "Expiration"
+                    }
+                  ]
+                }
+              ]
             }
           }
         }
@@ -2036,6 +2107,25 @@
                   },
                   "val": {
                     "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M"
+                  }
+                },
+                {
+                  "key": {
+                    "symbol": "refund_timestamp"
+                  },
+                  "val": {
+                    "u64": 2500
+                  }
+                },
+                {
+                  "key": {
+                    "symbol": "refunded_amount"
+                  },
+                  "val": {
+                    "i128": {
+                      "hi": 0,
+                      "lo": 1000
+                    }
                   }
                 },
                 {
