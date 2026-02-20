@@ -82,6 +82,21 @@
                         "key": {
                           "vec": [
                             {
+                              "symbol": "ProcessingFeePercentage"
+                            }
+                          ]
+                        },
+                        "val": {
+                          "i128": {
+                            "hi": 0,
+                            "lo": 0
+                          }
+                        }
+                      },
+                      {
+                        "key": {
+                          "vec": [
+                            {
                               "symbol": "ReentrancyGuard"
                             }
                           ]

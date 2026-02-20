@@ -28,6 +28,10 @@ pub enum Error {
     InvalidFeePercentage = 22,
     PartialReleaseNotAllowed = 23,
     ArithmeticOverflow = 24,
+    AlreadyRefunded = 25,
+    UnauthorizedRefund = 26,
+    NoFundsAvailable = 27,
+    InvalidRefundAmount = 28,
 }
 
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -39,6 +43,16 @@ pub enum EscrowStatus {
     Released,
     Refunded,
     Expired,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[contracttype]
+pub enum RefundReason {
+    Expiration,
+    Dispute,
+    UnmetConditions,
+    SenderRequest,
+    AdminAction,
 }
 
 #[derive(Clone)]
@@ -64,12 +78,14 @@ pub struct Escrow {
     pub amount: i128,
     pub deposited_amount: i128,
     pub released_amount: i128,
+    pub refunded_amount: i128,
     pub asset: Asset,
     pub release_conditions: ReleaseCondition,
     pub status: EscrowStatus,
     pub created_at: u64,
     pub last_deposit_at: u64,
     pub release_timestamp: u64,
+    pub refund_timestamp: u64,
     pub escrow_id: u64,
     pub memo: String,
     pub allow_partial_release: bool,
@@ -84,6 +100,7 @@ pub enum DataKey {
     SupportedAssets,
     PlatformFeePercentage,
     ReentrancyGuard,
+    ProcessingFeePercentage,
 }
 
 #[contract]
@@ -100,6 +117,7 @@ impl PaymentEscrowContract {
         env.storage().instance().set(&DataKey::EscrowCounter, &0u64);
         env.storage().instance().set(&DataKey::SupportedAssets, &Vec::<Asset>::new(&env));
         env.storage().instance().set(&DataKey::PlatformFeePercentage, &0i128);
+        env.storage().instance().set(&DataKey::ProcessingFeePercentage, &0i128);
         env.storage().instance().set(&DataKey::ReentrancyGuard, &false);
     }
 
@@ -137,6 +155,29 @@ impl PaymentEscrowContract {
 
     pub fn get_platform_fee(env: Env) -> i128 {
         env.storage().instance().get(&DataKey::PlatformFeePercentage).unwrap_or(0)
+    }
+
+    pub fn set_processing_fee(env: Env, admin: Address, fee_percentage: i128) -> Result<(), Error> {
+        admin.require_auth();
+        
+        let stored_admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
+        if admin != stored_admin {
+            return Err(Error::Unauthorized);
+        }
+
+        if fee_percentage < 0 || fee_percentage > 10000 {
+            return Err(Error::InvalidFeePercentage);
+        }
+
+        env.storage().instance().set(&DataKey::ProcessingFeePercentage, &fee_percentage);
+        
+        env.events().publish((symbol_short!("proc_fee"),), fee_percentage);
+        
+        Ok(())
+    }
+
+    pub fn get_processing_fee(env: Env) -> i128 {
+        env.storage().instance().get(&DataKey::ProcessingFeePercentage).unwrap_or(0)
     }
 
     pub fn create_escrow(
@@ -180,6 +221,7 @@ impl PaymentEscrowContract {
             amount,
             deposited_amount: 0,
             released_amount: 0,
+            refunded_amount: 0,
             asset,
             release_conditions: ReleaseCondition {
                 expiration_timestamp,
@@ -190,6 +232,7 @@ impl PaymentEscrowContract {
             created_at: env.ledger().timestamp(),
             last_deposit_at: 0,
             release_timestamp: 0,
+            refund_timestamp: 0,
             escrow_id: counter,
             memo,
             allow_partial_release: false,
@@ -472,34 +515,187 @@ impl PaymentEscrowContract {
         Ok(())
     }
 
-    pub fn refund_escrow(env: Env, escrow_id: u64, caller: Address, token_address: Address) -> Result<(), Error> {
+    pub fn refund_escrow(
+        env: Env,
+        escrow_id: u64,
+        caller: Address,
+        token_address: Address,
+        reason: RefundReason,
+    ) -> Result<(), Error> {
         caller.require_auth();
+
+        let guard: bool = env.storage().instance().get(&DataKey::ReentrancyGuard).unwrap_or(false);
+        if guard {
+            return Err(Error::UnauthorizedCaller);
+        }
+        env.storage().instance().set(&DataKey::ReentrancyGuard, &true);
 
         let mut escrow: Escrow = env.storage().instance().get(&DataKey::Escrow(escrow_id)).ok_or(Error::EscrowNotFound)?;
 
-        if escrow.sender != caller {
-            return Err(Error::Unauthorized);
+        let stored_admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
+        if caller != escrow.sender && caller != stored_admin {
+            env.storage().instance().set(&DataKey::ReentrancyGuard, &false);
+            return Err(Error::UnauthorizedRefund);
         }
 
         if escrow.status == EscrowStatus::Released {
+            env.storage().instance().set(&DataKey::ReentrancyGuard, &false);
             return Err(Error::AlreadyReleased);
         }
 
-        if env.ledger().timestamp() <= escrow.release_conditions.expiration_timestamp {
-            return Err(Error::NotExpired);
+        if escrow.status == EscrowStatus::Refunded {
+            env.storage().instance().set(&DataKey::ReentrancyGuard, &false);
+            return Err(Error::AlreadyRefunded);
         }
 
-        if escrow.deposited_amount > 0 {
+        if escrow.status != EscrowStatus::Pending && escrow.status != EscrowStatus::Funded && escrow.status != EscrowStatus::Approved {
+            env.storage().instance().set(&DataKey::ReentrancyGuard, &false);
+            return Err(Error::InvalidStatus);
+        }
+
+        let current_time = env.ledger().timestamp();
+        
+        if reason == RefundReason::Expiration {
+            if current_time <= escrow.release_conditions.expiration_timestamp {
+                env.storage().instance().set(&DataKey::ReentrancyGuard, &false);
+                return Err(Error::NotExpired);
+            }
+        }
+
+        let available_for_refund = escrow.deposited_amount.checked_sub(escrow.released_amount)
+            .ok_or(Error::ArithmeticOverflow)?
+            .checked_sub(escrow.refunded_amount)
+            .ok_or(Error::ArithmeticOverflow)?;
+
+        if available_for_refund <= 0 {
+            env.storage().instance().set(&DataKey::ReentrancyGuard, &false);
+            return Err(Error::NoFundsAvailable);
+        }
+
+        let processing_fee_percentage = Self::get_processing_fee(env.clone());
+        let processing_fee = available_for_refund.checked_mul(processing_fee_percentage)
+            .ok_or(Error::ArithmeticOverflow)?
+            .checked_div(10000)
+            .ok_or(Error::ArithmeticOverflow)?;
+
+        let refund_amount = available_for_refund.checked_sub(processing_fee)
+            .ok_or(Error::ArithmeticOverflow)?;
+
+        if refund_amount > 0 {
             let token_client = token::Client::new(&env, &token_address);
             let contract_address = env.current_contract_address();
             
-            token_client.transfer(&contract_address, &escrow.sender, &escrow.deposited_amount);
+            token_client.transfer(&contract_address, &escrow.sender, &refund_amount);
+
+            if processing_fee > 0 {
+                token_client.transfer(&contract_address, &stored_admin, &processing_fee);
+            }
         }
 
+        escrow.refunded_amount = escrow.refunded_amount.checked_add(available_for_refund)
+            .ok_or(Error::ArithmeticOverflow)?;
         escrow.status = EscrowStatus::Refunded;
+        escrow.refund_timestamp = current_time;
+        
         env.storage().instance().set(&DataKey::Escrow(escrow_id), &escrow);
 
-        env.events().publish((symbol_short!("refunded"), escrow_id), caller);
+        env.events().publish(
+            (symbol_short!("refunded"), escrow_id),
+            (caller.clone(), refund_amount, processing_fee, reason)
+        );
+
+        env.storage().instance().set(&DataKey::ReentrancyGuard, &false);
+
+        Ok(())
+    }
+
+    pub fn refund_partial(
+        env: Env,
+        escrow_id: u64,
+        caller: Address,
+        token_address: Address,
+        refund_amount: i128,
+        reason: RefundReason,
+    ) -> Result<(), Error> {
+        caller.require_auth();
+
+        if refund_amount <= 0 {
+            return Err(Error::InvalidRefundAmount);
+        }
+
+        let guard: bool = env.storage().instance().get(&DataKey::ReentrancyGuard).unwrap_or(false);
+        if guard {
+            return Err(Error::UnauthorizedCaller);
+        }
+        env.storage().instance().set(&DataKey::ReentrancyGuard, &true);
+
+        let mut escrow: Escrow = env.storage().instance().get(&DataKey::Escrow(escrow_id)).ok_or(Error::EscrowNotFound)?;
+
+        let stored_admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
+        if caller != escrow.sender && caller != stored_admin {
+            env.storage().instance().set(&DataKey::ReentrancyGuard, &false);
+            return Err(Error::UnauthorizedRefund);
+        }
+
+        if escrow.status == EscrowStatus::Released {
+            env.storage().instance().set(&DataKey::ReentrancyGuard, &false);
+            return Err(Error::AlreadyReleased);
+        }
+
+        if escrow.status != EscrowStatus::Pending && escrow.status != EscrowStatus::Funded && escrow.status != EscrowStatus::Approved && escrow.status != EscrowStatus::Refunded {
+            env.storage().instance().set(&DataKey::ReentrancyGuard, &false);
+            return Err(Error::InvalidStatus);
+        }
+
+        let available_for_refund = escrow.deposited_amount.checked_sub(escrow.released_amount)
+            .ok_or(Error::ArithmeticOverflow)?
+            .checked_sub(escrow.refunded_amount)
+            .ok_or(Error::ArithmeticOverflow)?;
+
+        if refund_amount > available_for_refund {
+            env.storage().instance().set(&DataKey::ReentrancyGuard, &false);
+            return Err(Error::InsufficientFunds);
+        }
+
+        let processing_fee_percentage = Self::get_processing_fee(env.clone());
+        let processing_fee = refund_amount.checked_mul(processing_fee_percentage)
+            .ok_or(Error::ArithmeticOverflow)?
+            .checked_div(10000)
+            .ok_or(Error::ArithmeticOverflow)?;
+
+        let net_refund = refund_amount.checked_sub(processing_fee)
+            .ok_or(Error::ArithmeticOverflow)?;
+
+        let token_client = token::Client::new(&env, &token_address);
+        let contract_address = env.current_contract_address();
+        
+        token_client.transfer(&contract_address, &escrow.sender, &net_refund);
+
+        if processing_fee > 0 {
+            token_client.transfer(&contract_address, &stored_admin, &processing_fee);
+        }
+
+        escrow.refunded_amount = escrow.refunded_amount.checked_add(refund_amount)
+            .ok_or(Error::ArithmeticOverflow)?;
+        
+        let current_time = env.ledger().timestamp();
+        escrow.refund_timestamp = current_time;
+
+        let total_processed = escrow.released_amount.checked_add(escrow.refunded_amount)
+            .ok_or(Error::ArithmeticOverflow)?;
+        
+        if total_processed >= escrow.deposited_amount {
+            escrow.status = EscrowStatus::Refunded;
+        }
+        
+        env.storage().instance().set(&DataKey::Escrow(escrow_id), &escrow);
+
+        env.events().publish(
+            (symbol_short!("ref_part"), escrow_id),
+            (caller.clone(), net_refund, processing_fee, escrow.refunded_amount)
+        );
+
+        env.storage().instance().set(&DataKey::ReentrancyGuard, &false);
 
         Ok(())
     }
@@ -573,6 +769,7 @@ mod test {
         assert_eq!(escrow_data.amount, 1000);
         assert_eq!(escrow_data.deposited_amount, 0);
         assert_eq!(escrow_data.released_amount, 0);
+        assert_eq!(escrow_data.refunded_amount, 0);
         assert_eq!(escrow_data.sender, sender);
         assert_eq!(escrow_data.recipient, recipient);
         assert_eq!(escrow_data.status, EscrowStatus::Pending);
@@ -841,10 +1038,11 @@ mod test {
         });
 
         let sender_balance_before = token.balance(&sender);
-        client.refund_escrow(&escrow_id, &sender, &token.address);
+        client.refund_escrow(&escrow_id, &sender, &token.address, &RefundReason::Expiration);
         
         let escrow = client.get_escrow(&escrow_id).unwrap();
         assert_eq!(escrow.status, EscrowStatus::Refunded);
+        assert_eq!(escrow.refunded_amount, 1000);
 
         let sender_balance_after = token.balance(&sender);
         assert_eq!(sender_balance_after - sender_balance_before, 1000);
@@ -1023,5 +1221,259 @@ mod test {
 
         let result = client.try_release_escrow(&escrow_id, &unauthorized, &token.address);
         assert_eq!(result, Err(Ok(Error::UnauthorizedCaller)));
+    }
+
+    #[test]
+    fn test_refund_with_processing_fee() {
+        let env = Env::default();
+        env.mock_all_auths();
+        env.ledger().with_mut(|li| {
+            li.timestamp = 1000;
+        });
+
+        let admin = Address::generate(&env);
+        let sender = Address::generate(&env);
+        let recipient = Address::generate(&env);
+
+        let (token, token_admin) = create_token_contract(&env, &admin);
+        token_admin.mint(&sender, &5000);
+
+        let contract_id = env.register_contract(None, PaymentEscrowContract);
+        let client = PaymentEscrowContractClient::new(&env, &contract_id);
+
+        client.initialize(&admin);
+
+        let asset = Asset {
+            code: String::from_str(&env, "USDC"),
+            issuer: admin.clone(),
+        };
+
+        client.add_supported_asset(&admin, &asset);
+        client.set_processing_fee(&admin, &100);
+
+        let escrow_id = client.create_escrow(
+            &sender,
+            &recipient,
+            &1000,
+            &asset,
+            &2000,
+            &String::from_str(&env, "Test")
+        );
+
+        client.deposit(&escrow_id, &sender, &1000, &token.address);
+
+        env.ledger().with_mut(|li| {
+            li.timestamp = 2500;
+        });
+
+        let sender_balance_before = token.balance(&sender);
+        let admin_balance_before = token.balance(&admin);
+        
+        client.refund_escrow(&escrow_id, &sender, &token.address, &RefundReason::Expiration);
+        
+        let escrow = client.get_escrow(&escrow_id).unwrap();
+        assert_eq!(escrow.status, EscrowStatus::Refunded);
+        assert_eq!(escrow.refunded_amount, 1000);
+
+        let sender_balance_after = token.balance(&sender);
+        let admin_balance_after = token.balance(&admin);
+        
+        let fee = 1000 * 100 / 10000;
+        assert_eq!(sender_balance_after - sender_balance_before, 1000 - fee);
+        assert_eq!(admin_balance_after - admin_balance_before, fee);
+    }
+
+    #[test]
+    fn test_refund_by_admin() {
+        let env = Env::default();
+        env.mock_all_auths();
+        env.ledger().with_mut(|li| {
+            li.timestamp = 1000;
+        });
+
+        let admin = Address::generate(&env);
+        let sender = Address::generate(&env);
+        let recipient = Address::generate(&env);
+
+        let (token, token_admin) = create_token_contract(&env, &admin);
+        token_admin.mint(&sender, &5000);
+
+        let contract_id = env.register_contract(None, PaymentEscrowContract);
+        let client = PaymentEscrowContractClient::new(&env, &contract_id);
+
+        client.initialize(&admin);
+
+        let asset = Asset {
+            code: String::from_str(&env, "USDC"),
+            issuer: admin.clone(),
+        };
+
+        client.add_supported_asset(&admin, &asset);
+
+        let escrow_id = client.create_escrow(
+            &sender,
+            &recipient,
+            &1000,
+            &asset,
+            &2000,
+            &String::from_str(&env, "Test")
+        );
+
+        client.deposit(&escrow_id, &sender, &1000, &token.address);
+
+        let sender_balance_before = token.balance(&sender);
+        client.refund_escrow(&escrow_id, &admin, &token.address, &RefundReason::AdminAction);
+        
+        let escrow = client.get_escrow(&escrow_id).unwrap();
+        assert_eq!(escrow.status, EscrowStatus::Refunded);
+
+        let sender_balance_after = token.balance(&sender);
+        assert_eq!(sender_balance_after - sender_balance_before, 1000);
+    }
+
+    #[test]
+    fn test_partial_refund() {
+        let env = Env::default();
+        env.mock_all_auths();
+        env.ledger().with_mut(|li| {
+            li.timestamp = 1000;
+        });
+
+        let admin = Address::generate(&env);
+        let sender = Address::generate(&env);
+        let recipient = Address::generate(&env);
+
+        let (token, token_admin) = create_token_contract(&env, &admin);
+        token_admin.mint(&sender, &5000);
+
+        let contract_id = env.register_contract(None, PaymentEscrowContract);
+        let client = PaymentEscrowContractClient::new(&env, &contract_id);
+
+        client.initialize(&admin);
+
+        let asset = Asset {
+            code: String::from_str(&env, "USDC"),
+            issuer: admin.clone(),
+        };
+
+        client.add_supported_asset(&admin, &asset);
+
+        let escrow_id = client.create_escrow(
+            &sender,
+            &recipient,
+            &1000,
+            &asset,
+            &2000,
+            &String::from_str(&env, "Test")
+        );
+
+        client.deposit(&escrow_id, &sender, &1000, &token.address);
+
+        let sender_balance_before = token.balance(&sender);
+        
+        client.refund_partial(&escrow_id, &sender, &token.address, &400, &RefundReason::Dispute);
+        
+        let escrow = client.get_escrow(&escrow_id).unwrap();
+        assert_eq!(escrow.refunded_amount, 400);
+        
+        let sender_balance_after = token.balance(&sender);
+        assert_eq!(sender_balance_after - sender_balance_before, 400);
+
+        client.refund_partial(&escrow_id, &sender, &token.address, &600, &RefundReason::Dispute);
+        
+        let escrow = client.get_escrow(&escrow_id).unwrap();
+        assert_eq!(escrow.refunded_amount, 1000);
+        assert_eq!(escrow.status, EscrowStatus::Refunded);
+    }
+
+    #[test]
+    fn test_refund_unauthorized() {
+        let env = Env::default();
+        env.mock_all_auths();
+        env.ledger().with_mut(|li| {
+            li.timestamp = 1000;
+        });
+
+        let admin = Address::generate(&env);
+        let sender = Address::generate(&env);
+        let recipient = Address::generate(&env);
+        let unauthorized = Address::generate(&env);
+
+        let (token, token_admin) = create_token_contract(&env, &admin);
+        token_admin.mint(&sender, &5000);
+
+        let contract_id = env.register_contract(None, PaymentEscrowContract);
+        let client = PaymentEscrowContractClient::new(&env, &contract_id);
+
+        client.initialize(&admin);
+
+        let asset = Asset {
+            code: String::from_str(&env, "USDC"),
+            issuer: admin.clone(),
+        };
+
+        client.add_supported_asset(&admin, &asset);
+
+        let escrow_id = client.create_escrow(
+            &sender,
+            &recipient,
+            &1000,
+            &asset,
+            &2000,
+            &String::from_str(&env, "Test")
+        );
+
+        client.deposit(&escrow_id, &sender, &1000, &token.address);
+
+        env.ledger().with_mut(|li| {
+            li.timestamp = 2500;
+        });
+
+        let result = client.try_refund_escrow(&escrow_id, &unauthorized, &token.address, &RefundReason::Expiration);
+        assert_eq!(result, Err(Ok(Error::UnauthorizedRefund)));
+    }
+
+    #[test]
+    fn test_refund_already_released() {
+        let env = Env::default();
+        env.mock_all_auths();
+        env.ledger().with_mut(|li| {
+            li.timestamp = 1000;
+        });
+
+        let admin = Address::generate(&env);
+        let sender = Address::generate(&env);
+        let recipient = Address::generate(&env);
+
+        let (token, token_admin) = create_token_contract(&env, &admin);
+        token_admin.mint(&sender, &5000);
+
+        let contract_id = env.register_contract(None, PaymentEscrowContract);
+        let client = PaymentEscrowContractClient::new(&env, &contract_id);
+
+        client.initialize(&admin);
+
+        let asset = Asset {
+            code: String::from_str(&env, "USDC"),
+            issuer: admin.clone(),
+        };
+
+        client.add_supported_asset(&admin, &asset);
+
+        let escrow_id = client.create_escrow(
+            &sender,
+            &recipient,
+            &1000,
+            &asset,
+            &2000,
+            &String::from_str(&env, "Test")
+        );
+
+        client.deposit(&escrow_id, &sender, &1000, &token.address);
+        client.approve_escrow(&escrow_id, &admin);
+        client.release_escrow(&escrow_id, &recipient, &token.address);
+
+        let result = client.try_refund_escrow(&escrow_id, &sender, &token.address, &RefundReason::Expiration);
+        assert_eq!(result, Err(Ok(Error::AlreadyReleased)));
     }
 }
