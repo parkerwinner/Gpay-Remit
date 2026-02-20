@@ -717,10 +717,46 @@
                                 "map": [
                                   {
                                     "key": {
+                                      "symbol": "conditions"
+                                    },
+                                    "val": {
+                                      "vec": []
+                                    }
+                                  },
+                                  {
+                                    "key": {
+                                      "symbol": "current_approvals"
+                                    },
+                                    "val": {
+                                      "u32": 0
+                                    }
+                                  },
+                                  {
+                                    "key": {
                                       "symbol": "expiration_timestamp"
                                     },
                                     "val": {
                                       "u64": 2000
+                                    }
+                                  },
+                                  {
+                                    "key": {
+                                      "symbol": "min_approvals"
+                                    },
+                                    "val": {
+                                      "u32": 1
+                                    }
+                                  },
+                                  {
+                                    "key": {
+                                      "symbol": "operator"
+                                    },
+                                    "val": {
+                                      "vec": [
+                                        {
+                                          "symbol": "And"
+                                        }
+                                      ]
                                     }
                                   },
                                   {
@@ -2219,10 +2255,46 @@
                     "map": [
                       {
                         "key": {
+                          "symbol": "conditions"
+                        },
+                        "val": {
+                          "vec": []
+                        }
+                      },
+                      {
+                        "key": {
+                          "symbol": "current_approvals"
+                        },
+                        "val": {
+                          "u32": 0
+                        }
+                      },
+                      {
+                        "key": {
                           "symbol": "expiration_timestamp"
                         },
                         "val": {
                           "u64": 2000
+                        }
+                      },
+                      {
+                        "key": {
+                          "symbol": "min_approvals"
+                        },
+                        "val": {
+                          "u32": 1
+                        }
+                      },
+                      {
+                        "key": {
+                          "symbol": "operator"
+                        },
+                        "val": {
+                          "vec": [
+                            {
+                              "symbol": "And"
+                            }
+                          ]
                         }
                       },
                       {
@@ -2714,10 +2786,46 @@
                     "map": [
                       {
                         "key": {
+                          "symbol": "conditions"
+                        },
+                        "val": {
+                          "vec": []
+                        }
+                      },
+                      {
+                        "key": {
+                          "symbol": "current_approvals"
+                        },
+                        "val": {
+                          "u32": 0
+                        }
+                      },
+                      {
+                        "key": {
                           "symbol": "expiration_timestamp"
                         },
                         "val": {
                           "u64": 2000
+                        }
+                      },
+                      {
+                        "key": {
+                          "symbol": "min_approvals"
+                        },
+                        "val": {
+                          "u32": 1
+                        }
+                      },
+                      {
+                        "key": {
+                          "symbol": "operator"
+                        },
+                        "val": {
+                          "vec": [
+                            {
+                              "symbol": "And"
+                            }
+                          ]
                         }
                       },
                       {
