@@ -5,6 +5,7 @@ mod kyc;
 mod oracle;
 mod payment_escrow;
 mod remittance_hub;
+pub mod upgradeable;
 
 pub use aml::MockAmlOracleContract;
 pub use kyc::MockKycOracleContract;
