@@ -8,7 +8,6 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/yourusername/gpay-remit/config"
 	"github.com/yourusername/gpay-remit/models"
-	"github.com/yourusername/gpay-remit/utils"
 	"gorm.io/gorm"
 )
 
