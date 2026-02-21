@@ -1,5 +1,6 @@
 use soroban_sdk::{contract, contractimpl, contracttype, contracterror, token, Address, BytesN, Env, String, Vec, Map, symbol_short};
 use crate::kyc::{self, KycConfig, KycDataKey, KycRecord, KycStatus};
+use crate::upgradeable;
 
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
@@ -51,6 +52,7 @@ pub enum Error {
     KycFailed = 44,
     KycNotConfigured = 45,
     KycProofRequired = 46,
+    ContractPaused = 47,
 }
 
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -228,6 +230,8 @@ impl PaymentEscrowContract {
         env.storage().instance().set(&DataKey::ProcessingFeePercentage, &0i128);
         env.storage().instance().set(&DataKey::ReentrancyGuard, &false);
         env.storage().instance().set(&DataKey::KycEnabled, &false);
+
+        upgradeable::init_version(&env);
     }
 
     pub fn add_supported_asset(env: Env, admin: Address, asset: Asset) {
@@ -597,6 +601,9 @@ impl PaymentEscrowContract {
         expiration_timestamp: u64,
         memo: String,
     ) -> Result<u64, Error> {
+        if upgradeable::is_paused(&env) {
+            return Err(Error::ContractPaused);
+        }
         sender.require_auth();
 
         if amount <= 0 {
@@ -697,6 +704,9 @@ impl PaymentEscrowContract {
         amount: i128,
         token_address: Address,
     ) -> Result<(), Error> {
+        if upgradeable::is_paused(&env) {
+            return Err(Error::ContractPaused);
+        }
         caller.require_auth();
 
         if amount <= 0 {
@@ -763,6 +773,9 @@ impl PaymentEscrowContract {
     }
 
     pub fn release_escrow(env: Env, escrow_id: u64, caller: Address, token_address: Address) -> Result<(), Error> {
+        if upgradeable::is_paused(&env) {
+            return Err(Error::ContractPaused);
+        }
         caller.require_auth();
 
         let guard: bool = env.storage().instance().get(&DataKey::ReentrancyGuard).unwrap_or(false);
@@ -881,6 +894,9 @@ impl PaymentEscrowContract {
         token_address: Address,
         release_amount: i128,
     ) -> Result<(), Error> {
+        if upgradeable::is_paused(&env) {
+            return Err(Error::ContractPaused);
+        }
         caller.require_auth();
 
         if release_amount <= 0 {
@@ -1176,6 +1192,9 @@ impl PaymentEscrowContract {
         token_address: Address,
         reason: RefundReason,
     ) -> Result<(), Error> {
+        if upgradeable::is_paused(&env) {
+            return Err(Error::ContractPaused);
+        }
         caller.require_auth();
 
         let guard: bool = env.storage().instance().get(&DataKey::ReentrancyGuard).unwrap_or(false);
@@ -1295,6 +1314,9 @@ impl PaymentEscrowContract {
         refund_amount: i128,
         reason: RefundReason,
     ) -> Result<(), Error> {
+        if upgradeable::is_paused(&env) {
+            return Err(Error::ContractPaused);
+        }
         caller.require_auth();
 
         if refund_amount <= 0 {
@@ -1632,6 +1654,64 @@ impl PaymentEscrowContract {
 
     pub fn get_multi_party_status(env: Env, escrow_id: u64) -> Option<MultiPartyConfig> {
         env.storage().instance().get(&DataKey::EscrowApprovals(escrow_id))
+    }
+
+    // ── Upgradeable pattern ────────────────────────────────────────────
+
+    /// Return the current contract version.
+    pub fn version(env: Env) -> u32 {
+        upgradeable::get_version(&env)
+    }
+
+    /// Return `true` if the contract is paused.
+    pub fn is_paused(env: Env) -> bool {
+        upgradeable::is_paused(&env)
+    }
+
+    /// Pause the contract. Admin-only.
+    pub fn pause(env: Env, admin: Address) -> Result<(), upgradeable::UpgradeError> {
+        let stored_admin: Address =
+            env.storage().instance().get(&DataKey::Admin).unwrap();
+        if admin != stored_admin {
+            return Err(upgradeable::UpgradeError::Unauthorized);
+        }
+        upgradeable::pause(&env, &admin)
+    }
+
+    /// Unpause the contract. Admin-only.
+    pub fn unpause(env: Env, admin: Address) -> Result<(), upgradeable::UpgradeError> {
+        let stored_admin: Address =
+            env.storage().instance().get(&DataKey::Admin).unwrap();
+        if admin != stored_admin {
+            return Err(upgradeable::UpgradeError::Unauthorized);
+        }
+        upgradeable::unpause(&env, &admin)
+    }
+
+    /// Upgrade the contract WASM. Admin-only.
+    /// The contract is paused until `migrate` is called on the new code.
+    pub fn upgrade(
+        env: Env,
+        admin: Address,
+        new_wasm_hash: BytesN<32>,
+    ) -> Result<(), upgradeable::UpgradeError> {
+        let stored_admin: Address =
+            env.storage().instance().get(&DataKey::Admin).unwrap();
+        if admin != stored_admin {
+            return Err(upgradeable::UpgradeError::Unauthorized);
+        }
+        upgradeable::upgrade(&env, &admin, new_wasm_hash)
+    }
+
+    /// Finalize migration after an upgrade. Admin-only.
+    /// Unpause the contract and return the new version number.
+    pub fn migrate(env: Env, admin: Address) -> Result<u32, upgradeable::UpgradeError> {
+        let stored_admin: Address =
+            env.storage().instance().get(&DataKey::Admin).unwrap();
+        if admin != stored_admin {
+            return Err(upgradeable::UpgradeError::Unauthorized);
+        }
+        upgradeable::migrate(&env, &admin)
     }
 }
 
