@@ -3568,4 +3568,117 @@ mod test {
         let config = client.get_multi_party_status(&escrow_id).unwrap();
         assert_eq!(config.finalized, true);
     }
+
+    // ── Upgrade pattern tests ──────────────────────────────────────────
+
+    #[test]
+    fn test_version_after_init() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let contract_id = env.register_contract(None, PaymentEscrowContract);
+        let client = PaymentEscrowContractClient::new(&env, &contract_id);
+        let admin = Address::generate(&env);
+
+        client.initialize(&admin);
+        assert_eq!(client.version(), 1);
+    }
+
+    #[test]
+    fn test_not_paused_after_init() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let contract_id = env.register_contract(None, PaymentEscrowContract);
+        let client = PaymentEscrowContractClient::new(&env, &contract_id);
+        let admin = Address::generate(&env);
+
+        client.initialize(&admin);
+        assert!(!client.is_paused());
+    }
+
+    #[test]
+    fn test_pause_and_unpause() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let contract_id = env.register_contract(None, PaymentEscrowContract);
+        let client = PaymentEscrowContractClient::new(&env, &contract_id);
+        let admin = Address::generate(&env);
+
+        client.initialize(&admin);
+
+        client.pause(&admin);
+        assert!(client.is_paused());
+
+        client.unpause(&admin);
+        assert!(!client.is_paused());
+    }
+
+    #[test]
+    fn test_paused_blocks_create_escrow() {
+        let env = Env::default();
+        env.mock_all_auths();
+        env.ledger().with_mut(|li| { li.timestamp = 1000; });
+
+        let contract_id = env.register_contract(None, PaymentEscrowContract);
+        let client = PaymentEscrowContractClient::new(&env, &contract_id);
+
+        let admin = Address::generate(&env);
+        let sender = Address::generate(&env);
+        let recipient = Address::generate(&env);
+        let issuer = Address::generate(&env);
+
+        client.initialize(&admin);
+
+        let asset = Asset {
+            code: String::from_str(&env, "USDC"),
+            issuer: issuer.clone(),
+        };
+        client.add_supported_asset(&admin, &asset);
+
+        // Pause the contract
+        client.pause(&admin);
+
+        // create_escrow should fail
+        let result = client.try_create_escrow(
+            &sender,
+            &recipient,
+            &1000,
+            &asset,
+            &2000,
+            &String::from_str(&env, "test"),
+        );
+        assert!(result.is_err());
+
+        // Unpause and it should work
+        client.unpause(&admin);
+        let id = client.create_escrow(
+            &sender,
+            &recipient,
+            &1000,
+            &asset,
+            &2000,
+            &String::from_str(&env, "test"),
+        );
+        assert_eq!(id, 1);
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_non_admin_cannot_pause() {
+        let env = Env::default();
+
+        let contract_id = env.register_contract(None, PaymentEscrowContract);
+        let client = PaymentEscrowContractClient::new(&env, &contract_id);
+
+        let admin = Address::generate(&env);
+        let other = Address::generate(&env);
+
+        env.mock_all_auths();
+        client.initialize(&admin);
+
+        // Non-admin trying to pause should fail
+        client.pause(&other);
+    }
 }
