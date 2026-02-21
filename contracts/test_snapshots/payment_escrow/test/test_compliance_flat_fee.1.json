@@ -108,6 +108,18 @@
                         "key": {
                           "vec": [
                             {
+                              "symbol": "KycEnabled"
+                            }
+                          ]
+                        },
+                        "val": {
+                          "bool": false
+                        }
+                      },
+                      {
+                        "key": {
+                          "vec": [
+                            {
                               "symbol": "PlatformFeePercentage"
                             }
                           ]

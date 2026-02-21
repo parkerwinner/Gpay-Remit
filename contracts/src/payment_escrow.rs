@@ -1,4 +1,5 @@
-use soroban_sdk::{contract, contractimpl, contracttype, contracterror, token, Address, Env, String, Vec, Map, symbol_short};
+use soroban_sdk::{contract, contractimpl, contracttype, contracterror, token, Address, BytesN, Env, String, Vec, Map, symbol_short};
+use crate::kyc::{self, KycConfig, KycDataKey, KycRecord, KycStatus};
 
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
@@ -47,6 +48,9 @@ pub enum Error {
     EscrowFinalized = 41,
     InvalidApproverCount = 42,
     ApprovalNotFound = 43,
+    KycFailed = 44,
+    KycNotConfigured = 45,
+    KycProofRequired = 46,
 }
 
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -172,6 +176,7 @@ pub struct Escrow {
     pub memo: String,
     pub allow_partial_release: bool,
     pub multi_party_enabled: bool,
+    pub kyc_compliant: bool,
 }
 
 #[derive(Clone)]
@@ -202,6 +207,8 @@ pub enum DataKey {
     MinFee,
     MaxFee,
     EscrowApprovals(u64),
+    KycEnabled,
+    KycConfig,
 }
 
 #[contract]
@@ -220,6 +227,7 @@ impl PaymentEscrowContract {
         env.storage().instance().set(&DataKey::PlatformFeePercentage, &0i128);
         env.storage().instance().set(&DataKey::ProcessingFeePercentage, &0i128);
         env.storage().instance().set(&DataKey::ReentrancyGuard, &false);
+        env.storage().instance().set(&DataKey::KycEnabled, &false);
     }
 
     pub fn add_supported_asset(env: Env, admin: Address, asset: Asset) {
@@ -408,6 +416,178 @@ impl PaymentEscrowContract {
         Self::calculate_fees(&env, amount)
     }
 
+    pub fn configure_kyc(
+        env: Env,
+        admin: Address,
+        oracle_address: Address,
+        use_oracle: bool,
+        proof_validity_period: u64,
+    ) -> Result<(), Error> {
+        admin.require_auth();
+
+        let stored_admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
+        if admin != stored_admin {
+            return Err(Error::Unauthorized);
+        }
+
+        let config = KycConfig {
+            admin: admin.clone(),
+            oracle_address,
+            use_oracle,
+            proof_validity_period,
+            last_check_ledger: 0,
+        };
+
+        env.storage().instance().set(&DataKey::KycConfig, &config);
+        env.storage().instance().set(&DataKey::KycEnabled, &true);
+
+        env.events().publish((symbol_short!("kyc_cfg"),), admin);
+
+        Ok(())
+    }
+
+    pub fn add_to_whitelist(
+        env: Env,
+        admin: Address,
+        account: Address,
+        expiry: u64,
+    ) -> Result<(), Error> {
+        admin.require_auth();
+
+        let stored_admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
+        if admin != stored_admin {
+            return Err(Error::Unauthorized);
+        }
+
+        let record = KycRecord {
+            account: account.clone(),
+            status: KycStatus::Verified,
+            verified_at: env.ledger().timestamp(),
+            issuer: admin.clone(),
+            expiry,
+        };
+
+        env.storage().persistent().set(&KycDataKey::Whitelist(account.clone()), &record);
+
+        env.events().publish((symbol_short!("kyc_add"),), account);
+
+        Ok(())
+    }
+
+    pub fn remove_from_whitelist(
+        env: Env,
+        admin: Address,
+        account: Address,
+    ) -> Result<(), Error> {
+        admin.require_auth();
+
+        let stored_admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
+        if admin != stored_admin {
+            return Err(Error::Unauthorized);
+        }
+
+        let record = KycRecord {
+            account: account.clone(),
+            status: KycStatus::Rejected,
+            verified_at: env.ledger().timestamp(),
+            issuer: admin.clone(),
+            expiry: 0,
+        };
+
+        env.storage().persistent().set(&KycDataKey::Whitelist(account.clone()), &record);
+
+        env.events().publish((symbol_short!("kyc_rem"),), account);
+
+        Ok(())
+    }
+
+    pub fn add_trusted_issuer(
+        env: Env,
+        admin: Address,
+        issuer: Address,
+    ) -> Result<(), Error> {
+        admin.require_auth();
+
+        let stored_admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
+        if admin != stored_admin {
+            return Err(Error::Unauthorized);
+        }
+
+        env.storage().persistent().set(&KycDataKey::TrustedIssuer(issuer.clone()), &true);
+
+        env.events().publish((symbol_short!("kyc_iss"),), issuer);
+
+        Ok(())
+    }
+
+    pub fn get_kyc_status(env: Env, account: Address) -> KycStatus {
+        let key = KycDataKey::Whitelist(account);
+        let record: Option<KycRecord> = env.storage().persistent().get(&key);
+        match record {
+            Some(r) => r.status,
+            None => KycStatus::Unknown,
+        }
+    }
+
+    pub fn admin_override_kyc(
+        env: Env,
+        admin: Address,
+        escrow_id: u64,
+    ) -> Result<(), Error> {
+        admin.require_auth();
+
+        let stored_admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
+        if admin != stored_admin {
+            return Err(Error::Unauthorized);
+        }
+
+        let mut escrow: Escrow = env.storage().instance().get(&DataKey::Escrow(escrow_id)).ok_or(Error::EscrowNotFound)?;
+
+        escrow.kyc_compliant = true;
+        env.storage().instance().set(&DataKey::Escrow(escrow_id), &escrow);
+
+        env.events().publish((symbol_short!("kyc_ovr"), escrow_id), admin);
+
+        Ok(())
+    }
+
+    pub fn verify_kyc_proof(
+        env: Env,
+        account: Address,
+        proof_signature: BytesN<64>,
+        trusted_issuer: Address,
+    ) -> Result<bool, Error> {
+        let kyc_enabled: bool = env.storage().instance().get(&DataKey::KycEnabled).unwrap_or(false);
+        if !kyc_enabled {
+            return Err(Error::KycNotConfigured);
+        }
+
+        let config: KycConfig = env.storage().instance().get(&DataKey::KycConfig).ok_or(Error::KycNotConfigured)?;
+
+        match kyc::verify_proof(&env, &account, &proof_signature, &trusted_issuer, config.proof_validity_period) {
+            Ok(valid) => {
+                if valid {
+                    let record = KycRecord {
+                        account: account.clone(),
+                        status: KycStatus::Verified,
+                        verified_at: env.ledger().timestamp(),
+                        issuer: trusted_issuer,
+                        expiry: if config.proof_validity_period > 0 {
+                            env.ledger().timestamp() + config.proof_validity_period
+                        } else {
+                            0
+                        },
+                    };
+                    env.storage().persistent().set(&KycDataKey::Whitelist(account.clone()), &record);
+
+                    env.events().publish((symbol_short!("kyc_ok"),), account);
+                }
+                Ok(valid)
+            }
+            Err(_) => Err(Error::InvalidProof),
+        }
+    }
+
     pub fn create_escrow(
         env: Env,
         sender: Address,
@@ -440,6 +620,36 @@ impl PaymentEscrowContract {
             return Err(Error::UnsupportedAsset);
         }
 
+        let kyc_enabled: bool = env.storage().instance().get(&DataKey::KycEnabled).unwrap_or(false);
+        let mut kyc_compliant = false;
+
+        if kyc_enabled {
+            let config: KycConfig = env.storage().instance().get(&DataKey::KycConfig).ok_or(Error::KycNotConfigured)?;
+
+            let kyc_result = kyc::check_kyc(&env, &config, &sender, &recipient);
+
+            match kyc_result {
+                Ok(result) => {
+                    if !result.sender_verified || !result.recipient_verified {
+                        env.events().publish(
+                            (symbol_short!("kyc_fail"),),
+                            (sender.clone(), result.sender_verified, result.recipient_verified),
+                        );
+                        return Err(Error::KycFailed);
+                    }
+                    kyc_compliant = true;
+
+                    env.events().publish(
+                        (symbol_short!("kyc_pass"),),
+                        (sender.clone(), recipient.clone()),
+                    );
+                }
+                Err(_) => {
+                    return Err(Error::KycFailed);
+                }
+            }
+        }
+
         let mut counter: u64 = env.storage().instance().get(&DataKey::EscrowCounter).unwrap_or(0);
         counter = counter.checked_add(1).ok_or(Error::CounterOverflow)?;
 
@@ -469,6 +679,7 @@ impl PaymentEscrowContract {
             memo,
             allow_partial_release: false,
             multi_party_enabled: false,
+            kyc_compliant,
         };
 
         env.storage().instance().set(&DataKey::Escrow(counter), &escrow);
@@ -870,7 +1081,7 @@ impl PaymentEscrowContract {
                     escrow.release_conditions.current_approvals >= escrow.release_conditions.min_approvals
                 },
                 ConditionType::KYCVerified => {
-                    escrow.release_conditions.recipient_approval
+                    escrow.kyc_compliant
                 },
             };
 
