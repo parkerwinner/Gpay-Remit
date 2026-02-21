@@ -668,6 +668,14 @@
                             },
                             {
                               "key": {
+                                "symbol": "kyc_compliant"
+                              },
+                              "val": {
+                                "bool": false
+                              }
+                            },
+                            {
+                              "key": {
                                 "symbol": "last_deposit_at"
                               },
                               "val": {
@@ -838,6 +846,18 @@
                         },
                         "val": {
                           "u64": 1
+                        }
+                      },
+                      {
+                        "key": {
+                          "vec": [
+                            {
+                              "symbol": "KycEnabled"
+                            }
+                          ]
+                        },
+                        "val": {
+                          "bool": false
                         }
                       },
                       {
@@ -2214,6 +2234,14 @@
                 },
                 {
                   "key": {
+                    "symbol": "kyc_compliant"
+                  },
+                  "val": {
+                    "bool": false
+                  }
+                },
+                {
+                  "key": {
                     "symbol": "last_deposit_at"
                   },
                   "val": {
@@ -2749,6 +2777,14 @@
                   },
                   "val": {
                     "u64": 1
+                  }
+                },
+                {
+                  "key": {
+                    "symbol": "kyc_compliant"
+                  },
+                  "val": {
+                    "bool": false
                   }
                 },
                 {

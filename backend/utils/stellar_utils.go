@@ -46,7 +46,7 @@ func (s *StellarClient) SubmitPayment(sourceSecret, destination, assetCode, issu
 			SourceAccount:        &sourceAccount,
 			IncrementSequenceNum: true,
 			BaseFee:              txnbuild.MinBaseFee,
-			Timebounds:           txnbuild.NewInfiniteTimeout(),
+			Preconditions:        txnbuild.Preconditions{TimeBounds: txnbuild.NewInfiniteTimeout()},
 			Operations: []txnbuild.Operation{
 				&txnbuild.Payment{
 					Destination: destination,
