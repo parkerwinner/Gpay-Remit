@@ -1,5 +1,6 @@
 use soroban_sdk::{contract, contractimpl, contracttype, contracterror, Address, Env, String, Symbol, symbol_short};
 use crate::oracle::{self, CachedRate, OracleConfig};
+use crate::aml::{self, AmlConfig, AmlScreeningResult, AmlStatus};
 
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
@@ -21,6 +22,10 @@ pub enum RemittanceError {
     ConversionFailed = 14,
     RateLimitExceeded = 15,
     AlreadyInitialized = 16,
+    AmlHighRisk = 17,
+    AmlOracleError = 18,
+    AmlNotConfigured = 19,
+    AmlFlagNotFound = 20,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -83,6 +88,13 @@ pub enum DataKey {
 pub enum HubOracleKey {
     OracleConfig,
     CachedRate(String, String),
+}
+
+#[derive(Clone, Copy)]
+#[contracttype]
+pub enum AmlKey {
+    Config,
+    Flag(u64),
 }
 
 #[contract]
@@ -214,6 +226,136 @@ impl RemittanceHubContract {
         env.storage().persistent().get(&HubOracleKey::OracleConfig)
     }
 
+    pub fn configure_aml(
+        env: Env,
+        caller: Address,
+        oracle_address: Address,
+        risk_threshold: u32,
+    ) -> Result<(), RemittanceError> {
+        caller.require_auth();
+
+        let stored_admin: Address = env.storage().persistent()
+            .get(&DataKey::Admin)
+            .ok_or(RemittanceError::Unauthorized)?;
+        if caller != stored_admin {
+            return Err(RemittanceError::Unauthorized);
+        }
+
+        let config = AmlConfig {
+            admin: caller.clone(),
+            oracle_address,
+            risk_threshold,
+            enabled: true,
+        };
+        env.storage().persistent().set(&AmlKey::Config, &config);
+
+        env.events().publish(
+            (symbol_short!("aml_cfg"),),
+            caller,
+        );
+
+        Ok(())
+    }
+
+    pub fn set_aml_threshold(
+        env: Env,
+        caller: Address,
+        risk_threshold: u32,
+    ) -> Result<(), RemittanceError> {
+        caller.require_auth();
+        let stored_admin: Address = env.storage().persistent()
+            .get(&DataKey::Admin)
+            .ok_or(RemittanceError::Unauthorized)?;
+        if caller != stored_admin {
+            return Err(RemittanceError::Unauthorized);
+        }
+
+        let mut config: AmlConfig = env.storage().persistent()
+            .get(&AmlKey::Config)
+            .ok_or(RemittanceError::AmlNotConfigured)?;
+
+        config.risk_threshold = risk_threshold;
+        env.storage().persistent().set(&AmlKey::Config, &config);
+
+        env.events().publish(
+            (symbol_short!("aml_thr"),),
+            risk_threshold,
+        );
+
+        Ok(())
+    }
+
+    pub fn set_aml_oracle(
+        env: Env,
+        caller: Address,
+        oracle_address: Address,
+    ) -> Result<(), RemittanceError> {
+        caller.require_auth();
+        let stored_admin: Address = env.storage().persistent()
+            .get(&DataKey::Admin)
+            .ok_or(RemittanceError::Unauthorized)?;
+        if caller != stored_admin {
+            return Err(RemittanceError::Unauthorized);
+        }
+
+        let mut config: AmlConfig = env.storage().persistent()
+            .get(&AmlKey::Config)
+            .ok_or(RemittanceError::AmlNotConfigured)?;
+
+        config.oracle_address = oracle_address.clone();
+        env.storage().persistent().set(&AmlKey::Config, &config);
+
+        env.events().publish(
+            (symbol_short!("aml_orc"),),
+            oracle_address,
+        );
+
+        Ok(())
+    }
+
+    pub fn get_aml_config(env: Env) -> Option<AmlConfig> {
+        env.storage().persistent().get(&AmlKey::Config)
+    }
+
+    pub fn clear_aml_flag(
+        env: Env,
+        caller: Address,
+        remittance_id: u64,
+    ) -> Result<(), RemittanceError> {
+        caller.require_auth();
+        let stored_admin: Address = env.storage().persistent()
+            .get(&DataKey::Admin)
+            .ok_or(RemittanceError::Unauthorized)?;
+        if caller != stored_admin {
+            return Err(RemittanceError::Unauthorized);
+        }
+
+        let mut flag: AmlScreeningResult = env.storage().persistent()
+            .get(&AmlKey::Flag(remittance_id))
+            .ok_or(RemittanceError::AmlFlagNotFound)?;
+
+        flag.status = AmlStatus::Cleared;
+        env.storage().persistent().set(&AmlKey::Flag(remittance_id), &flag);
+
+        let mut remittance: RemittanceData = env.storage().persistent()
+            .get(&remittance_id)
+            .ok_or(RemittanceError::NotFound)?;
+
+        remittance.status = symbol_short!("pending");
+        env.storage().persistent().set(&remittance_id, &remittance);
+
+        env.events().publish(
+            (symbol_short!("aml_clr"), remittance_id),
+            caller,
+        );
+
+        Ok(())
+    }
+
+    pub fn get_aml_flag(env: Env, remittance_id: u64) -> Option<AmlScreeningResult> {
+        env.storage().persistent().get(&AmlKey::Flag(remittance_id))
+    }
+
     pub fn send_remittance(
         env: Env,
         from: Address,
@@ -228,13 +370,53 @@ impl RemittanceHubContract {
         }
 
         let remittance_id = env.ledger().sequence() as u64;
-        
+        let mut status = symbol_short!("pending");
+
+        let aml_config: Option<AmlConfig> = env.storage().persistent().get(&AmlKey::Config);
+
+        if let Some(ref config) = aml_config {
+            match aml::screen_transaction(&env, config, &from, &to, amount) {
+                Ok(result) => {
+                    if result.status == AmlStatus::Flagged {
+                        status = symbol_short!("flagged");
+                        env.storage().persistent().set(
+                            &AmlKey::Flag(remittance_id),
+                            &result,
+                        );
+                        env.events().publish(
+                            (symbol_short!("aml_flag"), remittance_id),
+                            (from.clone(), to.clone(), amount, result.risk_score),
+                        );
+                    }
+                }
+                Err(_) => {
+                    status = symbol_short!("review");
+                    let manual_flag = AmlScreeningResult {
+                        sender: from.clone(),
+                        recipient: to.clone(),
+                        amount,
+                        risk_score: 0,
+                        status: AmlStatus::Reviewing,
+                        timestamp: env.ledger().timestamp(),
+                    };
+                    env.storage().persistent().set(
+                        &AmlKey::Flag(remittance_id),
+                        &manual_flag,
+                    );
+                    env.events().publish(
+                        (symbol_short!("aml_rev"), remittance_id),
+                        (from.clone(), to.clone(), amount),
+                    );
+                }
+            }
+        }
+
         let remittance = RemittanceData {
             from: from.clone(),
             to,
             amount,
             currency,
-            status: symbol_short!("pending"),
+            status,
         };
 
         env.storage()
@@ -325,6 +507,10 @@ impl RemittanceHubContract {
             .persistent()
             .get(&remittance_id)
             .ok_or(RemittanceError::NotFound)?;
+
+        if remittance.status == symbol_short!("flagged") || remittance.status == symbol_short!("review") {
+            return Err(RemittanceError::AmlHighRisk);
+        }
 
         if remittance.status != symbol_short!("pending") {
             return Err(RemittanceError::InvalidStatus);
@@ -599,6 +785,7 @@ impl RemittanceHubContract {
 mod test {
     use super::*;
     use soroban_sdk::testutils::{Address as _, Ledger};
+    use crate::aml::{MockAmlOracleContract, MockAmlOracleContractClient};
 
     #[test]
     fn test_send_remittance() {
@@ -1232,5 +1419,409 @@ mod test {
         let invoice = client.get_invoice(&invoice_id).unwrap();
         assert_eq!(invoice.amount, 1000);
         assert_eq!(invoice.converted_amount, 1080);
+    }
+
+    #[test]
+    fn test_configure_aml() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let contract_id = env.register_contract(None, RemittanceHubContract);
+        let client = RemittanceHubContractClient::new(&env, &contract_id);
+
+        let admin = Address::generate(&env);
+        let oracle_addr = Address::generate(&env);
+        let primary = Address::generate(&env);
+        let secondary = Address::generate(&env);
+
+        client.initialize(&admin, &primary, &secondary, &3600);
+        client.configure_aml(&admin, &oracle_addr, &50);
+
+        let config = client.get_aml_config();
+        assert!(config.is_some());
+        let cfg = config.unwrap();
+        assert_eq!(cfg.admin, admin);
+        assert_eq!(cfg.oracle_address, oracle_addr);
+        assert_eq!(cfg.risk_threshold, 50);
+        assert!(cfg.enabled);
+    }
+
+    #[test]
+    fn test_configure_aml_unauthorized() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let contract_id = env.register_contract(None, RemittanceHubContract);
+        let client = RemittanceHubContractClient::new(&env, &contract_id);
+
+        let admin = Address::generate(&env);
+        let other = Address::generate(&env);
+        let oracle_addr = Address::generate(&env);
+        let primary = Address::generate(&env);
+        let secondary = Address::generate(&env);
+
+        client.initialize(&admin, &primary, &secondary, &3600);
+
+        let result = client.try_configure_aml(&other, &oracle_addr, &60);
+        assert_eq!(result, Err(Ok(RemittanceError::Unauthorized)));
+    }
+
+    #[test]
+    fn test_set_aml_threshold() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let contract_id = env.register_contract(None, RemittanceHubContract);
+        let client = RemittanceHubContractClient::new(&env, &contract_id);
+
+        let admin = Address::generate(&env);
+        let oracle_addr = Address::generate(&env);
+        let primary = Address::generate(&env);
+        let secondary = Address::generate(&env);
+
+        client.initialize(&admin, &primary, &secondary, &3600);
+        client.configure_aml(&admin, &oracle_addr, &50);
+        client.set_aml_threshold(&admin, &75);
+
+        let config = client.get_aml_config().unwrap();
+        assert_eq!(config.risk_threshold, 75);
+    }
+
+    #[test]
+    fn test_set_aml_oracle() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let contract_id = env.register_contract(None, RemittanceHubContract);
+        let client = RemittanceHubContractClient::new(&env, &contract_id);
+
+        let admin = Address::generate(&env);
+        let oracle_addr = Address::generate(&env);
+        let new_oracle = Address::generate(&env);
+        let primary = Address::generate(&env);
+        let secondary = Address::generate(&env);
+
+        client.initialize(&admin, &primary, &secondary, &3600);
+        client.configure_aml(&admin, &oracle_addr, &50);
+        client.set_aml_oracle(&admin, &new_oracle);
+
+        let config = client.get_aml_config().unwrap();
+        assert_eq!(config.oracle_address, new_oracle);
+    }
+
+    #[test]
+    fn test_send_remittance_no_aml_config() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let contract_id = env.register_contract(None, RemittanceHubContract);
+        let client = RemittanceHubContractClient::new(&env, &contract_id);
+
+        let from = Address::generate(&env);
+        let to = Address::generate(&env);
+
+        let remittance_id = client.send_remittance(&from, &to, &5000, &symbol_short!("USD"));
+        let remittance = client.get_remittance(&remittance_id).unwrap();
+        assert_eq!(remittance.status, symbol_short!("pending"));
+    }
+
+    #[test]
+    fn test_send_remittance_aml_clear() {
+        let env = Env::default();
+        env.mock_all_auths();
+        env.ledger().with_mut(|li| {
+            li.timestamp = 1000;
+        });
+
+        let aml_oracle_id = env.register_contract(None, MockAmlOracleContract);
+        let aml_oracle_client = MockAmlOracleContractClient::new(&env, &aml_oracle_id);
+        let admin = Address::generate(&env);
+        aml_oracle_client.initialize(&admin);
+
+        let from = Address::generate(&env);
+        let to = Address::generate(&env);
+        aml_oracle_client.set_risk_score(&admin, &from, &20);
+
+        let primary = Address::generate(&env);
+        let secondary = Address::generate(&env);
+
+        let contract_id = env.register_contract(None, RemittanceHubContract);
+        let client = RemittanceHubContractClient::new(&env, &contract_id);
+
+        client.initialize(&admin, &primary, &secondary, &3600);
+        client.configure_aml(&admin, &aml_oracle_id, &50);
+
+        let remittance_id = client.send_remittance(&from, &to, &5000, &symbol_short!("USD"));
+        let remittance = client.get_remittance(&remittance_id).unwrap();
+        assert_eq!(remittance.status, symbol_short!("pending"));
+
+        let flag = client.get_aml_flag(&remittance_id);
+        assert!(flag.is_none());
+    }
+
+    #[test]
+    fn test_send_remittance_aml_flagged() {
+        let env = Env::default();
+        env.mock_all_auths();
+        env.ledger().with_mut(|li| {
+            li.timestamp = 1000;
+        });
+
+        let aml_oracle_id = env.register_contract(None, MockAmlOracleContract);
+        let aml_oracle_client = MockAmlOracleContractClient::new(&env, &aml_oracle_id);
+        let admin = Address::generate(&env);
+        aml_oracle_client.initialize(&admin);
+
+        let from = Address::generate(&env);
+        let to = Address::generate(&env);
+        aml_oracle_client.set_risk_score(&admin, &from, &80);
+
+        let primary = Address::generate(&env);
+        let secondary = Address::generate(&env);
+
+        let contract_id = env.register_contract(None, RemittanceHubContract);
+        let client = RemittanceHubContractClient::new(&env, &contract_id);
+
+        client.initialize(&admin, &primary, &secondary, &3600);
+        client.configure_aml(&admin, &aml_oracle_id, &50);
+
+        let remittance_id = client.send_remittance(&from, &to, &5000, &symbol_short!("USD"));
+        let remittance = client.get_remittance(&remittance_id).unwrap();
+        assert_eq!(remittance.status, symbol_short!("flagged"));
+
+        let flag = client.get_aml_flag(&remittance_id);
+        assert!(flag.is_some());
+        let flag_data = flag.unwrap();
+        assert_eq!(flag_data.risk_score, 80);
+        assert_eq!(flag_data.status, AmlStatus::Flagged);
+    }
+
+    #[test]
+    fn test_send_remittance_aml_oracle_failure() {
+        let env = Env::default();
+        env.mock_all_auths();
+        env.ledger().with_mut(|li| {
+            li.timestamp = 1000;
+        });
+
+        let bogus_oracle = Address::generate(&env);
+        let primary = Address::generate(&env);
+        let secondary = Address::generate(&env);
+
+        let contract_id = env.register_contract(None, RemittanceHubContract);
+        let client = RemittanceHubContractClient::new(&env, &contract_id);
+
+        let admin = Address::generate(&env);
+        client.initialize(&admin, &primary, &secondary, &3600);
+        client.configure_aml(&admin, &bogus_oracle, &50);
+
+        let from = Address::generate(&env);
+        let to = Address::generate(&env);
+
+        let remittance_id = client.send_remittance(&from, &to, &5000, &symbol_short!("USD"));
+        let remittance = client.get_remittance(&remittance_id).unwrap();
+        assert_eq!(remittance.status, symbol_short!("review"));
+
+        let flag = client.get_aml_flag(&remittance_id);
+        assert!(flag.is_some());
+        let flag_data = flag.unwrap();
+        assert_eq!(flag_data.status, AmlStatus::Reviewing);
+    }
+
+    #[test]
+    fn test_complete_remittance_flagged_blocked() {
+        let env = Env::default();
+        env.mock_all_auths();
+        env.ledger().with_mut(|li| {
+            li.timestamp = 1000;
+        });
+
+        let aml_oracle_id = env.register_contract(None, MockAmlOracleContract);
+        let aml_oracle_client = MockAmlOracleContractClient::new(&env, &aml_oracle_id);
+        let admin = Address::generate(&env);
+        aml_oracle_client.initialize(&admin);
+
+        let from = Address::generate(&env);
+        let to = Address::generate(&env);
+        aml_oracle_client.set_risk_score(&admin, &from, &80);
+
+        let primary = Address::generate(&env);
+        let secondary = Address::generate(&env);
+
+        let contract_id = env.register_contract(None, RemittanceHubContract);
+        let client = RemittanceHubContractClient::new(&env, &contract_id);
+
+        client.initialize(&admin, &primary, &secondary, &3600);
+        client.configure_aml(&admin, &aml_oracle_id, &50);
+
+        let remittance_id = client.send_remittance(&from, &to, &5000, &symbol_short!("USD"));
+
+        let result = client.try_complete_remittance(&remittance_id, &from);
+        assert_eq!(result, Err(Ok(RemittanceError::AmlHighRisk)));
+    }
+
+    #[test]
+    fn test_clear_aml_flag_and_complete() {
+        let env = Env::default();
+        env.mock_all_auths();
+        env.ledger().with_mut(|li| {
+            li.timestamp = 1000;
+        });
+
+        let aml_oracle_id = env.register_contract(None, MockAmlOracleContract);
+        let aml_oracle_client = MockAmlOracleContractClient::new(&env, &aml_oracle_id);
+        let admin = Address::generate(&env);
+        aml_oracle_client.initialize(&admin);
+
+        let from = Address::generate(&env);
+        let to = Address::generate(&env);
+        aml_oracle_client.set_risk_score(&admin, &from, &80);
+
+        let primary = Address::generate(&env);
+        let secondary = Address::generate(&env);
+
+        let contract_id = env.register_contract(None, RemittanceHubContract);
+        let client = RemittanceHubContractClient::new(&env, &contract_id);
+
+        client.initialize(&admin, &primary, &secondary, &3600);
+        client.configure_aml(&admin, &aml_oracle_id, &50);
+
+        let remittance_id = client.send_remittance(&from, &to, &5000, &symbol_short!("USD"));
+
+        let remittance = client.get_remittance(&remittance_id).unwrap();
+        assert_eq!(remittance.status, symbol_short!("flagged"));
+
+        client.clear_aml_flag(&admin, &remittance_id);
+
+        let flag = client.get_aml_flag(&remittance_id).unwrap();
+        assert_eq!(flag.status, AmlStatus::Cleared);
+
+        let remittance = client.get_remittance(&remittance_id).unwrap();
+        assert_eq!(remittance.status, symbol_short!("pending"));
+
+        client.complete_remittance(&remittance_id, &from);
+
+        let remittance = client.get_remittance(&remittance_id).unwrap();
+        assert_eq!(remittance.status, symbol_short!("complete"));
+    }
+
+    #[test]
+    fn test_clear_aml_flag_unauthorized() {
+        let env = Env::default();
+        env.mock_all_auths();
+        env.ledger().with_mut(|li| {
+            li.timestamp = 1000;
+        });
+
+        let aml_oracle_id = env.register_contract(None, MockAmlOracleContract);
+        let aml_oracle_client = MockAmlOracleContractClient::new(&env, &aml_oracle_id);
+        let admin = Address::generate(&env);
+        aml_oracle_client.initialize(&admin);
+
+        let from = Address::generate(&env);
+        let to = Address::generate(&env);
+        aml_oracle_client.set_risk_score(&admin, &from, &80);
+
+        let primary = Address::generate(&env);
+        let secondary = Address::generate(&env);
+
+        let contract_id = env.register_contract(None, RemittanceHubContract);
+        let client = RemittanceHubContractClient::new(&env, &contract_id);
+
+        client.initialize(&admin, &primary, &secondary, &3600);
+        client.configure_aml(&admin, &aml_oracle_id, &50);
+
+        let remittance_id = client.send_remittance(&from, &to, &5000, &symbol_short!("USD"));
+
+        let other = Address::generate(&env);
+        let result = client.try_clear_aml_flag(&other, &remittance_id);
+        assert_eq!(result, Err(Ok(RemittanceError::Unauthorized)));
+    }
+
+    #[test]
+    fn test_clear_aml_flag_not_found() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let contract_id = env.register_contract(None, RemittanceHubContract);
+        let client = RemittanceHubContractClient::new(&env, &contract_id);
+
+        let admin = Address::generate(&env);
+        let oracle = Address::generate(&env);
+        let primary = Address::generate(&env);
+        let secondary = Address::generate(&env);
+
+        client.initialize(&admin, &primary, &secondary, &3600);
+        client.configure_aml(&admin, &oracle, &50);
+
+        let result = client.try_clear_aml_flag(&admin, &999);
+        assert_eq!(result, Err(Ok(RemittanceError::AmlFlagNotFound)));
+    }
+
+    #[test]
+    fn test_complete_remittance_review_blocked() {
+        let env = Env::default();
+        env.mock_all_auths();
+        env.ledger().with_mut(|li| {
+            li.timestamp = 1000;
+        });
+
+        let bogus_oracle = Address::generate(&env);
+        let primary = Address::generate(&env);
+        let secondary = Address::generate(&env);
+
+        let contract_id = env.register_contract(None, RemittanceHubContract);
+        let client = RemittanceHubContractClient::new(&env, &contract_id);
+
+        let admin = Address::generate(&env);
+        client.initialize(&admin, &primary, &secondary, &3600);
+        client.configure_aml(&admin, &bogus_oracle, &50);
+
+        let from = Address::generate(&env);
+        let to = Address::generate(&env);
+
+        let remittance_id = client.send_remittance(&from, &to, &5000, &symbol_short!("USD"));
+
+        let result = client.try_complete_remittance(&remittance_id, &from);
+        assert_eq!(result, Err(Ok(RemittanceError::AmlHighRisk)));
+    }
+
+    #[test]
+    fn test_set_aml_threshold_unauthorized() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let contract_id = env.register_contract(None, RemittanceHubContract);
+        let client = RemittanceHubContractClient::new(&env, &contract_id);
+
+        let admin = Address::generate(&env);
+        let oracle = Address::generate(&env);
+        let other = Address::generate(&env);
+        let primary = Address::generate(&env);
+        let secondary = Address::generate(&env);
+
+        client.initialize(&admin, &primary, &secondary, &3600);
+        client.configure_aml(&admin, &oracle, &50);
+
+        let result = client.try_set_aml_threshold(&other, &75);
+        assert_eq!(result, Err(Ok(RemittanceError::Unauthorized)));
+    }
+
+    #[test]
+    fn test_set_aml_threshold_not_configured() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let contract_id = env.register_contract(None, RemittanceHubContract);
+        let client = RemittanceHubContractClient::new(&env, &contract_id);
+
+        let admin = Address::generate(&env);
+        let primary = Address::generate(&env);
+        let secondary = Address::generate(&env);
+
+        client.initialize(&admin, &primary, &secondary, &3600);
+
+        let result = client.try_set_aml_threshold(&admin, &75);
+        assert_eq!(result, Err(Ok(RemittanceError::AmlNotConfigured)));
     }
 }
