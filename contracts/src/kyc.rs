@@ -1,6 +1,6 @@
 use soroban_sdk::{
-    contract, contractimpl, contracttype, contracterror, Address, BytesN, Env,
-    InvokeError, Symbol, Val, Vec, IntoVal,
+    contract, contracterror, contractimpl, contracttype, Address, BytesN, Env, IntoVal,
+    InvokeError, Symbol, Val, Vec,
 };
 
 #[contracterror]
@@ -74,7 +74,9 @@ pub struct MockKycOracleContract;
 impl MockKycOracleContract {
     pub fn initialize(env: Env, admin: Address) {
         admin.require_auth();
-        env.storage().instance().set(&Symbol::new(&env, "admin"), &admin);
+        env.storage()
+            .instance()
+            .set(&Symbol::new(&env, "admin"), &admin);
     }
 
     pub fn set_status(env: Env, admin: Address, account: Address, status: u32) {
