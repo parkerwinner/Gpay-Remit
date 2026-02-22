@@ -26,6 +26,8 @@ pub enum RemittanceError {
     AmlOracleError = 18,
     AmlNotConfigured = 19,
     AmlFlagNotFound = 20,
+    BatchTooLarge = 21,
+    DuplicateEscrowId = 22,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -74,6 +76,26 @@ pub struct RemittanceData {
     pub status: Symbol,
 }
 
+#[derive(Clone)]
+#[contracttype]
+pub struct EscrowRequest {
+    pub recipient: Address,
+    pub amount: i128,
+    pub asset: Asset,
+    pub expiration_timestamp: u64,
+}
+
+#[derive(Clone)]
+#[contracttype]
+pub struct EscrowData {
+    pub sender: Address,
+    pub recipient: Address,
+    pub amount: i128,
+    pub asset: Asset,
+    pub expiration_timestamp: u64,
+    pub status: Symbol,
+}
+
 #[derive(Clone, Copy)]
 #[contracttype]
 pub enum DataKey {
@@ -81,6 +103,8 @@ pub enum DataKey {
     Invoice(u64),
     EscrowInvoice(u64),
     Admin,
+    EscrowCounter,
+    Escrow(u64),
 }
 
 #[derive(Clone)]
@@ -746,6 +770,149 @@ impl RemittanceHubContract {
         amount: i128,
     ) -> Result<oracle::ConversionResult, RemittanceError> {
         Self::convert_currency(env, amount, from_asset, to_asset)
+    }
+
+    pub fn batch_create_escrows(
+        env: Env,
+        sender: Address,
+        requests: soroban_sdk::Vec<EscrowRequest>,
+    ) -> Result<soroban_sdk::Vec<u64>, RemittanceError> {
+        sender.require_auth();
+
+        if requests.len() > 10 {
+            return Err(RemittanceError::BatchTooLarge);
+        }
+
+        let mut ids = soroban_sdk::Vec::new(&env);
+        for request in requests.iter() {
+            let id = Self::create_escrow_internal(&env, &sender, request)?;
+            ids.push_back(id);
+        }
+
+        env.events().publish(
+            (symbol_short!("batch_cre"), sender),
+            ids.clone(),
+        );
+
+        Ok(ids)
+    }
+
+    fn create_escrow_internal(
+        env: &Env,
+        sender: &Address,
+        request: EscrowRequest,
+    ) -> Result<u64, RemittanceError> {
+        if request.amount <= 0 {
+            return Err(RemittanceError::InvalidAmount);
+        }
+
+        let current_time = env.ledger().timestamp();
+        if request.expiration_timestamp <= current_time {
+            return Err(RemittanceError::DueDateInPast);
+        }
+
+        let mut counter: u64 = env.storage().persistent().get(&DataKey::EscrowCounter).unwrap_or(0);
+        counter = counter.checked_add(1).ok_or(RemittanceError::InvalidAmount)?;
+
+        let escrow = EscrowData {
+            sender: sender.clone(),
+            recipient: request.recipient,
+            amount: request.amount,
+            asset: request.asset,
+            expiration_timestamp: request.expiration_timestamp,
+            status: symbol_short!("pending"),
+        };
+
+        env.storage().persistent().set(&DataKey::Escrow(counter), &escrow);
+        env.storage().persistent().set(&DataKey::EscrowCounter, &counter);
+
+        Ok(counter)
+    }
+
+    pub fn batch_deposit(
+        env: Env,
+        sender: Address,
+        escrow_ids: soroban_sdk::Vec<u64>,
+        token_address: Address,
+    ) -> Result<(), RemittanceError> {
+        sender.require_auth();
+
+        let mut total_amount: i128 = 0;
+        let mut total_fees: i128 = 0;
+        let fee_percentage = 250;
+
+        for id in escrow_ids.iter() {
+            let mut escrow: EscrowData = env.storage().persistent()
+                .get(&DataKey::Escrow(id))
+                .ok_or(RemittanceError::NotFound)?;
+            
+            if escrow.sender != sender {
+                return Err(RemittanceError::Unauthorized);
+            }
+            if escrow.status != symbol_short!("pending") {
+                return Err(RemittanceError::InvalidStatus);
+            }
+
+            let fees = escrow.amount.checked_mul(fee_percentage)
+                .unwrap_or(0)
+                .checked_div(10000)
+                .unwrap_or(0);
+            
+            total_amount = total_amount.checked_add(escrow.amount).ok_or(RemittanceError::InvalidAmount)?;
+            total_fees = total_fees.checked_add(fees).ok_or(RemittanceError::InvalidAmount)?;
+
+            escrow.status = symbol_short!("funded");
+            env.storage().persistent().set(&DataKey::Escrow(id), &escrow);
+        }
+
+        let total_transfer = total_amount.checked_add(total_fees).ok_or(RemittanceError::InvalidAmount)?;
+
+        if total_transfer > 0 {
+            let token_client = soroban_sdk::token::Client::new(&env, &token_address);
+            token_client.transfer(&sender, &env.current_contract_address(), &total_transfer);
+        }
+
+        env.events().publish(
+            (symbol_short!("batch_dep"), sender),
+            (escrow_ids, total_amount, total_fees),
+        );
+
+        Ok(())
+    }
+
+    pub fn batch_release(
+        env: Env,
+        caller: Address,
+        escrow_ids: soroban_sdk::Vec<u64>,
+        token_address: Address,
+    ) -> Result<(), RemittanceError> {
+        caller.require_auth();
+
+        for id in escrow_ids.iter() {
+            let mut escrow: EscrowData = env.storage().persistent()
+                .get(&DataKey::Escrow(id))
+                .ok_or(RemittanceError::NotFound)?;
+            
+            if escrow.recipient != caller && escrow.sender != caller {
+                return Err(RemittanceError::Unauthorized);
+            }
+            if escrow.status != symbol_short!("funded") {
+                return Err(RemittanceError::InvalidStatus);
+            }
+
+            escrow.status = symbol_short!("release");
+            env.storage().persistent().set(&DataKey::Escrow(id), &escrow);
+
+            let token_client = soroban_sdk::token::Client::new(&env, &token_address);
+            token_client.transfer(&env.current_contract_address(), &escrow.recipient, &escrow.amount);
+        }
+
+        env.events().publish(
+            (symbol_short!("batch_rel"), caller),
+            escrow_ids,
+        );
+
+        Ok(())
     }
 
     fn convert_with_oracle(env: &Env, amount: i128, asset_code: &String) -> i128 {
@@ -1823,5 +1990,127 @@ mod test {
 
         let result = client.try_set_aml_threshold(&admin, &75);
         assert_eq!(result, Err(Ok(RemittanceError::AmlNotConfigured)));
+    }
+
+    #[test]
+    fn test_batch_create_escrows_success() {
+        let env = Env::default();
+        env.mock_all_auths();
+        env.ledger().with_mut(|li| {
+            li.timestamp = 1000;
+        });
+
+        let contract_id = env.register_contract(None, RemittanceHubContract);
+        let client = RemittanceHubContractClient::new(&env, &contract_id);
+
+        let sender = Address::generate(&env);
+        let recipient1 = Address::generate(&env);
+        let recipient2 = Address::generate(&env);
+        let issuer = Address::generate(&env);
+
+        let asset = Asset {
+            code: String::from_str(&env, "USDC"),
+            issuer,
+        };
+
+        let req1 = EscrowRequest {
+            recipient: recipient1,
+            amount: 1000,
+            asset: asset.clone(),
+            expiration_timestamp: 2000,
+        };
+        let req2 = EscrowRequest {
+            recipient: recipient2,
+            amount: 2000,
+            asset: asset.clone(),
+            expiration_timestamp: 3000,
+        };
+
+        let mut requests = soroban_sdk::Vec::new(&env);
+        requests.push_back(req1);
+        requests.push_back(req2);
+
+        let ids = client.batch_create_escrows(&sender, &requests);
+        assert_eq!(ids.len(), 2);
+    }
+
+    #[test]
+    fn test_batch_create_escrows_too_large() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let contract_id = env.register_contract(None, RemittanceHubContract);
+        let client = RemittanceHubContractClient::new(&env, &contract_id);
+
+        let sender = Address::generate(&env);
+        let recipient = Address::generate(&env);
+        let asset = Asset {
+            code: String::from_str(&env, "USDC"),
+            issuer: Address::generate(&env),
+        };
+
+        let mut requests = soroban_sdk::Vec::new(&env);
+        for _ in 0..11 {
+            requests.push_back(EscrowRequest {
+                recipient: recipient.clone(),
+                amount: 100,
+                asset: asset.clone(),
+                expiration_timestamp: 2000,
+            });
+        }
+
+        let result = client.try_batch_create_escrows(&sender, &requests);
+        assert_eq!(result, Err(Ok(RemittanceError::BatchTooLarge)));
+    }
+
+    #[test]
+    fn test_batch_deposit_and_release() {
+        let env = Env::default();
+        env.mock_all_auths();
+        env.ledger().with_mut(|li| {
+            li.timestamp = 1000;
+        });
+
+        let contract_id = env.register_contract(None, RemittanceHubContract);
+        let client = RemittanceHubContractClient::new(&env, &contract_id);
+
+        let token_admin = Address::generate(&env);
+        let token_id = env.register_stellar_asset_contract(token_admin.clone());
+        let token_client = soroban_sdk::token::StellarAssetClient::new(&env, &token_id);
+
+        let sender = Address::generate(&env);
+        let recipient = Address::generate(&env);
+        let asset = Asset {
+            code: String::from_str(&env, "USDC"),
+            issuer: Address::generate(&env),
+        };
+
+        token_client.mint(&sender, &10000);
+
+        let mut requests = soroban_sdk::Vec::new(&env);
+        requests.push_back(EscrowRequest {
+            recipient: recipient.clone(),
+            amount: 1000,
+            asset: asset.clone(),
+            expiration_timestamp: 2000,
+        });
+        requests.push_back(EscrowRequest {
+            recipient: recipient.clone(),
+            amount: 2000,
+            asset: asset.clone(),
+            expiration_timestamp: 3000,
+        });
+
+        let ids = client.batch_create_escrows(&sender, &requests);
+        
+        client.batch_deposit(&sender, &ids, &token_id);
+
+        let sender_balance = soroban_sdk::token::Client::new(&env, &token_id).balance(&sender);
+        assert_eq!(sender_balance, 10000 - 3075);
+
+        client.batch_release(&recipient, &ids, &token_id);
+        
+        let recipient_balance = soroban_sdk::token::Client::new(&env, &token_id).balance(&recipient);
+        assert_eq!(recipient_balance, 3000);
     }
 }
