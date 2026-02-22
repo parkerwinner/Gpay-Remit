@@ -447,7 +447,11 @@
                         "symbol": "status"
                       },
                       "val": {
-                        "symbol": "release"
+                        "vec": [
+                          {
+                            "symbol": "Released"
+                          }
+                        ]
                       }
                     }
                   ]
@@ -561,7 +565,11 @@
                         "symbol": "status"
                       },
                       "val": {
-                        "symbol": "release"
+                        "vec": [
+                          {
+                            "symbol": "Released"
+                          }
+                        ]
                       }
                     }
                   ]

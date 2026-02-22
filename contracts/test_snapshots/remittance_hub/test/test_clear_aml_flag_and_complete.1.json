@@ -499,81 +499,6 @@
           "contract_data": {
             "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAOLZM",
             "key": {
-              "u64": 0
-            },
-            "durability": "persistent"
-          }
-        },
-        [
-          {
-            "last_modified_ledger_seq": 0,
-            "data": {
-              "contract_data": {
-                "ext": "v0",
-                "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAOLZM",
-                "key": {
-                  "u64": 0
-                },
-                "durability": "persistent",
-                "val": {
-                  "map": [
-                    {
-                      "key": {
-                        "symbol": "amount"
-                      },
-                      "val": {
-                        "i128": {
-                          "hi": 0,
-                          "lo": 5000
-                        }
-                      }
-                    },
-                    {
-                      "key": {
-                        "symbol": "currency"
-                      },
-                      "val": {
-                        "symbol": "USD"
-                      }
-                    },
-                    {
-                      "key": {
-                        "symbol": "from"
-                      },
-                      "val": {
-                        "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M"
-                      }
-                    },
-                    {
-                      "key": {
-                        "symbol": "status"
-                      },
-                      "val": {
-                        "symbol": "complete"
-                      }
-                    },
-                    {
-                      "key": {
-                        "symbol": "to"
-                      },
-                      "val": {
-                        "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAITA4"
-                      }
-                    }
-                  ]
-                }
-              }
-            },
-            "ext": "v0"
-          },
-          4095
-        ]
-      ],
-      [
-        {
-          "contract_data": {
-            "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAOLZM",
-            "key": {
               "vec": [
                 {
                   "symbol": "Admin"
@@ -858,6 +783,99 @@
                       },
                       "val": {
                         "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMDR4"
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "ext": "v0"
+          },
+          4095
+        ]
+      ],
+      [
+        {
+          "contract_data": {
+            "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAOLZM",
+            "key": {
+              "vec": [
+                {
+                  "symbol": "Remittance"
+                },
+                {
+                  "u64": 0
+                }
+              ]
+            },
+            "durability": "persistent"
+          }
+        },
+        [
+          {
+            "last_modified_ledger_seq": 0,
+            "data": {
+              "contract_data": {
+                "ext": "v0",
+                "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAOLZM",
+                "key": {
+                  "vec": [
+                    {
+                      "symbol": "Remittance"
+                    },
+                    {
+                      "u64": 0
+                    }
+                  ]
+                },
+                "durability": "persistent",
+                "val": {
+                  "map": [
+                    {
+                      "key": {
+                        "symbol": "amount"
+                      },
+                      "val": {
+                        "i128": {
+                          "hi": 0,
+                          "lo": 5000
+                        }
+                      }
+                    },
+                    {
+                      "key": {
+                        "symbol": "currency"
+                      },
+                      "val": {
+                        "symbol": "USD"
+                      }
+                    },
+                    {
+                      "key": {
+                        "symbol": "from"
+                      },
+                      "val": {
+                        "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M"
+                      }
+                    },
+                    {
+                      "key": {
+                        "symbol": "status"
+                      },
+                      "val": {
+                        "vec": [
+                          {
+                            "symbol": "Complete"
+                          }
+                        ]
+                      }
+                    },
+                    {
+                      "key": {
+                        "symbol": "to"
+                      },
+                      "val": {
+                        "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAITA4"
                       }
                     }
                   ]
@@ -1427,7 +1445,11 @@
                     "symbol": "status"
                   },
                   "val": {
-                    "symbol": "flagged"
+                    "vec": [
+                      {
+                        "symbol": "Flagged"
+                      }
+                    ]
                   }
                 },
                 {
@@ -1702,7 +1724,11 @@
                     "symbol": "status"
                   },
                   "val": {
-                    "symbol": "pending"
+                    "vec": [
+                      {
+                        "symbol": "Cleared"
+                      }
+                    ]
                   }
                 },
                 {
@@ -1849,7 +1875,11 @@
                     "symbol": "status"
                   },
                   "val": {
-                    "symbol": "complete"
+                    "vec": [
+                      {
+                        "symbol": "Complete"
+                      }
+                    ]
                   }
                 },
                 {

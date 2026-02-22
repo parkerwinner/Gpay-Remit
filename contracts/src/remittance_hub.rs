@@ -66,6 +66,18 @@ pub struct Invoice {
     pub memo: String,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[contracttype]
+pub enum RemittanceStatus {
+    Pending,
+    Funded,
+    Released,
+    Flagged,
+    Reviewing,
+    Complete,
+    Cleared,
+}
+
 #[derive(Clone)]
 #[contracttype]
 pub struct RemittanceData {
@@ -73,7 +85,7 @@ pub struct RemittanceData {
     pub to: Address,
     pub amount: i128,
     pub currency: Symbol,
-    pub status: Symbol,
+    pub status: RemittanceStatus,
 }
 
 #[derive(Clone)]
@@ -93,7 +105,7 @@ pub struct EscrowData {
     pub amount: i128,
     pub asset: Asset,
     pub expiration_timestamp: u64,
-    pub status: Symbol,
+    pub status: RemittanceStatus,
 }
 
 #[derive(Clone, Copy)]
@@ -105,6 +117,7 @@ pub enum DataKey {
     Admin,
     EscrowCounter,
     Escrow(u64),
+    Remittance(u64),
 }
 
 #[derive(Clone)]
@@ -362,11 +375,11 @@ impl RemittanceHubContract {
         env.storage().persistent().set(&AmlKey::Flag(remittance_id), &flag);
 
         let mut remittance: RemittanceData = env.storage().persistent()
-            .get(&remittance_id)
+            .get(&DataKey::Remittance(remittance_id))
             .ok_or(RemittanceError::NotFound)?;
 
-        remittance.status = symbol_short!("pending");
-        env.storage().persistent().set(&remittance_id, &remittance);
+        remittance.status = RemittanceStatus::Cleared;
+        env.storage().persistent().set(&DataKey::Remittance(remittance_id), &remittance);
 
         env.events().publish(
             (symbol_short!("aml_clr"), remittance_id),
@@ -394,7 +407,7 @@ impl RemittanceHubContract {
         }
 
         let remittance_id = env.ledger().sequence() as u64;
-        let mut status = symbol_short!("pending");
+        let mut status = RemittanceStatus::Pending;
 
         let aml_config: Option<AmlConfig> = env.storage().persistent().get(&AmlKey::Config);
 
@@ -402,7 +415,7 @@ impl RemittanceHubContract {
             match aml::screen_transaction(&env, config, &from, &to, amount) {
                 Ok(result) => {
                     if result.status == AmlStatus::Flagged {
-                        status = symbol_short!("flagged");
+                        status = RemittanceStatus::Flagged;
                         env.storage().persistent().set(
                             &AmlKey::Flag(remittance_id),
                             &result,
@@ -414,7 +427,7 @@ impl RemittanceHubContract {
                     }
                 }
                 Err(_) => {
-                    status = symbol_short!("review");
+                    status = RemittanceStatus::Reviewing;
                     let manual_flag = AmlScreeningResult {
                         sender: from.clone(),
                         recipient: to.clone(),
@@ -445,7 +458,7 @@ impl RemittanceHubContract {
 
         env.storage()
             .persistent()
-            .set(&remittance_id, &remittance);
+            .set(&DataKey::Remittance(remittance_id), &remittance);
 
         Ok(remittance_id)
     }
@@ -529,25 +542,25 @@ impl RemittanceHubContract {
         let mut remittance: RemittanceData = env
             .storage()
             .persistent()
-            .get(&remittance_id)
+            .get(&DataKey::Remittance(remittance_id))
             .ok_or(RemittanceError::NotFound)?;
 
-        if remittance.status == symbol_short!("flagged") || remittance.status == symbol_short!("review") {
+        if remittance.status == RemittanceStatus::Flagged || remittance.status == RemittanceStatus::Reviewing {
             return Err(RemittanceError::AmlHighRisk);
         }
 
-        if remittance.status != symbol_short!("pending") {
+        if remittance.status != RemittanceStatus::Pending && remittance.status != RemittanceStatus::Cleared {
             return Err(RemittanceError::InvalidStatus);
         }
 
-        remittance.status = symbol_short!("complete");
-        env.storage().persistent().set(&remittance_id, &remittance);
+        remittance.status = RemittanceStatus::Complete;
+        env.storage().persistent().set(&DataKey::Remittance(remittance_id), &remittance);
 
         Ok(())
     }
 
     pub fn get_remittance(env: Env, remittance_id: u64) -> Option<RemittanceData> {
-        env.storage().persistent().get(&remittance_id)
+        env.storage().persistent().get(&DataKey::Remittance(remittance_id))
     }
 
     pub fn generate_invoice(
@@ -620,6 +633,66 @@ impl RemittanceHubContract {
 
     pub fn get_invoice(env: Env, invoice_id: u64) -> Option<Invoice> {
         env.storage().persistent().get(&DataKey::Invoice(invoice_id))
+    }
+
+    pub fn archive_invoice(env: Env, invoice_id: u64, caller: Address) -> Result<(), RemittanceError> {
+        caller.require_auth();
+        
+        let invoice: Invoice = env.storage().persistent()
+            .get(&DataKey::Invoice(invoice_id))
+            .ok_or(RemittanceError::InvoiceNotFound)?;
+
+        let stored_admin: Address = env.storage().persistent()
+            .get(&DataKey::Admin)
+            .ok_or(RemittanceError::Unauthorized)?;
+
+        if caller != stored_admin && caller != invoice.sender {
+            return Err(RemittanceError::Unauthorized);
+        }
+
+        if invoice.status != InvoiceStatus::Paid && invoice.status != InvoiceStatus::Cancelled && invoice.status != InvoiceStatus::Overdue {
+            return Err(RemittanceError::InvalidInvoiceStatus);
+        }
+
+        env.storage().persistent().remove(&DataKey::Invoice(invoice_id));
+        env.storage().persistent().remove(&DataKey::EscrowInvoice(invoice_id));
+
+        env.events().publish(
+            (symbol_short!("inv_arch"), invoice_id),
+            caller,
+        );
+
+        Ok(())
+    }
+
+    pub fn archive_remittance(env: Env, remittance_id: u64, caller: Address) -> Result<(), RemittanceError> {
+        caller.require_auth();
+        
+        let remittance: RemittanceData = env.storage().persistent()
+            .get(&DataKey::Remittance(remittance_id))
+            .ok_or(RemittanceError::NotFound)?;
+
+        let stored_admin: Address = env.storage().persistent()
+            .get(&DataKey::Admin)
+            .ok_or(RemittanceError::Unauthorized)?;
+
+        if caller != stored_admin && caller != remittance.from {
+            return Err(RemittanceError::Unauthorized);
+        }
+
+        if remittance.status != RemittanceStatus::Complete {
+            return Err(RemittanceError::InvalidStatus);
+        }
+
+        env.storage().persistent().remove(&DataKey::Remittance(remittance_id));
+        env.storage().persistent().remove(&AmlKey::Flag(remittance_id));
+
+        env.events().publish(
+            (symbol_short!("rem_arch"), remittance_id),
+            caller,
+        );
+
+        Ok(())
     }
 
     pub fn get_invoice_by_escrow(env: Env, escrow_id: u64) -> Option<u64> {
@@ -820,7 +893,7 @@ impl RemittanceHubContract {
             amount: request.amount,
             asset: request.asset,
             expiration_timestamp: request.expiration_timestamp,
-            status: symbol_short!("pending"),
+            status: RemittanceStatus::Pending,
         };
 
         env.storage().persistent().set(&DataKey::Escrow(counter), &escrow);
@@ -849,7 +922,7 @@ impl RemittanceHubContract {
             if escrow.sender != sender {
                 return Err(RemittanceError::Unauthorized);
             }
-            if escrow.status != symbol_short!("pending") {
+            if escrow.status != RemittanceStatus::Pending {
                 return Err(RemittanceError::InvalidStatus);
             }
 
@@ -861,7 +934,7 @@ impl RemittanceHubContract {
             total_amount = total_amount.checked_add(escrow.amount).ok_or(RemittanceError::InvalidAmount)?;
             total_fees = total_fees.checked_add(fees).ok_or(RemittanceError::InvalidAmount)?;
 
-            escrow.status = symbol_short!("funded");
+            escrow.status = RemittanceStatus::Funded;
             env.storage().persistent().set(&DataKey::Escrow(id), &escrow);
         }
 
@@ -888,22 +961,22 @@ impl RemittanceHubContract {
     ) -> Result<(), RemittanceError> {
         caller.require_auth();
 
+        let token_client = soroban_sdk::token::Client::new(&env, &token_address);
         for id in escrow_ids.iter() {
             let mut escrow: EscrowData = env.storage().persistent()
                 .get(&DataKey::Escrow(id))
-                .ok_or(RemittanceError::NotFound)?;
+            .ok_or(RemittanceError::NotFound)?;
             
             if escrow.recipient != caller && escrow.sender != caller {
                 return Err(RemittanceError::Unauthorized);
             }
-            if escrow.status != symbol_short!("funded") {
+            if escrow.status != RemittanceStatus::Funded {
                 return Err(RemittanceError::InvalidStatus);
             }
 
-            escrow.status = symbol_short!("release");
+            escrow.status = RemittanceStatus::Released;
             env.storage().persistent().set(&DataKey::Escrow(id), &escrow);
 
-            let token_client = soroban_sdk::token::Client::new(&env, &token_address);
             token_client.transfer(&env.current_contract_address(), &escrow.recipient, &escrow.amount);
         }
 
@@ -915,6 +988,7 @@ impl RemittanceHubContract {
         Ok(())
     }
 
+    #[inline(always)]
     fn convert_with_oracle(env: &Env, amount: i128, asset_code: &String) -> i128 {
         let target = String::from_str(env, "USD");
         if asset_code == &target {
@@ -929,20 +1003,19 @@ impl RemittanceHubContract {
                 let cached: Option<CachedRate> = env.storage().persistent()
                     .get(&HubOracleKey::CachedRate(asset_code.clone(), target.clone()));
 
-                let result = oracle::get_conversion_rate(
-                    env,
+                match oracle::get_conversion_rate(
+                    &env,
                     &cfg.primary_oracle,
-                    asset_code,
+                    &asset_code,
                     &target,
                     amount,
                     cfg.max_staleness,
                     cached,
-                );
-                match result {
-                    Ok(conversion) => conversion.converted_amount,
+                ) {
+                    Ok(result) => result.converted_amount,
                     Err(_) => amount,
                 }
-            }
+            },
             None => amount,
         }
     }
@@ -1689,7 +1762,7 @@ mod test {
 
         let remittance_id = client.send_remittance(&from, &to, &5000, &symbol_short!("USD"));
         let remittance = client.get_remittance(&remittance_id).unwrap();
-        assert_eq!(remittance.status, symbol_short!("pending"));
+        assert_eq!(remittance.status, RemittanceStatus::Pending);
     }
 
     #[test]
@@ -1720,7 +1793,7 @@ mod test {
 
         let remittance_id = client.send_remittance(&from, &to, &5000, &symbol_short!("USD"));
         let remittance = client.get_remittance(&remittance_id).unwrap();
-        assert_eq!(remittance.status, symbol_short!("pending"));
+        assert_eq!(remittance.status, RemittanceStatus::Pending);
 
         let flag = client.get_aml_flag(&remittance_id);
         assert!(flag.is_none());
@@ -1754,7 +1827,7 @@ mod test {
 
         let remittance_id = client.send_remittance(&from, &to, &5000, &symbol_short!("USD"));
         let remittance = client.get_remittance(&remittance_id).unwrap();
-        assert_eq!(remittance.status, symbol_short!("flagged"));
+        assert_eq!(remittance.status, RemittanceStatus::Flagged);
 
         let flag = client.get_aml_flag(&remittance_id);
         assert!(flag.is_some());
@@ -1787,7 +1860,7 @@ mod test {
 
         let remittance_id = client.send_remittance(&from, &to, &5000, &symbol_short!("USD"));
         let remittance = client.get_remittance(&remittance_id).unwrap();
-        assert_eq!(remittance.status, symbol_short!("review"));
+        assert_eq!(remittance.status, RemittanceStatus::Reviewing);
 
         let flag = client.get_aml_flag(&remittance_id);
         assert!(flag.is_some());
@@ -1856,7 +1929,7 @@ mod test {
         let remittance_id = client.send_remittance(&from, &to, &5000, &symbol_short!("USD"));
 
         let remittance = client.get_remittance(&remittance_id).unwrap();
-        assert_eq!(remittance.status, symbol_short!("flagged"));
+        assert_eq!(remittance.status, RemittanceStatus::Flagged);
 
         client.clear_aml_flag(&admin, &remittance_id);
 
@@ -1864,12 +1937,12 @@ mod test {
         assert_eq!(flag.status, AmlStatus::Cleared);
 
         let remittance = client.get_remittance(&remittance_id).unwrap();
-        assert_eq!(remittance.status, symbol_short!("pending"));
+        assert_eq!(remittance.status, RemittanceStatus::Cleared);
 
         client.complete_remittance(&remittance_id, &from);
 
         let remittance = client.get_remittance(&remittance_id).unwrap();
-        assert_eq!(remittance.status, symbol_short!("complete"));
+        assert_eq!(remittance.status, RemittanceStatus::Complete);
     }
 
     #[test]

@@ -148,8 +148,6 @@ pub struct Asset {
 #[contracttype]
 pub struct ReleaseCondition {
     pub expiration_timestamp: u64,
-    pub recipient_approval: bool,
-    pub oracle_confirmation: bool,
     pub conditions: Vec<Condition>,
     pub operator: ConditionOperator,
     pub min_approvals: u32,
@@ -174,10 +172,14 @@ pub struct Escrow {
     pub refund_timestamp: u64,
     pub escrow_id: u64,
     pub memo: String,
-    pub allow_partial_release: bool,
-    pub multi_party_enabled: bool,
-    pub kyc_compliant: bool,
+    pub flags: u32,
 }
+
+pub const FLAG_PARTIAL_RELEASE: u32 = 1;
+pub const FLAG_MULTI_PARTY: u32 = 2;
+pub const FLAG_KYC_COMPLIANT: u32 = 4;
+pub const FLAG_RECIPIENT_APPROVAL: u32 = 8;
+pub const FLAG_ORACLE_CONFIRMATION: u32 = 16;
 
 #[derive(Clone)]
 #[contracttype]
@@ -366,6 +368,8 @@ impl PaymentEscrowContract {
         Ok(())
     }
 
+
+    #[inline(always)]
     fn calculate_fees(env: &Env, amount: i128) -> Result<FeeBreakdown, Error> {
         let platform_percentage = env.storage().instance().get(&DataKey::PlatformFeePercentage).unwrap_or(0);
         let forex_percentage = env.storage().instance().get(&DataKey::ForexFeePercentage).unwrap_or(0);
@@ -541,10 +545,10 @@ impl PaymentEscrowContract {
             return Err(Error::Unauthorized);
         }
 
-        let mut escrow: Escrow = env.storage().instance().get(&DataKey::Escrow(escrow_id)).ok_or(Error::EscrowNotFound)?;
+        let mut escrow: Escrow = env.storage().persistent().get(&DataKey::Escrow(escrow_id)).ok_or(Error::EscrowNotFound)?;
 
-        escrow.kyc_compliant = true;
-        env.storage().instance().set(&DataKey::Escrow(escrow_id), &escrow);
+        escrow.flags |= FLAG_KYC_COMPLIANT;
+        env.storage().persistent().set(&DataKey::Escrow(escrow_id), &escrow);
 
         env.events().publish((symbol_short!("kyc_ovr"), escrow_id), admin);
 
@@ -653,6 +657,11 @@ impl PaymentEscrowContract {
         let mut counter: u64 = env.storage().instance().get(&DataKey::EscrowCounter).unwrap_or(0);
         counter = counter.checked_add(1).ok_or(Error::CounterOverflow)?;
 
+        let mut flags = 0u32;
+        if kyc_compliant {
+            flags |= FLAG_KYC_COMPLIANT;
+        }
+
         let escrow = Escrow {
             sender: sender.clone(),
             recipient,
@@ -663,8 +672,6 @@ impl PaymentEscrowContract {
             asset,
             release_conditions: ReleaseCondition {
                 expiration_timestamp,
-                recipient_approval: false,
-                oracle_confirmation: false,
                 conditions: Vec::new(&env),
                 operator: ConditionOperator::And,
                 min_approvals: 1,
@@ -677,12 +684,10 @@ impl PaymentEscrowContract {
             refund_timestamp: 0,
             escrow_id: counter,
             memo,
-            allow_partial_release: false,
-            multi_party_enabled: false,
-            kyc_compliant,
+            flags,
         };
 
-        env.storage().instance().set(&DataKey::Escrow(counter), &escrow);
+        env.storage().persistent().set(&DataKey::Escrow(counter), &escrow);
         env.storage().instance().set(&DataKey::EscrowCounter, &counter);
 
         env.events().publish((symbol_short!("created"), counter), escrow.sender);
@@ -703,7 +708,7 @@ impl PaymentEscrowContract {
             return Err(Error::InvalidAmount);
         }
 
-        let mut escrow: Escrow = env.storage().instance().get(&DataKey::Escrow(escrow_id)).ok_or(Error::EscrowNotFound)?;
+        let mut escrow: Escrow = env.storage().persistent().get(&DataKey::Escrow(escrow_id)).ok_or(Error::EscrowNotFound)?;
 
         if caller != escrow.sender {
             return Err(Error::WrongSender);
@@ -731,7 +736,7 @@ impl PaymentEscrowContract {
             escrow.status = EscrowStatus::Funded;
         }
 
-        env.storage().instance().set(&DataKey::Escrow(escrow_id), &escrow);
+        env.storage().persistent().set(&DataKey::Escrow(escrow_id), &escrow);
 
         env.events().publish(
             (symbol_short!("deposit"), escrow_id),
@@ -742,20 +747,20 @@ impl PaymentEscrowContract {
     }
 
     pub fn get_escrow(env: Env, escrow_id: u64) -> Option<Escrow> {
-        env.storage().instance().get(&DataKey::Escrow(escrow_id))
+        env.storage().persistent().get(&DataKey::Escrow(escrow_id))
     }
 
     pub fn approve_escrow(env: Env, escrow_id: u64, approver: Address) -> Result<(), Error> {
         approver.require_auth();
 
-        let mut escrow: Escrow = env.storage().instance().get(&DataKey::Escrow(escrow_id)).ok_or(Error::EscrowNotFound)?;
+        let mut escrow: Escrow = env.storage().persistent().get(&DataKey::Escrow(escrow_id)).ok_or(Error::EscrowNotFound)?;
 
         if escrow.status != EscrowStatus::Funded {
             return Err(Error::InvalidStatus);
         }
 
         escrow.status = EscrowStatus::Approved;
-        env.storage().instance().set(&DataKey::Escrow(escrow_id), &escrow);
+        env.storage().persistent().set(&DataKey::Escrow(escrow_id), &escrow);
 
         env.events().publish((symbol_short!("approved"), escrow_id), approver);
 
@@ -771,20 +776,20 @@ impl PaymentEscrowContract {
         }
         env.storage().instance().set(&DataKey::ReentrancyGuard, &true);
 
-        let mut escrow: Escrow = env.storage().instance().get(&DataKey::Escrow(escrow_id)).ok_or(Error::EscrowNotFound)?;
+        let mut escrow: Escrow = env.storage().persistent().get(&DataKey::Escrow(escrow_id)).ok_or(Error::EscrowNotFound)?;
 
         if escrow.status != EscrowStatus::Approved && escrow.status != EscrowStatus::Funded {
             env.storage().instance().set(&DataKey::ReentrancyGuard, &false);
             return Err(Error::NotApproved);
         }
 
-        if escrow.status == EscrowStatus::Released && !escrow.allow_partial_release {
+        if escrow.status == EscrowStatus::Released && (escrow.flags & FLAG_PARTIAL_RELEASE) == 0 {
             env.storage().instance().set(&DataKey::ReentrancyGuard, &false);
             return Err(Error::AlreadyReleased);
         }
 
-        if escrow.multi_party_enabled {
-            let config_opt: Option<MultiPartyConfig> = env.storage().instance()
+        if (escrow.flags & FLAG_MULTI_PARTY) != 0 {
+            let config_opt: Option<MultiPartyConfig> = env.storage().persistent()
                 .get(&DataKey::EscrowApprovals(escrow_id));
             match config_opt {
                 Some(config) => {
@@ -803,7 +808,7 @@ impl PaymentEscrowContract {
         let current_time = env.ledger().timestamp();
         if current_time > escrow.release_conditions.expiration_timestamp {
             escrow.status = EscrowStatus::Expired;
-            env.storage().instance().set(&DataKey::Escrow(escrow_id), &escrow);
+            env.storage().persistent().set(&DataKey::Escrow(escrow_id), &escrow);
             env.storage().instance().set(&DataKey::ReentrancyGuard, &false);
             return Err(Error::Expired);
         }
@@ -855,12 +860,12 @@ impl PaymentEscrowContract {
         escrow.status = EscrowStatus::Released;
         escrow.release_timestamp = current_time;
         
-        env.storage().instance().set(&DataKey::Escrow(escrow_id), &escrow);
+        env.storage().persistent().set(&DataKey::Escrow(escrow_id), &escrow);
 
-        if escrow.multi_party_enabled {
-            if let Some(mut config) = env.storage().instance().get::<_, MultiPartyConfig>(&DataKey::EscrowApprovals(escrow_id)) {
+        if (escrow.flags & FLAG_MULTI_PARTY) != 0 {
+            if let Some(mut config) = env.storage().persistent().get::<_, MultiPartyConfig>(&DataKey::EscrowApprovals(escrow_id)) {
                 config.finalized = true;
-                env.storage().instance().set(&DataKey::EscrowApprovals(escrow_id), &config);
+                env.storage().persistent().set(&DataKey::EscrowApprovals(escrow_id), &config);
             }
         }
 
@@ -893,9 +898,9 @@ impl PaymentEscrowContract {
         }
         env.storage().instance().set(&DataKey::ReentrancyGuard, &true);
 
-        let mut escrow: Escrow = env.storage().instance().get(&DataKey::Escrow(escrow_id)).ok_or(Error::EscrowNotFound)?;
+        let mut escrow: Escrow = env.storage().persistent().get(&DataKey::Escrow(escrow_id)).ok_or(Error::EscrowNotFound)?;
 
-        if !escrow.allow_partial_release {
+        if (escrow.flags & FLAG_PARTIAL_RELEASE) == 0 {
             env.storage().instance().set(&DataKey::ReentrancyGuard, &false);
             return Err(Error::PartialReleaseNotAllowed);
         }
@@ -908,7 +913,7 @@ impl PaymentEscrowContract {
         let current_time = env.ledger().timestamp();
         if current_time > escrow.release_conditions.expiration_timestamp {
             escrow.status = EscrowStatus::Expired;
-            env.storage().instance().set(&DataKey::Escrow(escrow_id), &escrow);
+            env.storage().persistent().set(&DataKey::Escrow(escrow_id), &escrow);
             env.storage().instance().set(&DataKey::ReentrancyGuard, &false);
             return Err(Error::Expired);
         }
@@ -954,7 +959,7 @@ impl PaymentEscrowContract {
         
         escrow.release_timestamp = current_time;
         
-        env.storage().instance().set(&DataKey::Escrow(escrow_id), &escrow);
+        env.storage().persistent().set(&DataKey::Escrow(escrow_id), &escrow);
 
         env.events().publish(
             (symbol_short!("partial"), escrow_id),
@@ -969,14 +974,14 @@ impl PaymentEscrowContract {
     pub fn enable_partial_release(env: Env, escrow_id: u64, caller: Address) -> Result<(), Error> {
         caller.require_auth();
 
-        let mut escrow: Escrow = env.storage().instance().get(&DataKey::Escrow(escrow_id)).ok_or(Error::EscrowNotFound)?;
+        let mut escrow: Escrow = env.storage().persistent().get(&DataKey::Escrow(escrow_id)).ok_or(Error::EscrowNotFound)?;
 
         if caller != escrow.sender {
             return Err(Error::Unauthorized);
         }
 
-        escrow.allow_partial_release = true;
-        env.storage().instance().set(&DataKey::Escrow(escrow_id), &escrow);
+        escrow.flags |= FLAG_PARTIAL_RELEASE;
+        env.storage().persistent().set(&DataKey::Escrow(escrow_id), &escrow);
 
         env.events().publish((symbol_short!("part_enab"), escrow_id), caller);
 
@@ -993,7 +998,7 @@ impl PaymentEscrowContract {
     ) -> Result<(), Error> {
         caller.require_auth();
 
-        let mut escrow: Escrow = env.storage().instance().get(&DataKey::Escrow(escrow_id)).ok_or(Error::EscrowNotFound)?;
+        let mut escrow: Escrow = env.storage().persistent().get(&DataKey::Escrow(escrow_id)).ok_or(Error::EscrowNotFound)?;
 
         let stored_admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
         if caller != escrow.sender && caller != stored_admin {
@@ -1012,7 +1017,7 @@ impl PaymentEscrowContract {
         };
 
         escrow.release_conditions.conditions.push_back(condition);
-        env.storage().instance().set(&DataKey::Escrow(escrow_id), &escrow);
+        env.storage().persistent().set(&DataKey::Escrow(escrow_id), &escrow);
 
         env.events().publish((symbol_short!("cond_add"), escrow_id), condition_type);
 
@@ -1027,7 +1032,7 @@ impl PaymentEscrowContract {
     ) -> Result<(), Error> {
         caller.require_auth();
 
-        let mut escrow: Escrow = env.storage().instance().get(&DataKey::Escrow(escrow_id)).ok_or(Error::EscrowNotFound)?;
+        let mut escrow: Escrow = env.storage().persistent().get(&DataKey::Escrow(escrow_id)).ok_or(Error::EscrowNotFound)?;
 
         let stored_admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
         if caller != escrow.sender && caller != stored_admin {
@@ -1035,7 +1040,7 @@ impl PaymentEscrowContract {
         }
 
         escrow.release_conditions.operator = operator;
-        env.storage().instance().set(&DataKey::Escrow(escrow_id), &escrow);
+        env.storage().persistent().set(&DataKey::Escrow(escrow_id), &escrow);
 
         env.events().publish((symbol_short!("cond_op"), escrow_id), operator);
 
@@ -1047,7 +1052,7 @@ impl PaymentEscrowContract {
         escrow_id: u64,
         proof_data: i128,
     ) -> Result<VerificationResult, Error> {
-        let mut escrow: Escrow = env.storage().instance().get(&DataKey::Escrow(escrow_id)).ok_or(Error::EscrowNotFound)?;
+        let mut escrow: Escrow = env.storage().persistent().get(&DataKey::Escrow(escrow_id)).ok_or(Error::EscrowNotFound)?;
 
         let current_time = env.ledger().timestamp();
         let mut failed_conditions = Vec::new(&env);
@@ -1081,7 +1086,7 @@ impl PaymentEscrowContract {
                     escrow.release_conditions.current_approvals >= escrow.release_conditions.min_approvals
                 },
                 ConditionType::KYCVerified => {
-                    escrow.kyc_compliant
+                    (escrow.flags & FLAG_KYC_COMPLIANT) != 0
                 },
             };
 
@@ -1095,7 +1100,7 @@ impl PaymentEscrowContract {
             }
         }
 
-        env.storage().instance().set(&DataKey::Escrow(escrow_id), &escrow);
+        env.storage().persistent().set(&DataKey::Escrow(escrow_id), &escrow);
 
         let all_passed = match escrow.release_conditions.operator {
             ConditionOperator::And => {
@@ -1126,7 +1131,7 @@ impl PaymentEscrowContract {
     ) -> Result<(), Error> {
         approver.require_auth();
 
-        let mut escrow: Escrow = env.storage().instance().get(&DataKey::Escrow(escrow_id)).ok_or(Error::EscrowNotFound)?;
+        let mut escrow: Escrow = env.storage().persistent().get(&DataKey::Escrow(escrow_id)).ok_or(Error::EscrowNotFound)?;
 
         let stored_admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
         if approver != stored_admin && approver != escrow.recipient && approver != escrow.sender {
@@ -1136,7 +1141,7 @@ impl PaymentEscrowContract {
         escrow.release_conditions.current_approvals = escrow.release_conditions.current_approvals.checked_add(1)
             .unwrap_or(escrow.release_conditions.current_approvals);
 
-        env.storage().instance().set(&DataKey::Escrow(escrow_id), &escrow);
+        env.storage().persistent().set(&DataKey::Escrow(escrow_id), &escrow);
 
         env.events().publish(
             (symbol_short!("approval"), escrow_id),
@@ -1154,7 +1159,7 @@ impl PaymentEscrowContract {
     ) -> Result<(), Error> {
         caller.require_auth();
 
-        let mut escrow: Escrow = env.storage().instance().get(&DataKey::Escrow(escrow_id)).ok_or(Error::EscrowNotFound)?;
+        let mut escrow: Escrow = env.storage().persistent().get(&DataKey::Escrow(escrow_id)).ok_or(Error::EscrowNotFound)?;
 
         let stored_admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
         if caller != escrow.sender && caller != stored_admin {
@@ -1162,7 +1167,7 @@ impl PaymentEscrowContract {
         }
 
         escrow.release_conditions.min_approvals = min_approvals;
-        env.storage().instance().set(&DataKey::Escrow(escrow_id), &escrow);
+        env.storage().persistent().set(&DataKey::Escrow(escrow_id), &escrow);
 
         env.events().publish((symbol_short!("min_appr"), escrow_id), min_approvals);
 
@@ -1184,7 +1189,7 @@ impl PaymentEscrowContract {
         }
         env.storage().instance().set(&DataKey::ReentrancyGuard, &true);
 
-        let mut escrow: Escrow = env.storage().instance().get(&DataKey::Escrow(escrow_id)).ok_or(Error::EscrowNotFound)?;
+        let mut escrow: Escrow = env.storage().persistent().get(&DataKey::Escrow(escrow_id)).ok_or(Error::EscrowNotFound)?;
 
         let stored_admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
         if caller != escrow.sender && caller != stored_admin {
@@ -1207,8 +1212,8 @@ impl PaymentEscrowContract {
             return Err(Error::InvalidStatus);
         }
 
-        if escrow.multi_party_enabled {
-            let config_opt: Option<MultiPartyConfig> = env.storage().instance()
+        if (escrow.flags & FLAG_MULTI_PARTY) != 0 {
+            let config_opt: Option<MultiPartyConfig> = env.storage().persistent()
                 .get(&DataKey::EscrowApprovals(escrow_id));
             match config_opt {
                 Some(config) => {
@@ -1268,12 +1273,12 @@ impl PaymentEscrowContract {
         escrow.status = EscrowStatus::Refunded;
         escrow.refund_timestamp = current_time;
         
-        env.storage().instance().set(&DataKey::Escrow(escrow_id), &escrow);
+        env.storage().persistent().set(&DataKey::Escrow(escrow_id), &escrow);
 
-        if escrow.multi_party_enabled {
-            if let Some(mut config) = env.storage().instance().get::<_, MultiPartyConfig>(&DataKey::EscrowApprovals(escrow_id)) {
+        if (escrow.flags & FLAG_MULTI_PARTY) != 0 {
+            if let Some(mut config) = env.storage().persistent().get::<_, MultiPartyConfig>(&DataKey::EscrowApprovals(escrow_id)) {
                 config.finalized = true;
-                env.storage().instance().set(&DataKey::EscrowApprovals(escrow_id), &config);
+                env.storage().persistent().set(&DataKey::EscrowApprovals(escrow_id), &config);
             }
         }
 
@@ -1293,7 +1298,7 @@ impl PaymentEscrowContract {
         caller: Address,
         token_address: Address,
         refund_amount: i128,
-        reason: RefundReason,
+        _reason: RefundReason,
     ) -> Result<(), Error> {
         caller.require_auth();
 
@@ -1307,7 +1312,7 @@ impl PaymentEscrowContract {
         }
         env.storage().instance().set(&DataKey::ReentrancyGuard, &true);
 
-        let mut escrow: Escrow = env.storage().instance().get(&DataKey::Escrow(escrow_id)).ok_or(Error::EscrowNotFound)?;
+        let mut escrow: Escrow = env.storage().persistent().get(&DataKey::Escrow(escrow_id)).ok_or(Error::EscrowNotFound)?;
 
         let stored_admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
         if caller != escrow.sender && caller != stored_admin {
@@ -1366,7 +1371,7 @@ impl PaymentEscrowContract {
             escrow.status = EscrowStatus::Refunded;
         }
         
-        env.storage().instance().set(&DataKey::Escrow(escrow_id), &escrow);
+        env.storage().persistent().set(&DataKey::Escrow(escrow_id), &escrow);
 
         env.events().publish(
             (symbol_short!("ref_part"), escrow_id),
@@ -1388,7 +1393,7 @@ impl PaymentEscrowContract {
     ) -> Result<(), Error> {
         caller.require_auth();
 
-        let mut escrow: Escrow = env.storage().instance()
+        let mut escrow: Escrow = env.storage().persistent()
             .get(&DataKey::Escrow(escrow_id))
             .ok_or(Error::EscrowNotFound)?;
 
@@ -1401,7 +1406,7 @@ impl PaymentEscrowContract {
             return Err(Error::InvalidStatus);
         }
 
-        if escrow.multi_party_enabled {
+        if (escrow.flags & FLAG_MULTI_PARTY) != 0 {
             return Err(Error::InvalidStatus);
         }
 
@@ -1417,13 +1422,40 @@ impl PaymentEscrowContract {
             finalized: false,
         };
 
-        escrow.multi_party_enabled = true;
-        env.storage().instance().set(&DataKey::Escrow(escrow_id), &escrow);
-        env.storage().instance().set(&DataKey::EscrowApprovals(escrow_id), &config);
+        escrow.flags |= FLAG_MULTI_PARTY;
+        env.storage().persistent().set(&DataKey::Escrow(escrow_id), &escrow);
+        env.storage().persistent().set(&DataKey::EscrowApprovals(escrow_id), &config);
 
         env.events().publish(
             (symbol_short!("mp_setup"), escrow_id),
             (required_approvals, approval_timeout),
+        );
+
+        Ok(())
+    }
+
+    pub fn archive_escrow(env: Env, escrow_id: u64, caller: Address) -> Result<(), Error> {
+        caller.require_auth();
+        
+        let escrow: Escrow = env.storage().persistent()
+            .get(&DataKey::Escrow(escrow_id))
+            .ok_or(Error::EscrowNotFound)?;
+
+        let stored_admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
+        if caller != stored_admin && caller != escrow.sender {
+            return Err(Error::Unauthorized);
+        }
+
+        if escrow.status != EscrowStatus::Released && escrow.status != EscrowStatus::Refunded && escrow.status != EscrowStatus::Expired {
+            return Err(Error::InvalidStatus);
+        }
+
+        env.storage().persistent().remove(&DataKey::Escrow(escrow_id));
+        env.storage().persistent().remove(&DataKey::EscrowApprovals(escrow_id));
+
+        env.events().publish(
+            (symbol_short!("archived"), escrow_id),
+            caller,
         );
 
         Ok(())
@@ -1437,7 +1469,7 @@ impl PaymentEscrowContract {
     ) -> Result<(), Error> {
         caller.require_auth();
 
-        let escrow: Escrow = env.storage().instance()
+        let escrow: Escrow = env.storage().persistent()
             .get(&DataKey::Escrow(escrow_id))
             .ok_or(Error::EscrowNotFound)?;
 
@@ -1446,7 +1478,7 @@ impl PaymentEscrowContract {
             return Err(Error::Unauthorized);
         }
 
-        let mut config: MultiPartyConfig = env.storage().instance()
+        let mut config: MultiPartyConfig = env.storage().persistent()
             .get(&DataKey::EscrowApprovals(escrow_id))
             .ok_or(Error::ConditionsNotMet)?;
 
@@ -1461,7 +1493,7 @@ impl PaymentEscrowContract {
         }
 
         config.whitelisted_approvers.push_back(new_approver.clone());
-        env.storage().instance().set(&DataKey::EscrowApprovals(escrow_id), &config);
+        env.storage().persistent().set(&DataKey::EscrowApprovals(escrow_id), &config);
 
         env.events().publish(
             (symbol_short!("appr_add"), escrow_id),
@@ -1479,7 +1511,7 @@ impl PaymentEscrowContract {
     ) -> Result<(), Error> {
         caller.require_auth();
 
-        let escrow: Escrow = env.storage().instance()
+        let escrow: Escrow = env.storage().persistent()
             .get(&DataKey::Escrow(escrow_id))
             .ok_or(Error::EscrowNotFound)?;
 
@@ -1488,7 +1520,7 @@ impl PaymentEscrowContract {
             return Err(Error::Unauthorized);
         }
 
-        let mut config: MultiPartyConfig = env.storage().instance()
+        let mut config: MultiPartyConfig = env.storage().persistent()
             .get(&DataKey::EscrowApprovals(escrow_id))
             .ok_or(Error::ConditionsNotMet)?;
 
@@ -1517,7 +1549,7 @@ impl PaymentEscrowContract {
 
         config.approvals.remove(approver.clone());
         config.whitelisted_approvers = new_approvers;
-        env.storage().instance().set(&DataKey::EscrowApprovals(escrow_id), &config);
+        env.storage().persistent().set(&DataKey::EscrowApprovals(escrow_id), &config);
 
         env.events().publish(
             (symbol_short!("appr_rem"), escrow_id),
@@ -1534,15 +1566,15 @@ impl PaymentEscrowContract {
     ) -> Result<bool, Error> {
         approver.require_auth();
 
-        let escrow: Escrow = env.storage().instance()
+        let escrow: Escrow = env.storage().persistent()
             .get(&DataKey::Escrow(escrow_id))
             .ok_or(Error::EscrowNotFound)?;
 
-        if !escrow.multi_party_enabled {
+        if (escrow.flags & FLAG_MULTI_PARTY) == 0 {
             return Err(Error::ConditionsNotMet);
         }
 
-        let mut config: MultiPartyConfig = env.storage().instance()
+        let mut config: MultiPartyConfig = env.storage().persistent()
             .get(&DataKey::EscrowApprovals(escrow_id))
             .ok_or(Error::ConditionsNotMet)?;
 
@@ -1575,7 +1607,7 @@ impl PaymentEscrowContract {
         let approval_count = config.approvals.len();
         let quorum_met = approval_count >= config.required_approvals;
 
-        env.storage().instance().set(&DataKey::EscrowApprovals(escrow_id), &config);
+        env.storage().persistent().set(&DataKey::EscrowApprovals(escrow_id), &config);
 
         env.events().publish(
             (symbol_short!("mp_appr"), escrow_id),
@@ -1599,15 +1631,15 @@ impl PaymentEscrowContract {
     ) -> Result<(), Error> {
         approver.require_auth();
 
-        let escrow: Escrow = env.storage().instance()
+        let escrow: Escrow = env.storage().persistent()
             .get(&DataKey::Escrow(escrow_id))
             .ok_or(Error::EscrowNotFound)?;
 
-        if !escrow.multi_party_enabled {
+        if (escrow.flags & FLAG_MULTI_PARTY) == 0 {
             return Err(Error::ConditionsNotMet);
         }
 
-        let mut config: MultiPartyConfig = env.storage().instance()
+        let mut config: MultiPartyConfig = env.storage().persistent()
             .get(&DataKey::EscrowApprovals(escrow_id))
             .ok_or(Error::ConditionsNotMet)?;
 
@@ -1620,7 +1652,7 @@ impl PaymentEscrowContract {
         }
 
         config.approvals.remove(approver.clone());
-        env.storage().instance().set(&DataKey::EscrowApprovals(escrow_id), &config);
+        env.storage().persistent().set(&DataKey::EscrowApprovals(escrow_id), &config);
 
         env.events().publish(
             (symbol_short!("mp_revok"), escrow_id),
@@ -1631,7 +1663,7 @@ impl PaymentEscrowContract {
     }
 
     pub fn get_multi_party_status(env: Env, escrow_id: u64) -> Option<MultiPartyConfig> {
-        env.storage().instance().get(&DataKey::EscrowApprovals(escrow_id))
+        env.storage().persistent().get(&DataKey::EscrowApprovals(escrow_id))
     }
 }
 
@@ -1708,7 +1740,7 @@ mod test {
         assert_eq!(escrow_data.recipient, recipient);
         assert_eq!(escrow_data.status, EscrowStatus::Pending);
         assert_eq!(escrow_data.created_at, 1000);
-        assert_eq!(escrow_data.allow_partial_release, false);
+        assert_eq!((escrow_data.flags & FLAG_PARTIAL_RELEASE), 0);
     }
 
     #[test]
@@ -2873,7 +2905,7 @@ mod test {
         client.setup_multi_party_approval(&escrow_id, &admin, &approvers, &2, &5000);
 
         let escrow = client.get_escrow(&escrow_id).unwrap();
-        assert_eq!(escrow.multi_party_enabled, true);
+        assert_eq!((escrow.flags & FLAG_MULTI_PARTY) != 0, true);
 
         let config = client.get_multi_party_status(&escrow_id).unwrap();
         assert_eq!(config.required_approvals, 2);
