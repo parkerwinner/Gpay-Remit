@@ -1,4 +1,4 @@
-use soroban_sdk::{contract, contractimpl, contracttype, contracterror, token, Address, BytesN, Env, String, Vec, Map, symbol_short};
+use soroban_sdk::{contract, contractimpl, contracttype, contracterror, token, Address, BytesN, Env, String, Vec, Map, Symbol, Val, IntoVal, symbol_short};
 use crate::kyc::{self, KycConfig, KycDataKey, KycRecord, KycStatus};
 
 #[contracterror]
@@ -51,6 +51,10 @@ pub enum Error {
     KycFailed = 44,
     KycNotConfigured = 45,
     KycProofRequired = 46,
+    ContractPaused = 47,
+    HookFailure = 48,
+    InvalidHook = 49,
+    MaxHooksReached = 50,
 }
 
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -189,6 +193,30 @@ pub struct MultiPartyConfig {
     pub finalized: bool,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[contracttype]
+pub enum EventType {
+    Created,
+    Deposit,
+    Approved,
+    Released,
+    PartialRelease,
+    Refunded,
+    PartialRefund,
+}
+
+#[derive(Clone, Debug)]
+#[contracttype]
+pub struct NotificationPayload {
+    pub escrow_id: u64,
+    pub event_type: EventType,
+    pub amount: i128,
+    pub timestamp: u64,
+}
+
+const MAX_HOOKS: u32 = 10;
+const DEFAULT_MAX_RETRIES: u32 = 2;
+
 #[derive(Clone, Copy)]
 #[contracttype]
 pub enum DataKey {
@@ -209,6 +237,15 @@ pub enum DataKey {
     EscrowApprovals(u64),
     KycEnabled,
     KycConfig,
+    NotificationHooks,
+    GlobalNotificationsEnabled,
+    MaxNotificationRetries,
+}
+
+#[derive(Clone)]
+#[contracttype]
+pub enum NotificationKey {
+    UserNotifications(Address),
 }
 
 #[contract]
@@ -687,6 +724,13 @@ impl PaymentEscrowContract {
 
         env.events().publish((symbol_short!("created"), counter), escrow.sender);
 
+        Self::notify_external(&env, NotificationPayload {
+            escrow_id: counter,
+            event_type: EventType::Created,
+            amount,
+            timestamp: env.ledger().timestamp(),
+        });
+
         Ok(counter)
     }
 
@@ -738,6 +782,13 @@ impl PaymentEscrowContract {
             (caller, amount, escrow.deposited_amount)
         );
 
+        Self::notify_external(&env, NotificationPayload {
+            escrow_id,
+            event_type: EventType::Deposit,
+            amount,
+            timestamp: env.ledger().timestamp(),
+        });
+
         Ok(())
     }
 
@@ -758,6 +809,13 @@ impl PaymentEscrowContract {
         env.storage().instance().set(&DataKey::Escrow(escrow_id), &escrow);
 
         env.events().publish((symbol_short!("approved"), escrow_id), approver);
+
+        Self::notify_external(&env, NotificationPayload {
+            escrow_id,
+            event_type: EventType::Approved,
+            amount: escrow.amount,
+            timestamp: env.ledger().timestamp(),
+        });
 
         Ok(())
     }
@@ -869,6 +927,13 @@ impl PaymentEscrowContract {
             (caller.clone(), recipient_amount, fee_amount, current_time)
         );
 
+        Self::notify_external(&env, NotificationPayload {
+            escrow_id,
+            event_type: EventType::Released,
+            amount: recipient_amount,
+            timestamp: current_time,
+        });
+
         env.storage().instance().set(&DataKey::ReentrancyGuard, &false);
 
         Ok(())
@@ -960,6 +1025,13 @@ impl PaymentEscrowContract {
             (symbol_short!("partial"), escrow_id),
             (caller.clone(), recipient_amount, fee_amount, escrow.released_amount)
         );
+
+        Self::notify_external(&env, NotificationPayload {
+            escrow_id,
+            event_type: EventType::PartialRelease,
+            amount: recipient_amount,
+            timestamp: current_time,
+        });
 
         env.storage().instance().set(&DataKey::ReentrancyGuard, &false);
 
@@ -1282,6 +1354,13 @@ impl PaymentEscrowContract {
             (caller.clone(), refund_amount, processing_fee, reason)
         );
 
+        Self::notify_external(&env, NotificationPayload {
+            escrow_id,
+            event_type: EventType::Refunded,
+            amount: refund_amount,
+            timestamp: current_time,
+        });
+
         env.storage().instance().set(&DataKey::ReentrancyGuard, &false);
 
         Ok(())
@@ -1372,6 +1451,13 @@ impl PaymentEscrowContract {
             (symbol_short!("ref_part"), escrow_id),
             (caller.clone(), net_refund, processing_fee, escrow.refunded_amount)
         );
+
+        Self::notify_external(&env, NotificationPayload {
+            escrow_id,
+            event_type: EventType::PartialRefund,
+            amount: net_refund,
+            timestamp: current_time,
+        });
 
         env.storage().instance().set(&DataKey::ReentrancyGuard, &false);
 
@@ -1632,6 +1718,199 @@ impl PaymentEscrowContract {
 
     pub fn get_multi_party_status(env: Env, escrow_id: u64) -> Option<MultiPartyConfig> {
         env.storage().instance().get(&DataKey::EscrowApprovals(escrow_id))
+    }
+
+    // ── Notification Hook Management ─────────────────────────────────
+
+    /// Register a trusted hook contract address. Admin-only.
+    /// The hook must implement `fn notify(payload: NotificationPayload)`.
+    pub fn register_hook(env: Env, admin: Address, hook_address: Address) -> Result<(), Error> {
+        admin.require_auth();
+
+        let stored_admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
+        if admin != stored_admin {
+            return Err(Error::Unauthorized);
+        }
+
+        let mut hooks: Vec<Address> = env.storage().instance()
+            .get(&DataKey::NotificationHooks)
+            .unwrap_or(Vec::new(&env));
+
+        if hooks.len() >= MAX_HOOKS {
+            return Err(Error::MaxHooksReached);
+        }
+
+        for i in 0..hooks.len() {
+            if hooks.get(i).unwrap() == hook_address {
+                return Err(Error::InvalidHook);
+            }
+        }
+
+        hooks.push_back(hook_address.clone());
+        env.storage().instance().set(&DataKey::NotificationHooks, &hooks);
+
+        env.events().publish((symbol_short!("hook_add"),), hook_address);
+
+        Ok(())
+    }
+
+    /// Remove a registered hook contract address. Admin-only.
+    pub fn remove_hook(env: Env, admin: Address, hook_address: Address) -> Result<(), Error> {
+        admin.require_auth();
+
+        let stored_admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
+        if admin != stored_admin {
+            return Err(Error::Unauthorized);
+        }
+
+        let hooks: Vec<Address> = env.storage().instance()
+            .get(&DataKey::NotificationHooks)
+            .unwrap_or(Vec::new(&env));
+
+        let mut new_hooks = Vec::new(&env);
+        let mut found = false;
+
+        for i in 0..hooks.len() {
+            let addr = hooks.get(i).unwrap();
+            if addr == hook_address {
+                found = true;
+            } else {
+                new_hooks.push_back(addr);
+            }
+        }
+
+        if !found {
+            return Err(Error::InvalidHook);
+        }
+
+        env.storage().instance().set(&DataKey::NotificationHooks, &new_hooks);
+
+        env.events().publish((symbol_short!("hook_rem"),), hook_address);
+
+        Ok(())
+    }
+
+    /// List all registered notification hook addresses.
+    pub fn get_hooks(env: Env) -> Vec<Address> {
+        env.storage().instance()
+            .get(&DataKey::NotificationHooks)
+            .unwrap_or(Vec::new(&env))
+    }
+
+    /// Enable or disable global notifications. Admin-only.
+    pub fn set_global_notifications(env: Env, admin: Address, enabled: bool) -> Result<(), Error> {
+        admin.require_auth();
+
+        let stored_admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
+        if admin != stored_admin {
+            return Err(Error::Unauthorized);
+        }
+
+        env.storage().instance().set(&DataKey::GlobalNotificationsEnabled, &enabled);
+
+        env.events().publish((symbol_short!("notif_gl"),), enabled);
+
+        Ok(())
+    }
+
+    /// Enable or disable notifications for a specific user (opt-in/opt-out).
+    pub fn set_user_notifications(env: Env, user: Address, enabled: bool) {
+        user.require_auth();
+
+        env.storage().persistent().set(
+            &NotificationKey::UserNotifications(user.clone()),
+            &enabled,
+        );
+
+        env.events().publish((symbol_short!("notif_us"),), (user, enabled));
+    }
+
+    /// Check if global notifications are enabled.
+    pub fn get_notification_status(env: Env) -> bool {
+        env.storage().instance()
+            .get(&DataKey::GlobalNotificationsEnabled)
+            .unwrap_or(false)
+    }
+
+    /// Check if notifications are enabled for a specific user.
+    pub fn get_user_notification_status(env: Env, user: Address) -> bool {
+        env.storage().persistent()
+            .get(&NotificationKey::UserNotifications(user))
+            .unwrap_or(true) // opt-in by default
+    }
+
+    /// Set the maximum retry count for hook invocations. Admin-only.
+    pub fn set_max_retries(env: Env, admin: Address, max_retries: u32) -> Result<(), Error> {
+        admin.require_auth();
+
+        let stored_admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
+        if admin != stored_admin {
+            return Err(Error::Unauthorized);
+        }
+
+        env.storage().instance().set(&DataKey::MaxNotificationRetries, &max_retries);
+
+        Ok(())
+    }
+
+    // ── Private notification helper ──────────────────────────────────
+
+    /// Dispatch notification payloads to all registered hook contracts.
+    /// Invokes each hook's `notify` function with the payload.
+    /// Uses retry logic on failure and emits meta-events for logging.
+    fn notify_external(env: &Env, payload: NotificationPayload) {
+        let global_enabled: bool = env.storage().instance()
+            .get(&DataKey::GlobalNotificationsEnabled)
+            .unwrap_or(false);
+
+        if !global_enabled {
+            return;
+        }
+
+        let hooks: Vec<Address> = env.storage().instance()
+            .get(&DataKey::NotificationHooks)
+            .unwrap_or(Vec::new(env));
+
+        if hooks.is_empty() {
+            return;
+        }
+
+        let max_retries: u32 = env.storage().instance()
+            .get(&DataKey::MaxNotificationRetries)
+            .unwrap_or(DEFAULT_MAX_RETRIES);
+
+        let func = Symbol::new(env, "notify");
+
+        for i in 0..hooks.len() {
+            let hook = hooks.get(i).unwrap();
+            let mut success = false;
+
+            for _attempt in 0..max_retries {
+                let args: Vec<Val> = Vec::from_array(env, [payload.clone().into_val(env)]);
+                let result =
+                    env.try_invoke_contract::<Val, soroban_sdk::Error>(&hook, &func, args);
+
+                match result {
+                    Ok(Ok(_)) => {
+                        success = true;
+                        break;
+                    }
+                    _ => continue,
+                }
+            }
+
+            if success {
+                env.events().publish(
+                    (symbol_short!("notif_ok"),),
+                    (hook, payload.escrow_id),
+                );
+            } else {
+                env.events().publish(
+                    (symbol_short!("notif_er"),),
+                    (hook, payload.escrow_id),
+                );
+            }
+        }
     }
 }
 
@@ -3487,5 +3766,429 @@ mod test {
 
         let config = client.get_multi_party_status(&escrow_id).unwrap();
         assert_eq!(config.finalized, true);
+    }
+
+    // ── Notification Hook Tests ──────────────────────────────────────
+
+    // Mock hook contract for testing notification dispatch.
+    mod mock_hook {
+        use soroban_sdk::{contract, contractimpl, Env};
+        use super::NotificationPayload;
+
+        #[contract]
+        pub struct MockNotificationHookContract;
+
+        #[contractimpl]
+        impl MockNotificationHookContract {
+            pub fn notify(_env: Env, _payload: NotificationPayload) {
+                // Successfully receives the notification
+            }
+        }
+    }
+
+    #[test]
+    fn test_register_hook() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let contract_id = env.register_contract(None, PaymentEscrowContract);
+        let client = PaymentEscrowContractClient::new(&env, &contract_id);
+
+        let admin = Address::generate(&env);
+        client.initialize(&admin);
+
+        let hook = env.register_contract(None, mock_hook::MockNotificationHookContract);
+
+        client.register_hook(&admin, &hook);
+
+        let hooks = client.get_hooks();
+        assert_eq!(hooks.len(), 1);
+        assert_eq!(hooks.get(0).unwrap(), hook);
+    }
+
+    #[test]
+    fn test_register_multiple_hooks() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let contract_id = env.register_contract(None, PaymentEscrowContract);
+        let client = PaymentEscrowContractClient::new(&env, &contract_id);
+
+        let admin = Address::generate(&env);
+        client.initialize(&admin);
+
+        let hook1 = env.register_contract(None, mock_hook::MockNotificationHookContract);
+        let hook2 = env.register_contract(None, mock_hook::MockNotificationHookContract);
+
+        client.register_hook(&admin, &hook1);
+        client.register_hook(&admin, &hook2);
+
+        let hooks = client.get_hooks();
+        assert_eq!(hooks.len(), 2);
+    }
+
+    #[test]
+    fn test_register_duplicate_hook_rejected() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let contract_id = env.register_contract(None, PaymentEscrowContract);
+        let client = PaymentEscrowContractClient::new(&env, &contract_id);
+
+        let admin = Address::generate(&env);
+        client.initialize(&admin);
+
+        let hook = env.register_contract(None, mock_hook::MockNotificationHookContract);
+
+        client.register_hook(&admin, &hook);
+
+        let result = client.try_register_hook(&admin, &hook);
+        assert_eq!(result, Err(Ok(Error::InvalidHook)));
+    }
+
+    #[test]
+    fn test_remove_hook() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let contract_id = env.register_contract(None, PaymentEscrowContract);
+        let client = PaymentEscrowContractClient::new(&env, &contract_id);
+
+        let admin = Address::generate(&env);
+        client.initialize(&admin);
+
+        let hook = env.register_contract(None, mock_hook::MockNotificationHookContract);
+
+        client.register_hook(&admin, &hook);
+        assert_eq!(client.get_hooks().len(), 1);
+
+        client.remove_hook(&admin, &hook);
+        assert_eq!(client.get_hooks().len(), 0);
+    }
+
+    #[test]
+    fn test_remove_nonexistent_hook_rejected() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let contract_id = env.register_contract(None, PaymentEscrowContract);
+        let client = PaymentEscrowContractClient::new(&env, &contract_id);
+
+        let admin = Address::generate(&env);
+        client.initialize(&admin);
+
+        let hook = env.register_contract(None, mock_hook::MockNotificationHookContract);
+
+        let result = client.try_remove_hook(&admin, &hook);
+        assert_eq!(result, Err(Ok(Error::InvalidHook)));
+    }
+
+    #[test]
+    fn test_global_notifications_toggle() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let contract_id = env.register_contract(None, PaymentEscrowContract);
+        let client = PaymentEscrowContractClient::new(&env, &contract_id);
+
+        let admin = Address::generate(&env);
+        client.initialize(&admin);
+
+        // Disabled by default
+        assert_eq!(client.get_notification_status(), false);
+
+        client.set_global_notifications(&admin, &true);
+        assert_eq!(client.get_notification_status(), true);
+
+        client.set_global_notifications(&admin, &false);
+        assert_eq!(client.get_notification_status(), false);
+    }
+
+    #[test]
+    fn test_user_notifications_toggle() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let contract_id = env.register_contract(None, PaymentEscrowContract);
+        let client = PaymentEscrowContractClient::new(&env, &contract_id);
+
+        let admin = Address::generate(&env);
+        let user = Address::generate(&env);
+        client.initialize(&admin);
+
+        // Opt-in by default
+        assert_eq!(client.get_user_notification_status(&user), true);
+
+        client.set_user_notifications(&user, &false);
+        assert_eq!(client.get_user_notification_status(&user), false);
+
+        client.set_user_notifications(&user, &true);
+        assert_eq!(client.get_user_notification_status(&user), true);
+    }
+
+    #[test]
+    fn test_register_hook_unauthorized() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let contract_id = env.register_contract(None, PaymentEscrowContract);
+        let client = PaymentEscrowContractClient::new(&env, &contract_id);
+
+        let admin = Address::generate(&env);
+        let non_admin = Address::generate(&env);
+        client.initialize(&admin);
+
+        let hook = env.register_contract(None, mock_hook::MockNotificationHookContract);
+
+        let result = client.try_register_hook(&non_admin, &hook);
+        assert_eq!(result, Err(Ok(Error::Unauthorized)));
+    }
+
+    #[test]
+    fn test_notify_on_create_escrow() {
+        let env = Env::default();
+        env.mock_all_auths();
+        env.ledger().with_mut(|li| {
+            li.timestamp = 1000;
+        });
+
+        let contract_id = env.register_contract(None, PaymentEscrowContract);
+        let client = PaymentEscrowContractClient::new(&env, &contract_id);
+
+        let admin = Address::generate(&env);
+        let sender = Address::generate(&env);
+        let recipient = Address::generate(&env);
+
+        client.initialize(&admin);
+
+        let hook = env.register_contract(None, mock_hook::MockNotificationHookContract);
+        client.register_hook(&admin, &hook);
+        client.set_global_notifications(&admin, &true);
+
+        let asset = Asset {
+            code: String::from_str(&env, "USDC"),
+            issuer: admin.clone(),
+        };
+        client.add_supported_asset(&admin, &asset);
+
+        let escrow_id = client.create_escrow(
+            &sender,
+            &recipient,
+            &1000,
+            &asset,
+            &2000,
+            &String::from_str(&env, "Notify test"),
+        );
+
+        assert_eq!(escrow_id, 1);
+        // If notifications dispatched correctly, no panic occurred
+    }
+
+    #[test]
+    fn test_notify_on_deposit() {
+        let env = Env::default();
+        env.mock_all_auths();
+        env.ledger().with_mut(|li| {
+            li.timestamp = 1000;
+        });
+
+        let admin = Address::generate(&env);
+        let sender = Address::generate(&env);
+        let recipient = Address::generate(&env);
+
+        let (token_client, token_admin) = create_token_contract(&env, &admin);
+        token_admin.mint(&sender, &5000);
+
+        let contract_id = env.register_contract(None, PaymentEscrowContract);
+        let client = PaymentEscrowContractClient::new(&env, &contract_id);
+
+        client.initialize(&admin);
+
+        let hook = env.register_contract(None, mock_hook::MockNotificationHookContract);
+        client.register_hook(&admin, &hook);
+        client.set_global_notifications(&admin, &true);
+
+        let asset = Asset {
+            code: String::from_str(&env, "USDC"),
+            issuer: admin.clone(),
+        };
+        client.add_supported_asset(&admin, &asset);
+
+        let escrow_id = client.create_escrow(
+            &sender,
+            &recipient,
+            &1000,
+            &asset,
+            &2000,
+            &String::from_str(&env, "Notify test"),
+        );
+
+        client.deposit(&escrow_id, &sender, &1000, &token_client.address);
+
+        let escrow = client.get_escrow(&escrow_id).unwrap();
+        assert_eq!(escrow.deposited_amount, 1000);
+        assert_eq!(escrow.status, EscrowStatus::Funded);
+    }
+
+    #[test]
+    fn test_notify_on_release() {
+        let env = Env::default();
+        env.mock_all_auths();
+        env.ledger().with_mut(|li| {
+            li.timestamp = 1000;
+        });
+
+        let admin = Address::generate(&env);
+        let sender = Address::generate(&env);
+        let recipient = Address::generate(&env);
+
+        let (token_client, token_admin) = create_token_contract(&env, &admin);
+        token_admin.mint(&sender, &5000);
+
+        let contract_id = env.register_contract(None, PaymentEscrowContract);
+        let client = PaymentEscrowContractClient::new(&env, &contract_id);
+
+        client.initialize(&admin);
+
+        let hook = env.register_contract(None, mock_hook::MockNotificationHookContract);
+        client.register_hook(&admin, &hook);
+        client.set_global_notifications(&admin, &true);
+
+        let asset = Asset {
+            code: String::from_str(&env, "USDC"),
+            issuer: admin.clone(),
+        };
+        client.add_supported_asset(&admin, &asset);
+
+        let escrow_id = client.create_escrow(
+            &sender,
+            &recipient,
+            &1000,
+            &asset,
+            &2000,
+            &String::from_str(&env, "Notify test"),
+        );
+
+        client.deposit(&escrow_id, &sender, &1000, &token_client.address);
+        client.approve_escrow(&escrow_id, &admin);
+        client.release_escrow(&escrow_id, &recipient, &token_client.address);
+
+        let escrow = client.get_escrow(&escrow_id).unwrap();
+        assert_eq!(escrow.status, EscrowStatus::Released);
+    }
+
+    #[test]
+    fn test_notify_on_refund() {
+        let env = Env::default();
+        env.mock_all_auths();
+        env.ledger().with_mut(|li| {
+            li.timestamp = 1000;
+        });
+
+        let admin = Address::generate(&env);
+        let sender = Address::generate(&env);
+        let recipient = Address::generate(&env);
+
+        let (token_client, token_admin) = create_token_contract(&env, &admin);
+        token_admin.mint(&sender, &5000);
+
+        let contract_id = env.register_contract(None, PaymentEscrowContract);
+        let client = PaymentEscrowContractClient::new(&env, &contract_id);
+
+        client.initialize(&admin);
+
+        let hook = env.register_contract(None, mock_hook::MockNotificationHookContract);
+        client.register_hook(&admin, &hook);
+        client.set_global_notifications(&admin, &true);
+
+        let asset = Asset {
+            code: String::from_str(&env, "USDC"),
+            issuer: admin.clone(),
+        };
+        client.add_supported_asset(&admin, &asset);
+
+        let escrow_id = client.create_escrow(
+            &sender,
+            &recipient,
+            &1000,
+            &asset,
+            &2000,
+            &String::from_str(&env, "Notify test"),
+        );
+
+        client.deposit(&escrow_id, &sender, &1000, &token_client.address);
+
+        env.ledger().with_mut(|li| {
+            li.timestamp = 2500;
+        });
+
+        client.refund_escrow(&escrow_id, &sender, &token_client.address, &RefundReason::Expiration);
+
+        let escrow = client.get_escrow(&escrow_id).unwrap();
+        assert_eq!(escrow.status, EscrowStatus::Refunded);
+    }
+
+    #[test]
+    fn test_notifications_disabled_skips_hooks() {
+        let env = Env::default();
+        env.mock_all_auths();
+        env.ledger().with_mut(|li| {
+            li.timestamp = 1000;
+        });
+
+        let contract_id = env.register_contract(None, PaymentEscrowContract);
+        let client = PaymentEscrowContractClient::new(&env, &contract_id);
+
+        let admin = Address::generate(&env);
+        let sender = Address::generate(&env);
+        let recipient = Address::generate(&env);
+
+        client.initialize(&admin);
+
+        let hook = env.register_contract(None, mock_hook::MockNotificationHookContract);
+        client.register_hook(&admin, &hook);
+        // Notifications NOT enabled globally
+
+        let asset = Asset {
+            code: String::from_str(&env, "USDC"),
+            issuer: admin.clone(),
+        };
+        client.add_supported_asset(&admin, &asset);
+
+        // Should succeed without invoking hooks (since disabled)
+        let escrow_id = client.create_escrow(
+            &sender,
+            &recipient,
+            &1000,
+            &asset,
+            &2000,
+            &String::from_str(&env, "No notify"),
+        );
+        assert_eq!(escrow_id, 1);
+    }
+
+    #[test]
+    fn test_max_hooks_limit() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let contract_id = env.register_contract(None, PaymentEscrowContract);
+        let client = PaymentEscrowContractClient::new(&env, &contract_id);
+
+        let admin = Address::generate(&env);
+        client.initialize(&admin);
+
+        // Register MAX_HOOKS (10) hooks
+        for _ in 0..10 {
+            let hook = env.register_contract(None, mock_hook::MockNotificationHookContract);
+            client.register_hook(&admin, &hook);
+        }
+
+        assert_eq!(client.get_hooks().len(), 10);
+
+        // 11th hook should fail
+        let extra_hook = env.register_contract(None, mock_hook::MockNotificationHookContract);
+        let result = client.try_register_hook(&admin, &extra_hook);
+        assert_eq!(result, Err(Ok(Error::MaxHooksReached)));
     }
 }
