@@ -3,6 +3,7 @@ use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, symbol_short, token, Address, BytesN, Env,
     Map, String, Vec,
 };
+use crate::upgradeable;
 
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
@@ -54,6 +55,7 @@ pub enum Error {
     KycFailed = 44,
     KycNotConfigured = 45,
     KycProofRequired = 46,
+    ContractPaused = 47,
 }
 
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -241,6 +243,8 @@ impl PaymentEscrowContract {
             .instance()
             .set(&DataKey::ReentrancyGuard, &false);
         env.storage().instance().set(&DataKey::KycEnabled, &false);
+
+        upgradeable::init_version(&env);
     }
 
     pub fn add_supported_asset(env: Env, admin: Address, asset: Asset) {
@@ -683,6 +687,9 @@ impl PaymentEscrowContract {
         expiration_timestamp: u64,
         memo: String,
     ) -> Result<u64, Error> {
+        if upgradeable::is_paused(&env) {
+            return Err(Error::ContractPaused);
+        }
         sender.require_auth();
 
         if amount <= 0 {
@@ -809,6 +816,9 @@ impl PaymentEscrowContract {
         amount: i128,
         token_address: Address,
     ) -> Result<(), Error> {
+        if upgradeable::is_paused(&env) {
+            return Err(Error::ContractPaused);
+        }
         caller.require_auth();
 
         if amount <= 0 {
@@ -890,12 +900,10 @@ impl PaymentEscrowContract {
         Ok(())
     }
 
-    pub fn release_escrow(
-        env: Env,
-        escrow_id: u64,
-        caller: Address,
-        token_address: Address,
-    ) -> Result<(), Error> {
+    pub fn release_escrow(env: Env, escrow_id: u64, caller: Address, token_address: Address) -> Result<(), Error> {
+        if upgradeable::is_paused(&env) {
+            return Err(Error::ContractPaused);
+        }
         caller.require_auth();
 
         let guard: bool = env
@@ -1062,6 +1070,9 @@ impl PaymentEscrowContract {
         token_address: Address,
         release_amount: i128,
     ) -> Result<(), Error> {
+        if upgradeable::is_paused(&env) {
+            return Err(Error::ContractPaused);
+        }
         caller.require_auth();
 
         if release_amount <= 0 {
@@ -1435,6 +1446,9 @@ impl PaymentEscrowContract {
         token_address: Address,
         reason: RefundReason,
     ) -> Result<(), Error> {
+        if upgradeable::is_paused(&env) {
+            return Err(Error::ContractPaused);
+        }
         caller.require_auth();
 
         let guard: bool = env
@@ -1601,6 +1615,9 @@ impl PaymentEscrowContract {
         refund_amount: i128,
         _reason: RefundReason,
     ) -> Result<(), Error> {
+        if upgradeable::is_paused(&env) {
+            return Err(Error::ContractPaused);
+        }
         caller.require_auth();
 
         if refund_amount <= 0 {
@@ -2029,6 +2046,64 @@ impl PaymentEscrowContract {
         env.storage()
             .persistent()
             .get(&DataKey::EscrowApprovals(escrow_id))
+    }
+
+    // ── Upgradeable pattern ────────────────────────────────────────────
+
+    /// Return the current contract version.
+    pub fn version(env: Env) -> u32 {
+        upgradeable::get_version(&env)
+    }
+
+    /// Return `true` if the contract is paused.
+    pub fn is_paused(env: Env) -> bool {
+        upgradeable::is_paused(&env)
+    }
+
+    /// Pause the contract. Admin-only.
+    pub fn pause(env: Env, admin: Address) -> Result<(), upgradeable::UpgradeError> {
+        let stored_admin: Address =
+            env.storage().instance().get(&DataKey::Admin).unwrap();
+        if admin != stored_admin {
+            return Err(upgradeable::UpgradeError::Unauthorized);
+        }
+        upgradeable::pause(&env, &admin)
+    }
+
+    /// Unpause the contract. Admin-only.
+    pub fn unpause(env: Env, admin: Address) -> Result<(), upgradeable::UpgradeError> {
+        let stored_admin: Address =
+            env.storage().instance().get(&DataKey::Admin).unwrap();
+        if admin != stored_admin {
+            return Err(upgradeable::UpgradeError::Unauthorized);
+        }
+        upgradeable::unpause(&env, &admin)
+    }
+
+    /// Upgrade the contract WASM. Admin-only.
+    /// The contract is paused until `migrate` is called on the new code.
+    pub fn upgrade(
+        env: Env,
+        admin: Address,
+        new_wasm_hash: BytesN<32>,
+    ) -> Result<(), upgradeable::UpgradeError> {
+        let stored_admin: Address =
+            env.storage().instance().get(&DataKey::Admin).unwrap();
+        if admin != stored_admin {
+            return Err(upgradeable::UpgradeError::Unauthorized);
+        }
+        upgradeable::upgrade(&env, &admin, new_wasm_hash)
+    }
+
+    /// Finalize migration after an upgrade. Admin-only.
+    /// Unpause the contract and return the new version number.
+    pub fn migrate(env: Env, admin: Address) -> Result<u32, upgradeable::UpgradeError> {
+        let stored_admin: Address =
+            env.storage().instance().get(&DataKey::Admin).unwrap();
+        if admin != stored_admin {
+            return Err(upgradeable::UpgradeError::Unauthorized);
+        }
+        upgradeable::migrate(&env, &admin)
     }
 }
 
@@ -3990,5 +4065,118 @@ mod test {
 
         let config = client.get_multi_party_status(&escrow_id).unwrap();
         assert_eq!(config.finalized, true);
+    }
+
+    // ── Upgrade pattern tests ──────────────────────────────────────────
+
+    #[test]
+    fn test_version_after_init() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let contract_id = env.register_contract(None, PaymentEscrowContract);
+        let client = PaymentEscrowContractClient::new(&env, &contract_id);
+        let admin = Address::generate(&env);
+
+        client.initialize(&admin);
+        assert_eq!(client.version(), 1);
+    }
+
+    #[test]
+    fn test_not_paused_after_init() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let contract_id = env.register_contract(None, PaymentEscrowContract);
+        let client = PaymentEscrowContractClient::new(&env, &contract_id);
+        let admin = Address::generate(&env);
+
+        client.initialize(&admin);
+        assert!(!client.is_paused());
+    }
+
+    #[test]
+    fn test_pause_and_unpause() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let contract_id = env.register_contract(None, PaymentEscrowContract);
+        let client = PaymentEscrowContractClient::new(&env, &contract_id);
+        let admin = Address::generate(&env);
+
+        client.initialize(&admin);
+
+        client.pause(&admin);
+        assert!(client.is_paused());
+
+        client.unpause(&admin);
+        assert!(!client.is_paused());
+    }
+
+    #[test]
+    fn test_paused_blocks_create_escrow() {
+        let env = Env::default();
+        env.mock_all_auths();
+        env.ledger().with_mut(|li| { li.timestamp = 1000; });
+
+        let contract_id = env.register_contract(None, PaymentEscrowContract);
+        let client = PaymentEscrowContractClient::new(&env, &contract_id);
+
+        let admin = Address::generate(&env);
+        let sender = Address::generate(&env);
+        let recipient = Address::generate(&env);
+        let issuer = Address::generate(&env);
+
+        client.initialize(&admin);
+
+        let asset = Asset {
+            code: String::from_str(&env, "USDC"),
+            issuer: issuer.clone(),
+        };
+        client.add_supported_asset(&admin, &asset);
+
+        // Pause the contract
+        client.pause(&admin);
+
+        // create_escrow should fail
+        let result = client.try_create_escrow(
+            &sender,
+            &recipient,
+            &1000,
+            &asset,
+            &2000,
+            &String::from_str(&env, "test"),
+        );
+        assert!(result.is_err());
+
+        // Unpause and it should work
+        client.unpause(&admin);
+        let id = client.create_escrow(
+            &sender,
+            &recipient,
+            &1000,
+            &asset,
+            &2000,
+            &String::from_str(&env, "test"),
+        );
+        assert_eq!(id, 1);
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_non_admin_cannot_pause() {
+        let env = Env::default();
+
+        let contract_id = env.register_contract(None, PaymentEscrowContract);
+        let client = PaymentEscrowContractClient::new(&env, &contract_id);
+
+        let admin = Address::generate(&env);
+        let other = Address::generate(&env);
+
+        env.mock_all_auths();
+        client.initialize(&admin);
+
+        // Non-admin trying to pause should fail
+        client.pause(&other);
     }
 }

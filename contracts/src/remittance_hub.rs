@@ -1,8 +1,7 @@
-use crate::aml::{self, AmlConfig, AmlScreeningResult, AmlStatus};
+use soroban_sdk::{contract, contractimpl, contracttype, contracterror, Address, BytesN, Env, String, Symbol, symbol_short};
 use crate::oracle::{self, CachedRate, OracleConfig};
-use soroban_sdk::{
-    contract, contracterror, contractimpl, contracttype, symbol_short, Address, Env, String, Symbol,
-};
+use crate::aml::{self, AmlConfig, AmlScreeningResult, AmlStatus};
+use crate::upgradeable;
 
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
@@ -30,6 +29,7 @@ pub enum RemittanceError {
     AmlFlagNotFound = 20,
     BatchTooLarge = 21,
     DuplicateEscrowId = 22,
+    ContractPaused = 21,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -168,7 +168,12 @@ impl RemittanceHubContract {
             .persistent()
             .set(&HubOracleKey::OracleConfig, &config);
 
-        env.events().publish((symbol_short!("hub_init"),), admin);
+        upgradeable::init_version(&env);
+
+        env.events().publish(
+            (symbol_short!("hub_init"),),
+            admin,
+        );
 
         Ok(())
     }
@@ -425,6 +430,9 @@ impl RemittanceHubContract {
         amount: i128,
         currency: Symbol,
     ) -> Result<u64, RemittanceError> {
+        if upgradeable::is_paused(&env) {
+            return Err(RemittanceError::ContractPaused);
+        }
         from.require_auth();
 
         if amount <= 0 {
@@ -561,11 +569,10 @@ impl RemittanceHubContract {
         }
     }
 
-    pub fn complete_remittance(
-        env: Env,
-        remittance_id: u64,
-        caller: Address,
-    ) -> Result<(), RemittanceError> {
+    pub fn complete_remittance(env: Env, remittance_id: u64, caller: Address) -> Result<(), RemittanceError> {
+        if upgradeable::is_paused(&env) {
+            return Err(RemittanceError::ContractPaused);
+        }
         caller.require_auth();
 
         let mut remittance: RemittanceData = env
@@ -611,6 +618,9 @@ impl RemittanceHubContract {
         escrow_id: u64,
         memo: String,
     ) -> Result<u64, RemittanceError> {
+        if upgradeable::is_paused(&env) {
+            return Err(RemittanceError::ContractPaused);
+        }
         sender.require_auth();
 
         if amount <= 0 {
@@ -779,6 +789,9 @@ impl RemittanceHubContract {
         invoice_id: u64,
         caller: Address,
     ) -> Result<(), RemittanceError> {
+        if upgradeable::is_paused(&env) {
+            return Err(RemittanceError::ContractPaused);
+        }
         caller.require_auth();
 
         let mut invoice: Invoice = env
@@ -1130,6 +1143,64 @@ impl RemittanceHubContract {
             }
             None => amount,
         }
+    }
+
+    // ── Upgradeable pattern ────────────────────────────────────────────
+
+    /// Return the current contract version.
+    pub fn version(env: Env) -> u32 {
+        upgradeable::get_version(&env)
+    }
+
+    /// Return `true` if the contract is paused.
+    pub fn is_paused(env: Env) -> bool {
+        upgradeable::is_paused(&env)
+    }
+
+    /// Pause the contract. Admin-only.
+    pub fn pause(env: Env, admin: Address) -> Result<(), upgradeable::UpgradeError> {
+        let stored_admin: Address =
+            env.storage().persistent().get(&DataKey::Admin).unwrap();
+        if admin != stored_admin {
+            return Err(upgradeable::UpgradeError::Unauthorized);
+        }
+        upgradeable::pause(&env, &admin)
+    }
+
+    /// Unpause the contract. Admin-only.
+    pub fn unpause(env: Env, admin: Address) -> Result<(), upgradeable::UpgradeError> {
+        let stored_admin: Address =
+            env.storage().persistent().get(&DataKey::Admin).unwrap();
+        if admin != stored_admin {
+            return Err(upgradeable::UpgradeError::Unauthorized);
+        }
+        upgradeable::unpause(&env, &admin)
+    }
+
+    /// Upgrade the contract WASM. Admin-only.
+    /// The contract is paused until `migrate` is called on the new code.
+    pub fn upgrade(
+        env: Env,
+        admin: Address,
+        new_wasm_hash: BytesN<32>,
+    ) -> Result<(), upgradeable::UpgradeError> {
+        let stored_admin: Address =
+            env.storage().persistent().get(&DataKey::Admin).unwrap();
+        if admin != stored_admin {
+            return Err(upgradeable::UpgradeError::Unauthorized);
+        }
+        upgradeable::upgrade(&env, &admin, new_wasm_hash)
+    }
+
+    /// Finalize migration after an upgrade. Admin-only.
+    /// Unpause the contract and return the new version number.
+    pub fn migrate(env: Env, admin: Address) -> Result<u32, upgradeable::UpgradeError> {
+        let stored_admin: Address =
+            env.storage().persistent().get(&DataKey::Admin).unwrap();
+        if admin != stored_admin {
+            return Err(upgradeable::UpgradeError::Unauthorized);
+        }
+        upgradeable::migrate(&env, &admin)
     }
 }
 
