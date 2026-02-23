@@ -1,4 +1,5 @@
 use crate::kyc::{self, KycConfig, KycDataKey, KycRecord, KycStatus};
+
 use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, symbol_short, token, Address, BytesN, Env,
     Map, String, Vec,
@@ -280,6 +281,8 @@ impl PaymentEscrowContract {
             .instance()
             .set(&DataKey::ReentrancyGuard, &false);
         env.storage().instance().set(&DataKey::KycEnabled, &false);
+
+        upgradeable::init_version(&env);
     }
 
     pub fn add_supported_asset(env: Env, admin: Address, asset: Asset) {
@@ -721,6 +724,9 @@ impl PaymentEscrowContract {
         expiration_timestamp: u64,
         memo: String,
     ) -> Result<u64, Error> {
+        if upgradeable::is_paused(&env) {
+            return Err(Error::ContractPaused);
+        }
         sender.require_auth();
 
         if amount <= 0 {
@@ -846,6 +852,9 @@ impl PaymentEscrowContract {
         amount: i128,
         token_address: Address,
     ) -> Result<(), Error> {
+        if upgradeable::is_paused(&env) {
+            return Err(Error::ContractPaused);
+        }
         caller.require_auth();
 
         if amount <= 0 {
@@ -926,7 +935,6 @@ impl PaymentEscrowContract {
 
         Ok(())
     }
-
     pub fn release_escrow(
         env: Env,
         escrow_id: u64,
@@ -1099,6 +1107,9 @@ impl PaymentEscrowContract {
         token_address: Address,
         release_amount: i128,
     ) -> Result<(), Error> {
+        if upgradeable::is_paused(&env) {
+            return Err(Error::ContractPaused);
+        }
         caller.require_auth();
 
         if release_amount <= 0 {
@@ -1472,6 +1483,9 @@ impl PaymentEscrowContract {
         token_address: Address,
         reason: RefundReason,
     ) -> Result<(), Error> {
+        if upgradeable::is_paused(&env) {
+            return Err(Error::ContractPaused);
+        }
         caller.require_auth();
 
         let guard: bool = env
@@ -1638,6 +1652,9 @@ impl PaymentEscrowContract {
         refund_amount: i128,
         _reason: RefundReason,
     ) -> Result<(), Error> {
+        if upgradeable::is_paused(&env) {
+            return Err(Error::ContractPaused);
+        }
         caller.require_auth();
 
         if refund_amount <= 0 {
@@ -4202,7 +4219,6 @@ mod test {
         let config = client.get_multi_party_status(&escrow_id).unwrap();
         assert_eq!(config.finalized, true);
     }
-
     fn setup_escrow_for_dispute(
         env: &Env,
     ) -> (
