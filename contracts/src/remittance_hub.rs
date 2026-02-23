@@ -1,7 +1,10 @@
 use crate::oracle::{self, CachedRate, OracleConfig};
 use soroban_sdk::{
-    contract, contracterror, contractimpl, contracttype, symbol_short, Address, Env, String, Symbol,
+    contract, contracterror, contractimpl, contracttype, symbol_short, Address, Env, String, Symbol, BytesN,
 };
+
+use crate::aml::{AmlConfig, AmlStatus, AmlScreeningResult};
+use crate::upgradeable;
 
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
@@ -29,7 +32,7 @@ pub enum RemittanceError {
     AmlFlagNotFound = 20,
     BatchTooLarge = 21,
     DuplicateEscrowId = 22,
-    ContractPaused = 21,
+    ContractPaused = 23,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -417,7 +420,7 @@ impl RemittanceHubContract {
             to,
             amount,
             currency,
-            status,
+            status: symbol_short!("pending"),
         };
 
         env.storage().persistent().set(&remittance_id, &remittance);

@@ -1,10 +1,10 @@
 #![no_std]
 
-mod aml;
-mod kyc;
-mod oracle;
-mod payment_escrow;
-mod remittance_hub;
+pub mod aml;
+pub mod kyc;
+pub mod oracle;
+pub mod payment_escrow;
+pub mod remittance_hub;
 pub mod upgradeable;
 
 pub use aml::MockAmlOracleContract;
