@@ -1,6 +1,6 @@
 use soroban_sdk::{
-    contract, contractimpl, contracttype, contracterror, Address, Env, InvokeError, String,
-    Symbol, Val, Vec, symbol_short, IntoVal,
+    contract, contracterror, contractimpl, contracttype, symbol_short, Address, Env, IntoVal,
+    InvokeError, String, Symbol, Val, Vec,
 };
 
 #[contracterror]
@@ -67,9 +67,11 @@ pub struct MockOracleContract;
 
 #[contractimpl]
 impl MockOracleContract {
-    pub fn initialize(env: Env, admin: Address) {
+    pub fn init_oracle(env: Env, admin: Address) {
         admin.require_auth();
-        env.storage().instance().set(&Symbol::new(&env, "admin"), &admin);
+        env.storage()
+            .instance()
+            .set(&Symbol::new(&env, "admin"), &admin);
     }
 
     pub fn set_rate(
@@ -81,7 +83,11 @@ impl MockOracleContract {
         denominator: i128,
     ) {
         admin.require_auth();
-        let stored_admin: Address = env.storage().instance().get(&Symbol::new(&env, "admin")).unwrap();
+        let stored_admin: Address = env
+            .storage()
+            .instance()
+            .get(&Symbol::new(&env, "admin"))
+            .unwrap();
         if admin != stored_admin {
             panic!("unauthorized");
         }
@@ -99,11 +105,7 @@ impl MockOracleContract {
         env.storage().instance().set(&key, &cached);
     }
 
-    pub fn query_rate(
-        env: Env,
-        from_asset: String,
-        to_asset: String,
-    ) -> CachedRate {
+    pub fn query_rate(env: Env, from_asset: String, to_asset: String) -> CachedRate {
         let key = OracleDataKey::CachedRate(from_asset.clone(), to_asset.clone());
         let cached: Option<CachedRate> = env.storage().instance().get(&key);
         match cached {
@@ -150,7 +152,12 @@ pub fn get_conversion_rate(
 
             env.events().publish(
                 (symbol_short!("conv"), symbol_short!("rate")),
-                (from_asset.clone(), to_asset.clone(), rate_data.rate, converted),
+                (
+                    from_asset.clone(),
+                    to_asset.clone(),
+                    rate_data.rate,
+                    converted,
+                ),
             );
 
             Ok(ConversionResult {
@@ -194,10 +201,7 @@ fn query_oracle(
     to_asset: &String,
 ) -> Result<CachedRate, OracleError> {
     let func = Symbol::new(env, "query_rate");
-    let args: Vec<Val> = Vec::from_array(
-        env,
-        [from_asset.into_val(env), to_asset.into_val(env)],
-    );
+    let args: Vec<Val> = Vec::from_array(env, [from_asset.into_val(env), to_asset.into_val(env)]);
     match env.try_invoke_contract::<CachedRate, InvokeError>(oracle_address, &func, args) {
         Ok(Ok(rate)) => Ok(rate),
         _ => Err(OracleError::OracleTimeout),
@@ -260,7 +264,7 @@ mod test {
         let client = MockOracleContractClient::new(&env, &contract_id);
         let admin = Address::generate(&env);
 
-        client.initialize(&admin);
+        client.init_oracle(&admin);
 
         let from = String::from_str(&env, "USDC");
         let to = String::from_str(&env, "EUR");
@@ -283,16 +287,8 @@ mod test {
         let oracle_addr = Address::generate(&env);
         let asset = String::from_str(&env, "USDC");
 
-        let result = get_conversion_rate(
-            &env,
-            &oracle_addr,
-            &asset,
-            &asset,
-            5000,
-            3600,
-            None,
-        )
-        .unwrap();
+        let result =
+            get_conversion_rate(&env, &oracle_addr, &asset, &asset, 5000, 3600, None).unwrap();
 
         assert_eq!(result.converted_amount, 5000);
     }
@@ -377,7 +373,7 @@ mod test {
         let oracle_client = MockOracleContractClient::new(&env, &oracle_id);
         let admin = Address::generate(&env);
 
-        oracle_client.initialize(&admin);
+        oracle_client.init_oracle(&admin);
 
         let from = String::from_str(&env, "USDC");
         let to = String::from_str(&env, "EUR");
