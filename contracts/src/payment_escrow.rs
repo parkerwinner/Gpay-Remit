@@ -1,5 +1,6 @@
 use soroban_sdk::{contract, contractimpl, contracttype, contracterror, token, Address, BytesN, Env, String, Vec, Map, symbol_short};
 use crate::kyc::{self, KycConfig, KycDataKey, KycRecord, KycStatus};
+use crate::rate_limit::{self, FunctionType, RateLimitConfig};
 
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
@@ -51,6 +52,7 @@ pub enum Error {
     KycFailed = 44,
     KycNotConfigured = 45,
     KycProofRequired = 46,
+    RateLimitExceeded = 47,
 }
 
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -598,6 +600,7 @@ impl PaymentEscrowContract {
         memo: String,
     ) -> Result<u64, Error> {
         sender.require_auth();
+        Self::enforce_rate_limit(&env, &sender, FunctionType::Deposit)?;
 
         if amount <= 0 {
             return Err(Error::InvalidAmount);
@@ -698,6 +701,7 @@ impl PaymentEscrowContract {
         token_address: Address,
     ) -> Result<(), Error> {
         caller.require_auth();
+        Self::enforce_rate_limit(&env, &caller, FunctionType::Deposit)?;
 
         if amount <= 0 {
             return Err(Error::InvalidAmount);
@@ -764,6 +768,7 @@ impl PaymentEscrowContract {
 
     pub fn release_escrow(env: Env, escrow_id: u64, caller: Address, token_address: Address) -> Result<(), Error> {
         caller.require_auth();
+        Self::enforce_rate_limit(&env, &caller, FunctionType::Release)?;
 
         let guard: bool = env.storage().instance().get(&DataKey::ReentrancyGuard).unwrap_or(false);
         if guard {
@@ -882,6 +887,7 @@ impl PaymentEscrowContract {
         release_amount: i128,
     ) -> Result<(), Error> {
         caller.require_auth();
+        Self::enforce_rate_limit(&env, &caller, FunctionType::Release)?;
 
         if release_amount <= 0 {
             return Err(Error::InvalidAmount);
@@ -1177,6 +1183,7 @@ impl PaymentEscrowContract {
         reason: RefundReason,
     ) -> Result<(), Error> {
         caller.require_auth();
+        Self::enforce_rate_limit(&env, &caller, FunctionType::Refund)?;
 
         let guard: bool = env.storage().instance().get(&DataKey::ReentrancyGuard).unwrap_or(false);
         if guard {
@@ -1296,6 +1303,7 @@ impl PaymentEscrowContract {
         reason: RefundReason,
     ) -> Result<(), Error> {
         caller.require_auth();
+        Self::enforce_rate_limit(&env, &caller, FunctionType::Refund)?;
 
         if refund_amount <= 0 {
             return Err(Error::InvalidRefundAmount);
@@ -1632,6 +1640,106 @@ impl PaymentEscrowContract {
 
     pub fn get_multi_party_status(env: Env, escrow_id: u64) -> Option<MultiPartyConfig> {
         env.storage().instance().get(&DataKey::EscrowApprovals(escrow_id))
+    }
+
+    // ── Rate Limiting ────────────────────────────────────────────────
+
+    /// Configure per-user rate limit parameters. Admin-only.
+    /// `max_count` is the max calls allowed per `interval` seconds.
+    pub fn configure_rate_limit(
+        env: Env,
+        admin: Address,
+        max_count: u32,
+        interval: u64,
+    ) -> Result<(), Error> {
+        admin.require_auth();
+
+        let stored_admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
+        if admin != stored_admin {
+            return Err(Error::Unauthorized);
+        }
+
+        let config = RateLimitConfig {
+            enabled: true,
+            max_count,
+            interval,
+        };
+        rate_limit::set_config(&env, config);
+
+        env.events().publish((symbol_short!("rl_cfg"),), (max_count, interval));
+
+        Ok(())
+    }
+
+    /// Configure global (platform-wide) rate limit. Admin-only.
+    pub fn configure_global_rate_limit(
+        env: Env,
+        admin: Address,
+        max_count: u32,
+        interval: u64,
+    ) -> Result<(), Error> {
+        admin.require_auth();
+
+        let stored_admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
+        if admin != stored_admin {
+            return Err(Error::Unauthorized);
+        }
+
+        let config = RateLimitConfig {
+            enabled: true,
+            max_count,
+            interval,
+        };
+        rate_limit::set_global_config(&env, config);
+
+        env.events().publish((symbol_short!("rl_gl_cf"),), (max_count, interval));
+
+        Ok(())
+    }
+
+    /// Exempt an address from rate limiting. Admin-only.
+    pub fn set_rate_limit_exemption(
+        env: Env,
+        admin: Address,
+        address: Address,
+        exempt: bool,
+    ) -> Result<(), Error> {
+        admin.require_auth();
+
+        let stored_admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
+        if admin != stored_admin {
+            return Err(Error::Unauthorized);
+        }
+
+        rate_limit::set_exemption(&env, &address, exempt);
+
+        env.events().publish((symbol_short!("rl_exmpt"),), (address, exempt));
+
+        Ok(())
+    }
+
+    /// Get the current per-user rate limit configuration.
+    pub fn get_rate_limit_config(env: Env) -> Option<RateLimitConfig> {
+        rate_limit::get_config(&env)
+    }
+
+    /// Get the current global rate limit configuration.
+    pub fn get_global_rate_limit_config(env: Env) -> Option<RateLimitConfig> {
+        rate_limit::get_global_config(&env)
+    }
+
+    /// Check if an address is exempt from rate limiting.
+    pub fn is_rate_limit_exempt(env: Env, address: Address) -> bool {
+        rate_limit::is_exempt(&env, &address)
+    }
+
+    /// Internal rate limit check helper.
+    fn enforce_rate_limit(env: &Env, caller: &Address, function_type: FunctionType) -> Result<(), Error> {
+        let admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
+        if !rate_limit::check_rate_limit(env, caller, function_type, &admin) {
+            return Err(Error::RateLimitExceeded);
+        }
+        Ok(())
     }
 }
 
@@ -3487,5 +3595,277 @@ mod test {
 
         let config = client.get_multi_party_status(&escrow_id).unwrap();
         assert_eq!(config.finalized, true);
+    }
+
+    #[test]
+    fn test_configure_rate_limit() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let contract_id = env.register_contract(None, PaymentEscrowContract);
+        let client = PaymentEscrowContractClient::new(&env, &contract_id);
+
+        let admin = Address::generate(&env);
+        client.initialize(&admin);
+
+        client.configure_rate_limit(&admin, &5, &60);
+
+        let config = client.get_rate_limit_config();
+        assert!(config.is_some());
+        let cfg = config.unwrap();
+        assert_eq!(cfg.enabled, true);
+        assert_eq!(cfg.max_count, 5);
+        assert_eq!(cfg.interval, 60);
+    }
+
+    #[test]
+    fn test_configure_rate_limit_unauthorized() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let contract_id = env.register_contract(None, PaymentEscrowContract);
+        let client = PaymentEscrowContractClient::new(&env, &contract_id);
+
+        let admin = Address::generate(&env);
+        let other = Address::generate(&env);
+        client.initialize(&admin);
+
+        let result = client.try_configure_rate_limit(&other, &5, &60);
+        assert_eq!(result, Err(Ok(Error::Unauthorized)));
+    }
+
+    #[test]
+    fn test_rate_limit_blocks_excess_calls() {
+        let env = Env::default();
+        env.mock_all_auths();
+        env.ledger().with_mut(|li| {
+            li.timestamp = 1000;
+        });
+
+        let contract_id = env.register_contract(None, PaymentEscrowContract);
+        let client = PaymentEscrowContractClient::new(&env, &contract_id);
+
+        let admin = Address::generate(&env);
+        let token_admin = Address::generate(&env);
+        let (token_client, token_sac) = create_token_contract(&env, &token_admin);
+        let token_addr = token_client.address.clone();
+
+        client.initialize(&admin);
+
+        let asset = Asset {
+            code: String::from_str(&env, "USDC"),
+            issuer: token_admin.clone(),
+        };
+        client.add_supported_asset(&admin, &asset);
+
+        // Allow max 2 calls per 60s window
+        client.configure_rate_limit(&admin, &2, &60);
+
+        let sender = Address::generate(&env);
+        let recipient = Address::generate(&env);
+        token_sac.mint(&sender, &10000);
+
+        // First call succeeds
+        let _id1 = client.create_escrow(
+            &sender, &recipient, &100, &asset, &2000, &String::from_str(&env, "m1"),
+        );
+        // Second call succeeds
+        let _id2 = client.create_escrow(
+            &sender, &recipient, &100, &asset, &2000, &String::from_str(&env, "m2"),
+        );
+        // Third call should be rate limited
+        let result = client.try_create_escrow(
+            &sender, &recipient, &100, &asset, &2000, &String::from_str(&env, "m3"),
+        );
+        assert_eq!(result, Err(Ok(Error::RateLimitExceeded)));
+    }
+
+    #[test]
+    fn test_rate_limit_window_reset() {
+        let env = Env::default();
+        env.mock_all_auths();
+        env.ledger().with_mut(|li| {
+            li.timestamp = 1000;
+        });
+
+        let contract_id = env.register_contract(None, PaymentEscrowContract);
+        let client = PaymentEscrowContractClient::new(&env, &contract_id);
+
+        let admin = Address::generate(&env);
+        let token_admin = Address::generate(&env);
+        let (_token_client, token_sac) = create_token_contract(&env, &token_admin);
+
+        client.initialize(&admin);
+
+        let asset = Asset {
+            code: String::from_str(&env, "USDC"),
+            issuer: token_admin.clone(),
+        };
+        client.add_supported_asset(&admin, &asset);
+
+        // Allow max 1 call per 60s window
+        client.configure_rate_limit(&admin, &1, &60);
+
+        let sender = Address::generate(&env);
+        let recipient = Address::generate(&env);
+        token_sac.mint(&sender, &10000);
+
+        // First call succeeds
+        let _id1 = client.create_escrow(
+            &sender, &recipient, &100, &asset, &2000, &String::from_str(&env, "m1"),
+        );
+        // Second call blocked
+        let result = client.try_create_escrow(
+            &sender, &recipient, &100, &asset, &2000, &String::from_str(&env, "m2"),
+        );
+        assert_eq!(result, Err(Ok(Error::RateLimitExceeded)));
+
+        // Advance time past window
+        env.ledger().with_mut(|li| {
+            li.timestamp = 1070;
+        });
+
+        // Now it should succeed again
+        let _id2 = client.create_escrow(
+            &sender, &recipient, &100, &asset, &2070, &String::from_str(&env, "m3"),
+        );
+    }
+
+    #[test]
+    fn test_rate_limit_admin_exempt() {
+        let env = Env::default();
+        env.mock_all_auths();
+        env.ledger().with_mut(|li| {
+            li.timestamp = 1000;
+        });
+
+        let contract_id = env.register_contract(None, PaymentEscrowContract);
+        let client = PaymentEscrowContractClient::new(&env, &contract_id);
+
+        let admin = Address::generate(&env);
+        let token_admin = Address::generate(&env);
+        let (_token_client, token_sac) = create_token_contract(&env, &token_admin);
+
+        client.initialize(&admin);
+
+        let asset = Asset {
+            code: String::from_str(&env, "USDC"),
+            issuer: token_admin.clone(),
+        };
+        client.add_supported_asset(&admin, &asset);
+
+        // Max 1 call per 60s window
+        client.configure_rate_limit(&admin, &1, &60);
+
+        let recipient = Address::generate(&env);
+        token_sac.mint(&admin, &10000);
+
+        // Admin is always exempt, can make multiple calls
+        let _id1 = client.create_escrow(
+            &admin, &recipient, &100, &asset, &2000, &String::from_str(&env, "m1"),
+        );
+        let _id2 = client.create_escrow(
+            &admin, &recipient, &100, &asset, &2000, &String::from_str(&env, "m2"),
+        );
+    }
+
+    #[test]
+    fn test_rate_limit_exemption() {
+        let env = Env::default();
+        env.mock_all_auths();
+        env.ledger().with_mut(|li| {
+            li.timestamp = 1000;
+        });
+
+        let contract_id = env.register_contract(None, PaymentEscrowContract);
+        let client = PaymentEscrowContractClient::new(&env, &contract_id);
+
+        let admin = Address::generate(&env);
+        let token_admin = Address::generate(&env);
+        let (_token_client, token_sac) = create_token_contract(&env, &token_admin);
+
+        client.initialize(&admin);
+
+        let asset = Asset {
+            code: String::from_str(&env, "USDC"),
+            issuer: token_admin.clone(),
+        };
+        client.add_supported_asset(&admin, &asset);
+
+        // Max 1 call per 60s window
+        client.configure_rate_limit(&admin, &1, &60);
+
+        let sender = Address::generate(&env);
+        let recipient = Address::generate(&env);
+        token_sac.mint(&sender, &10000);
+
+        // Exempt the sender
+        client.set_rate_limit_exemption(&admin, &sender, &true);
+        assert!(client.is_rate_limit_exempt(&sender));
+
+        // Exempt user can make multiple calls
+        let _id1 = client.create_escrow(
+            &sender, &recipient, &100, &asset, &2000, &String::from_str(&env, "m1"),
+        );
+        let _id2 = client.create_escrow(
+            &sender, &recipient, &100, &asset, &2000, &String::from_str(&env, "m2"),
+        );
+    }
+
+    #[test]
+    fn test_configure_global_rate_limit() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let contract_id = env.register_contract(None, PaymentEscrowContract);
+        let client = PaymentEscrowContractClient::new(&env, &contract_id);
+
+        let admin = Address::generate(&env);
+        client.initialize(&admin);
+
+        client.configure_global_rate_limit(&admin, &100, &300);
+
+        let config = client.get_global_rate_limit_config();
+        assert!(config.is_some());
+        let cfg = config.unwrap();
+        assert_eq!(cfg.enabled, true);
+        assert_eq!(cfg.max_count, 100);
+        assert_eq!(cfg.interval, 300);
+    }
+
+    #[test]
+    fn test_no_rate_limit_when_unconfigured() {
+        let env = Env::default();
+        env.mock_all_auths();
+        env.ledger().with_mut(|li| {
+            li.timestamp = 1000;
+        });
+
+        let contract_id = env.register_contract(None, PaymentEscrowContract);
+        let client = PaymentEscrowContractClient::new(&env, &contract_id);
+
+        let admin = Address::generate(&env);
+        let token_admin = Address::generate(&env);
+        let (_token_client, token_sac) = create_token_contract(&env, &token_admin);
+
+        client.initialize(&admin);
+
+        let asset = Asset {
+            code: String::from_str(&env, "USDC"),
+            issuer: token_admin.clone(),
+        };
+        client.add_supported_asset(&admin, &asset);
+
+        // No rate limit configured — all calls should succeed
+        let sender = Address::generate(&env);
+        let recipient = Address::generate(&env);
+        token_sac.mint(&sender, &100000);
+
+        for i in 0..5u64 {
+            let memo = String::from_str(&env, "memo");
+            let _id = client.create_escrow(
+                &sender, &recipient, &100, &asset, &2000, &memo,
+            );
+        }
     }
 }
