@@ -233,6 +233,30 @@ pub struct MultiPartyConfig {
     pub finalized: bool,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[contracttype]
+pub enum EventType {
+    Created,
+    Deposit,
+    Approved,
+    Released,
+    PartialRelease,
+    Refunded,
+    PartialRefund,
+}
+
+#[derive(Clone, Debug)]
+#[contracttype]
+pub struct NotificationPayload {
+    pub escrow_id: u64,
+    pub event_type: EventType,
+    pub amount: i128,
+    pub timestamp: u64,
+}
+
+const MAX_HOOKS: u32 = 10;
+const DEFAULT_MAX_RETRIES: u32 = 2;
+
 #[derive(Clone, Copy)]
 #[contracttype]
 pub enum DataKey {
@@ -842,6 +866,13 @@ impl PaymentEscrowContract {
         env.events()
             .publish((symbol_short!("created"), counter), escrow.sender);
 
+        Self::notify_external(&env, NotificationPayload {
+            escrow_id: counter,
+            event_type: EventType::Created,
+            amount,
+            timestamp: env.ledger().timestamp(),
+        });
+
         Ok(counter)
     }
 
@@ -905,6 +936,13 @@ impl PaymentEscrowContract {
             (caller, amount, escrow.deposited_amount),
         );
 
+        Self::notify_external(&env, NotificationPayload {
+            escrow_id,
+            event_type: EventType::Deposit,
+            amount,
+            timestamp: env.ledger().timestamp(),
+        });
+
         Ok(())
     }
 
@@ -932,6 +970,13 @@ impl PaymentEscrowContract {
 
         env.events()
             .publish((symbol_short!("approved"), escrow_id), approver);
+
+        Self::notify_external(&env, NotificationPayload {
+            escrow_id,
+            event_type: EventType::Approved,
+            amount: escrow.amount,
+            timestamp: env.ledger().timestamp(),
+        });
 
         Ok(())
     }
