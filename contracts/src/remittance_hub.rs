@@ -405,6 +405,7 @@ impl RemittanceHubContract {
             return Err(RemittanceError::ContractPaused);
         }
         from.require_auth();
+        Self::enforce_rate_limit(&env, &from, FunctionType::Remittance)?;
 
         if amount <= 0 {
             return Err(RemittanceError::InvalidAmount);
@@ -546,6 +547,7 @@ impl RemittanceHubContract {
             return Err(RemittanceError::ContractPaused);
         }
         sender.require_auth();
+        Self::enforce_rate_limit(&env, &sender, FunctionType::Invoice)?;
 
         if amount <= 0 {
             return Err(RemittanceError::InvalidAmount);
@@ -634,6 +636,7 @@ impl RemittanceHubContract {
             return Err(RemittanceError::ContractPaused);
         }
         caller.require_auth();
+        Self::enforce_rate_limit(&env, &caller, FunctionType::Invoice)?;
 
         let mut invoice: Invoice = env
             .storage()

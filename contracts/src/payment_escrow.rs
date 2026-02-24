@@ -1,4 +1,5 @@
 use crate::kyc::{self, KycConfig, KycDataKey, KycRecord, KycStatus};
+use crate::rate_limit::{self, FunctionType, RateLimitConfig};
 
 use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, symbol_short, token, Address, BytesN, Env,
@@ -752,6 +753,7 @@ impl PaymentEscrowContract {
             return Err(Error::ContractPaused);
         }
         sender.require_auth();
+        Self::enforce_rate_limit(&env, &sender, FunctionType::Deposit)?;
 
         if amount <= 0 {
             return Err(Error::InvalidAmount);
@@ -887,6 +889,7 @@ impl PaymentEscrowContract {
             return Err(Error::ContractPaused);
         }
         caller.require_auth();
+        Self::enforce_rate_limit(&env, &caller, FunctionType::Deposit)?;
 
         if amount <= 0 {
             return Err(Error::InvalidAmount);
@@ -987,6 +990,7 @@ impl PaymentEscrowContract {
         token_address: Address,
     ) -> Result<(), Error> {
         caller.require_auth();
+        Self::enforce_rate_limit(&env, &caller, FunctionType::Release)?;
 
         let guard: bool = env
             .storage()
@@ -1156,6 +1160,7 @@ impl PaymentEscrowContract {
             return Err(Error::ContractPaused);
         }
         caller.require_auth();
+        Self::enforce_rate_limit(&env, &caller, FunctionType::Release)?;
 
         if release_amount <= 0 {
             return Err(Error::InvalidAmount);
@@ -1532,6 +1537,7 @@ impl PaymentEscrowContract {
             return Err(Error::ContractPaused);
         }
         caller.require_auth();
+        Self::enforce_rate_limit(&env, &caller, FunctionType::Refund)?;
 
         let guard: bool = env
             .storage()
@@ -1701,6 +1707,7 @@ impl PaymentEscrowContract {
             return Err(Error::ContractPaused);
         }
         caller.require_auth();
+        Self::enforce_rate_limit(&env, &caller, FunctionType::Refund)?;
 
         if refund_amount <= 0 {
             return Err(Error::InvalidRefundAmount);
