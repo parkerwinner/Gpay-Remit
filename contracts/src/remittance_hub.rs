@@ -1,6 +1,7 @@
 use soroban_sdk::{contract, contractimpl, contracttype, contracterror, Address, Env, String, Symbol, symbol_short};
 use crate::oracle::{self, CachedRate, OracleConfig};
 use crate::aml::{self, AmlConfig, AmlScreeningResult, AmlStatus};
+use crate::rate_limit::{self, FunctionType, RateLimitConfig};
 
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
@@ -364,6 +365,7 @@ impl RemittanceHubContract {
         currency: Symbol,
     ) -> Result<u64, RemittanceError> {
         from.require_auth();
+        Self::enforce_rate_limit(&env, &from, FunctionType::Remittance)?;
 
         if amount <= 0 {
             return Err(RemittanceError::InvalidAmount);
@@ -538,6 +540,7 @@ impl RemittanceHubContract {
         memo: String,
     ) -> Result<u64, RemittanceError> {
         sender.require_auth();
+        Self::enforce_rate_limit(&env, &sender, FunctionType::Invoice)?;
 
         if amount <= 0 {
             return Err(RemittanceError::InvalidAmount);
@@ -608,6 +611,7 @@ impl RemittanceHubContract {
         caller: Address,
     ) -> Result<(), RemittanceError> {
         caller.require_auth();
+        Self::enforce_rate_limit(&env, &caller, FunctionType::Invoice)?;
 
         let mut invoice: Invoice = env.storage().persistent()
             .get(&DataKey::Invoice(invoice_id))
@@ -778,6 +782,106 @@ impl RemittanceHubContract {
             }
             None => amount,
         }
+    }
+
+    pub fn configure_rate_limit(
+        env: Env,
+        admin: Address,
+        max_count: u32,
+        interval: u64,
+    ) -> Result<(), RemittanceError> {
+        admin.require_auth();
+
+        let stored_admin: Address = env.storage().persistent()
+            .get(&DataKey::Admin)
+            .ok_or(RemittanceError::Unauthorized)?;
+        if admin != stored_admin {
+            return Err(RemittanceError::Unauthorized);
+        }
+
+        let config = RateLimitConfig {
+            enabled: true,
+            max_count,
+            interval,
+        };
+        rate_limit::set_config(&env, config);
+
+        env.events().publish((symbol_short!("rl_cfg"),), (max_count, interval));
+
+        Ok(())
+    }
+
+    pub fn configure_global_rate_limit(
+        env: Env,
+        admin: Address,
+        max_count: u32,
+        interval: u64,
+    ) -> Result<(), RemittanceError> {
+        admin.require_auth();
+
+        let stored_admin: Address = env.storage().persistent()
+            .get(&DataKey::Admin)
+            .ok_or(RemittanceError::Unauthorized)?;
+        if admin != stored_admin {
+            return Err(RemittanceError::Unauthorized);
+        }
+
+        let config = RateLimitConfig {
+            enabled: true,
+            max_count,
+            interval,
+        };
+        rate_limit::set_global_config(&env, config);
+
+        env.events().publish((symbol_short!("rl_gl_cf"),), (max_count, interval));
+
+        Ok(())
+    }
+
+    pub fn set_rate_limit_exemption(
+        env: Env,
+        admin: Address,
+        address: Address,
+        exempt: bool,
+    ) -> Result<(), RemittanceError> {
+        admin.require_auth();
+
+        let stored_admin: Address = env.storage().persistent()
+            .get(&DataKey::Admin)
+            .ok_or(RemittanceError::Unauthorized)?;
+        if admin != stored_admin {
+            return Err(RemittanceError::Unauthorized);
+        }
+
+        rate_limit::set_exemption(&env, &address, exempt);
+
+        env.events().publish((symbol_short!("rl_exmpt"),), (address, exempt));
+
+        Ok(())
+    }
+
+    pub fn get_rate_limit_config(env: Env) -> Option<RateLimitConfig> {
+        rate_limit::get_config(&env)
+    }
+
+    pub fn get_global_rate_limit_config(env: Env) -> Option<RateLimitConfig> {
+        rate_limit::get_global_config(&env)
+    }
+
+    pub fn is_rate_limit_exempt(env: Env, address: Address) -> bool {
+        rate_limit::is_exempt(&env, &address)
+    }
+
+    fn enforce_rate_limit(env: &Env, caller: &Address, function_type: FunctionType) -> Result<(), RemittanceError> {
+        let admin: Option<Address> = env.storage().persistent().get(&DataKey::Admin);
+        let admin = match admin {
+            Some(a) => a,
+            None => return Ok(()),
+        };
+        if !rate_limit::check_rate_limit(env, caller, function_type, &admin) {
+            return Err(RemittanceError::RateLimitExceeded);
+        }
+        Ok(())
     }
 }
 
@@ -1823,5 +1927,247 @@ mod test {
 
         let result = client.try_set_aml_threshold(&admin, &75);
         assert_eq!(result, Err(Ok(RemittanceError::AmlNotConfigured)));
+    }
+
+    #[test]
+    fn test_configure_rate_limit() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let contract_id = env.register_contract(None, RemittanceHubContract);
+        let client = RemittanceHubContractClient::new(&env, &contract_id);
+
+        let admin = Address::generate(&env);
+        let oracle = Address::generate(&env);
+        client.initialize(&admin, &oracle, &oracle, &3600);
+
+        client.configure_rate_limit(&admin, &5, &60);
+
+        let config = client.get_rate_limit_config();
+        assert!(config.is_some());
+        let cfg = config.unwrap();
+        assert_eq!(cfg.enabled, true);
+        assert_eq!(cfg.max_count, 5);
+        assert_eq!(cfg.interval, 60);
+    }
+
+    #[test]
+    fn test_configure_rate_limit_unauthorized() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let contract_id = env.register_contract(None, RemittanceHubContract);
+        let client = RemittanceHubContractClient::new(&env, &contract_id);
+
+        let admin = Address::generate(&env);
+        let other = Address::generate(&env);
+        let oracle = Address::generate(&env);
+        client.initialize(&admin, &oracle, &oracle, &3600);
+
+        let result = client.try_configure_rate_limit(&other, &5, &60);
+        assert_eq!(result, Err(Ok(RemittanceError::Unauthorized)));
+    }
+
+    #[test]
+    fn test_rate_limit_blocks_remittance() {
+        let env = Env::default();
+        env.mock_all_auths();
+        env.ledger().with_mut(|li| {
+            li.timestamp = 1000;
+        });
+
+        let contract_id = env.register_contract(None, RemittanceHubContract);
+        let client = RemittanceHubContractClient::new(&env, &contract_id);
+
+        let admin = Address::generate(&env);
+        let oracle = Address::generate(&env);
+        client.initialize(&admin, &oracle, &oracle, &3600);
+
+        // Max 2 calls per 60s window
+        client.configure_rate_limit(&admin, &2, &60);
+
+        let from = Address::generate(&env);
+        let to = Address::generate(&env);
+
+        // First two succeed
+        let _id1 = client.send_remittance(&from, &to, &1000, &symbol_short!("USD"));
+        let _id2 = client.send_remittance(&from, &to, &2000, &symbol_short!("USD"));
+
+        // Third should be rate limited
+        let result = client.try_send_remittance(&from, &to, &3000, &symbol_short!("USD"));
+        assert_eq!(result, Err(Ok(RemittanceError::RateLimitExceeded)));
+    }
+
+    #[test]
+    fn test_rate_limit_blocks_invoice() {
+        let env = Env::default();
+        env.mock_all_auths();
+        env.ledger().with_mut(|li| {
+            li.timestamp = 1000;
+        });
+
+        let contract_id = env.register_contract(None, RemittanceHubContract);
+        let client = RemittanceHubContractClient::new(&env, &contract_id);
+
+        let admin = Address::generate(&env);
+        let oracle = Address::generate(&env);
+        client.initialize(&admin, &oracle, &oracle, &3600);
+
+        // Max 1 call per 60s window
+        client.configure_rate_limit(&admin, &1, &60);
+
+        let sender = Address::generate(&env);
+        let recipient = Address::generate(&env);
+        let issuer = Address::generate(&env);
+        let asset = Asset {
+            code: String::from_str(&env, "USDC"),
+            issuer,
+        };
+
+        // First invoice succeeds
+        let _id = client.generate_invoice(
+            &sender, &recipient, &1000, &asset, &2000,
+            &String::from_str(&env, "svc"), &0, &String::from_str(&env, "memo"),
+        );
+
+        // Second should be rate limited
+        let result = client.try_generate_invoice(
+            &sender, &recipient, &500, &asset, &2000,
+            &String::from_str(&env, "svc2"), &0, &String::from_str(&env, "memo2"),
+        );
+        assert_eq!(result, Err(Ok(RemittanceError::RateLimitExceeded)));
+    }
+
+    #[test]
+    fn test_rate_limit_window_reset() {
+        let env = Env::default();
+        env.mock_all_auths();
+        env.ledger().with_mut(|li| {
+            li.timestamp = 1000;
+        });
+
+        let contract_id = env.register_contract(None, RemittanceHubContract);
+        let client = RemittanceHubContractClient::new(&env, &contract_id);
+
+        let admin = Address::generate(&env);
+        let oracle = Address::generate(&env);
+        client.initialize(&admin, &oracle, &oracle, &3600);
+
+        // Max 1 call per 60s window
+        client.configure_rate_limit(&admin, &1, &60);
+
+        let from = Address::generate(&env);
+        let to = Address::generate(&env);
+
+        let _id1 = client.send_remittance(&from, &to, &1000, &symbol_short!("USD"));
+
+        // Blocked
+        let result = client.try_send_remittance(&from, &to, &2000, &symbol_short!("USD"));
+        assert_eq!(result, Err(Ok(RemittanceError::RateLimitExceeded)));
+
+        // Advance past window
+        env.ledger().with_mut(|li| {
+            li.timestamp = 1070;
+        });
+
+        // Should succeed after window reset
+        let _id2 = client.send_remittance(&from, &to, &3000, &symbol_short!("USD"));
+    }
+
+    #[test]
+    fn test_rate_limit_admin_exempt() {
+        let env = Env::default();
+        env.mock_all_auths();
+        env.ledger().with_mut(|li| {
+            li.timestamp = 1000;
+        });
+
+        let contract_id = env.register_contract(None, RemittanceHubContract);
+        let client = RemittanceHubContractClient::new(&env, &contract_id);
+
+        let admin = Address::generate(&env);
+        let oracle = Address::generate(&env);
+        client.initialize(&admin, &oracle, &oracle, &3600);
+
+        // Max 1 call per 60s window
+        client.configure_rate_limit(&admin, &1, &60);
+
+        let to = Address::generate(&env);
+
+        // Admin is exempt, can make multiple calls
+        let _id1 = client.send_remittance(&admin, &to, &1000, &symbol_short!("USD"));
+        let _id2 = client.send_remittance(&admin, &to, &2000, &symbol_short!("USD"));
+    }
+
+    #[test]
+    fn test_rate_limit_exemption() {
+        let env = Env::default();
+        env.mock_all_auths();
+        env.ledger().with_mut(|li| {
+            li.timestamp = 1000;
+        });
+
+        let contract_id = env.register_contract(None, RemittanceHubContract);
+        let client = RemittanceHubContractClient::new(&env, &contract_id);
+
+        let admin = Address::generate(&env);
+        let oracle = Address::generate(&env);
+        client.initialize(&admin, &oracle, &oracle, &3600);
+
+        // Max 1 call per 60s window
+        client.configure_rate_limit(&admin, &1, &60);
+
+        let from = Address::generate(&env);
+        let to = Address::generate(&env);
+
+        // Exempt the sender
+        client.set_rate_limit_exemption(&admin, &from, &true);
+        assert!(client.is_rate_limit_exempt(&from));
+
+        // Exempt user can make multiple calls
+        let _id1 = client.send_remittance(&from, &to, &1000, &symbol_short!("USD"));
+        let _id2 = client.send_remittance(&from, &to, &2000, &symbol_short!("USD"));
+    }
+
+    #[test]
+    fn test_configure_global_rate_limit() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let contract_id = env.register_contract(None, RemittanceHubContract);
+        let client = RemittanceHubContractClient::new(&env, &contract_id);
+
+        let admin = Address::generate(&env);
+        let oracle = Address::generate(&env);
+        client.initialize(&admin, &oracle, &oracle, &3600);
+
+        client.configure_global_rate_limit(&admin, &100, &300);
+
+        let config = client.get_global_rate_limit_config();
+        assert!(config.is_some());
+        let cfg = config.unwrap();
+        assert_eq!(cfg.enabled, true);
+        assert_eq!(cfg.max_count, 100);
+        assert_eq!(cfg.interval, 300);
+    }
+
+    #[test]
+    fn test_no_rate_limit_when_unconfigured() {
+        let env = Env::default();
+        env.mock_all_auths();
+        env.ledger().with_mut(|li| {
+            li.timestamp = 1000;
+        });
+
+        let contract_id = env.register_contract(None, RemittanceHubContract);
+        let client = RemittanceHubContractClient::new(&env, &contract_id);
+
+        let from = Address::generate(&env);
+        let to = Address::generate(&env);
+
+        // No rate limit configured, all should pass
+        for _ in 0..5u64 {
+            let _id = client.send_remittance(&from, &to, &1000, &symbol_short!("USD"));
+        }
     }
 }
