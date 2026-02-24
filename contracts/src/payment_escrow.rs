@@ -1,4 +1,5 @@
 use crate::kyc::{self, KycConfig, KycDataKey, KycRecord, KycStatus};
+use crate::rate_limit::{self, FunctionType, RateLimitConfig};
 
 use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, symbol_short, token, Address, BytesN, Env,
@@ -235,6 +236,30 @@ pub struct MultiPartyConfig {
     pub approvals: Map<Address, bool>,
     pub finalized: bool,
 }
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[contracttype]
+pub enum EventType {
+    Created,
+    Deposit,
+    Approved,
+    Released,
+    PartialRelease,
+    Refunded,
+    PartialRefund,
+}
+
+#[derive(Clone, Debug)]
+#[contracttype]
+pub struct NotificationPayload {
+    pub escrow_id: u64,
+    pub event_type: EventType,
+    pub amount: i128,
+    pub timestamp: u64,
+}
+
+const MAX_HOOKS: u32 = 10;
+const DEFAULT_MAX_RETRIES: u32 = 2;
 
 #[derive(Clone, Copy)]
 #[contracttype]
@@ -731,6 +756,7 @@ impl PaymentEscrowContract {
             return Err(Error::ContractPaused);
         }
         sender.require_auth();
+        Self::enforce_rate_limit(&env, &sender, FunctionType::Deposit)?;
 
         if amount <= 0 {
             return Err(Error::InvalidAmount);
@@ -845,6 +871,13 @@ impl PaymentEscrowContract {
         env.events()
             .publish((symbol_short!("created"), counter), escrow.sender);
 
+        Self::notify_external(&env, NotificationPayload {
+            escrow_id: counter,
+            event_type: EventType::Created,
+            amount,
+            timestamp: env.ledger().timestamp(),
+        });
+
         Ok(counter)
     }
 
@@ -859,6 +892,7 @@ impl PaymentEscrowContract {
             return Err(Error::ContractPaused);
         }
         caller.require_auth();
+        Self::enforce_rate_limit(&env, &caller, FunctionType::Deposit)?;
 
         if amount <= 0 {
             return Err(Error::InvalidAmount);
@@ -908,6 +942,13 @@ impl PaymentEscrowContract {
             (caller, amount, escrow.deposited_amount),
         );
 
+        Self::notify_external(&env, NotificationPayload {
+            escrow_id,
+            event_type: EventType::Deposit,
+            amount,
+            timestamp: env.ledger().timestamp(),
+        });
+
         Ok(())
     }
 
@@ -936,6 +977,13 @@ impl PaymentEscrowContract {
         env.events()
             .publish((symbol_short!("approved"), escrow_id), approver);
 
+        Self::notify_external(&env, NotificationPayload {
+            escrow_id,
+            event_type: EventType::Approved,
+            amount: escrow.amount,
+            timestamp: env.ledger().timestamp(),
+        });
+
         Ok(())
     }
     pub fn release_escrow(
@@ -945,6 +993,7 @@ impl PaymentEscrowContract {
         token_address: Address,
     ) -> Result<(), Error> {
         caller.require_auth();
+        Self::enforce_rate_limit(&env, &caller, FunctionType::Release)?;
 
         let guard: bool = env
             .storage()
@@ -1114,6 +1163,7 @@ impl PaymentEscrowContract {
             return Err(Error::ContractPaused);
         }
         caller.require_auth();
+        Self::enforce_rate_limit(&env, &caller, FunctionType::Release)?;
 
         if release_amount <= 0 {
             return Err(Error::InvalidAmount);
@@ -1490,6 +1540,7 @@ impl PaymentEscrowContract {
             return Err(Error::ContractPaused);
         }
         caller.require_auth();
+        Self::enforce_rate_limit(&env, &caller, FunctionType::Refund)?;
 
         let guard: bool = env
             .storage()
@@ -1659,6 +1710,7 @@ impl PaymentEscrowContract {
             return Err(Error::ContractPaused);
         }
         caller.require_auth();
+        Self::enforce_rate_limit(&env, &caller, FunctionType::Refund)?;
 
         if refund_amount <= 0 {
             return Err(Error::InvalidRefundAmount);
