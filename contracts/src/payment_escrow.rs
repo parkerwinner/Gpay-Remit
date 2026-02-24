@@ -6,6 +6,8 @@ use soroban_sdk::{
     Map, String, Vec,
 };
 
+use crate::upgradeable;
+
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
 #[repr(u32)]
@@ -55,6 +57,7 @@ pub enum Error {
     NotArbitrator = 43,
     DisputeNotFound = 44,
     AlreadyVoted = 45,
+    ContractPaused = 46,
 }
 
 #[derive(Clone, PartialEq, Eq, Debug)]
