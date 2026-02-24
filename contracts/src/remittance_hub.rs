@@ -1,7 +1,7 @@
-use soroban_sdk::{contract, contractimpl, contracttype, contracterror, Address, Env, String, Symbol, symbol_short};
 use crate::oracle::{self, CachedRate, OracleConfig};
-use crate::aml::{self, AmlConfig, AmlScreeningResult, AmlStatus};
-use crate::rate_limit::{self, FunctionType, RateLimitConfig};
+use soroban_sdk::{
+    contract, contracterror, contractimpl, contracttype, symbol_short, Address, Env, String, Symbol,
+};
 
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
@@ -27,6 +27,9 @@ pub enum RemittanceError {
     AmlOracleError = 18,
     AmlNotConfigured = 19,
     AmlFlagNotFound = 20,
+    BatchTooLarge = 21,
+    DuplicateEscrowId = 22,
+    ContractPaused = 21,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -75,6 +78,26 @@ pub struct RemittanceData {
     pub status: Symbol,
 }
 
+#[derive(Clone)]
+#[contracttype]
+pub struct EscrowRequest {
+    pub recipient: Address,
+    pub amount: i128,
+    pub asset: Asset,
+    pub expiration_timestamp: u64,
+}
+
+#[derive(Clone)]
+#[contracttype]
+pub struct EscrowData {
+    pub sender: Address,
+    pub recipient: Address,
+    pub amount: i128,
+    pub asset: Asset,
+    pub expiration_timestamp: u64,
+    pub status: Symbol,
+}
+
 #[derive(Clone, Copy)]
 #[contracttype]
 pub enum DataKey {
@@ -82,6 +105,8 @@ pub enum DataKey {
     Invoice(u64),
     EscrowInvoice(u64),
     Admin,
+    EscrowCounter,
+    Escrow(u64),
 }
 
 #[derive(Clone)]
@@ -103,7 +128,7 @@ pub struct RemittanceHubContract;
 
 #[contractimpl]
 impl RemittanceHubContract {
-    pub fn initialize(
+    pub fn init_hub(
         env: Env,
         admin: Address,
         primary_oracle: Address,
@@ -126,12 +151,11 @@ impl RemittanceHubContract {
             rate_limit_interval: 5,
             last_query_ledger: 0,
         };
-        env.storage().persistent().set(&HubOracleKey::OracleConfig, &config);
+        env.storage()
+            .persistent()
+            .set(&HubOracleKey::OracleConfig, &config);
+        env.events().publish((symbol_short!("hub_init"),), admin);
 
-        env.events().publish(
-            (symbol_short!("hub_init"),),
-            admin,
-        );
 
         Ok(())
     }
@@ -143,20 +167,26 @@ impl RemittanceHubContract {
         secondary_oracle: Address,
     ) -> Result<(), RemittanceError> {
         caller.require_auth();
-        let stored_admin: Address = env.storage().persistent()
+        let stored_admin: Address = env
+            .storage()
+            .persistent()
             .get(&DataKey::Admin)
             .ok_or(RemittanceError::OracleNotConfigured)?;
         if caller != stored_admin {
             return Err(RemittanceError::Unauthorized);
         }
 
-        let mut config: OracleConfig = env.storage().persistent()
+        let mut config: OracleConfig = env
+            .storage()
+            .persistent()
             .get(&HubOracleKey::OracleConfig)
             .ok_or(RemittanceError::OracleNotConfigured)?;
 
         config.primary_oracle = primary_oracle.clone();
         config.secondary_oracle = secondary_oracle.clone();
-        env.storage().persistent().set(&HubOracleKey::OracleConfig, &config);
+        env.storage()
+            .persistent()
+            .set(&HubOracleKey::OracleConfig, &config);
 
         env.events().publish(
             (symbol_short!("orc_set"),),
@@ -172,19 +202,25 @@ impl RemittanceHubContract {
         max_staleness: u64,
     ) -> Result<(), RemittanceError> {
         caller.require_auth();
-        let stored_admin: Address = env.storage().persistent()
+        let stored_admin: Address = env
+            .storage()
+            .persistent()
             .get(&DataKey::Admin)
             .ok_or(RemittanceError::OracleNotConfigured)?;
         if caller != stored_admin {
             return Err(RemittanceError::Unauthorized);
         }
 
-        let mut config: OracleConfig = env.storage().persistent()
+        let mut config: OracleConfig = env
+            .storage()
+            .persistent()
             .get(&HubOracleKey::OracleConfig)
             .ok_or(RemittanceError::OracleNotConfigured)?;
 
         config.max_staleness = max_staleness;
-        env.storage().persistent().set(&HubOracleKey::OracleConfig, &config);
+        env.storage()
+            .persistent()
+            .set(&HubOracleKey::OracleConfig, &config);
 
         Ok(())
     }
@@ -198,7 +234,9 @@ impl RemittanceHubContract {
         denominator: i128,
     ) -> Result<(), RemittanceError> {
         caller.require_auth();
-        let stored_admin: Address = env.storage().persistent()
+        let stored_admin: Address = env
+            .storage()
+            .persistent()
             .get(&DataKey::Admin)
             .ok_or(RemittanceError::OracleNotConfigured)?;
         if caller != stored_admin {
@@ -215,10 +253,9 @@ impl RemittanceHubContract {
             from_asset: from_asset.clone(),
             to_asset: to_asset.clone(),
         };
-        env.storage().persistent().set(
-            &HubOracleKey::CachedRate(from_asset, to_asset),
-            &cached,
-        );
+        env.storage()
+            .persistent()
+            .set(&HubOracleKey::CachedRate(from_asset, to_asset), &cached);
 
         Ok(())
     }
@@ -364,6 +401,9 @@ impl RemittanceHubContract {
         amount: i128,
         currency: Symbol,
     ) -> Result<u64, RemittanceError> {
+        if upgradeable::is_paused(&env) {
+            return Err(RemittanceError::ContractPaused);
+        }
         from.require_auth();
         Self::enforce_rate_limit(&env, &from, FunctionType::Remittance)?;
 
@@ -372,46 +412,6 @@ impl RemittanceHubContract {
         }
 
         let remittance_id = env.ledger().sequence() as u64;
-        let mut status = symbol_short!("pending");
-
-        let aml_config: Option<AmlConfig> = env.storage().persistent().get(&AmlKey::Config);
-
-        if let Some(ref config) = aml_config {
-            match aml::screen_transaction(&env, config, &from, &to, amount) {
-                Ok(result) => {
-                    if result.status == AmlStatus::Flagged {
-                        status = symbol_short!("flagged");
-                        env.storage().persistent().set(
-                            &AmlKey::Flag(remittance_id),
-                            &result,
-                        );
-                        env.events().publish(
-                            (symbol_short!("aml_flag"), remittance_id),
-                            (from.clone(), to.clone(), amount, result.risk_score),
-                        );
-                    }
-                }
-                Err(_) => {
-                    status = symbol_short!("review");
-                    let manual_flag = AmlScreeningResult {
-                        sender: from.clone(),
-                        recipient: to.clone(),
-                        amount,
-                        risk_score: 0,
-                        status: AmlStatus::Reviewing,
-                        timestamp: env.ledger().timestamp(),
-                    };
-                    env.storage().persistent().set(
-                        &AmlKey::Flag(remittance_id),
-                        &manual_flag,
-                    );
-                    env.events().publish(
-                        (symbol_short!("aml_rev"), remittance_id),
-                        (from.clone(), to.clone(), amount),
-                    );
-                }
-            }
-        }
 
         let remittance = RemittanceData {
             from: from.clone(),
@@ -421,9 +421,7 @@ impl RemittanceHubContract {
             status,
         };
 
-        env.storage()
-            .persistent()
-            .set(&remittance_id, &remittance);
+        env.storage().persistent().set(&remittance_id, &remittance);
 
         Ok(remittance_id)
     }
@@ -438,12 +436,16 @@ impl RemittanceHubContract {
             return Err(RemittanceError::InvalidAmount);
         }
 
-        let config: OracleConfig = env.storage().persistent()
+        let config: OracleConfig = env
+            .storage()
+            .persistent()
             .get(&HubOracleKey::OracleConfig)
             .ok_or(RemittanceError::OracleNotConfigured)?;
 
-        let cached: Option<CachedRate> = env.storage().persistent()
-            .get(&HubOracleKey::CachedRate(from_asset.clone(), to_asset.clone()));
+        let cached: Option<CachedRate> = env.storage().persistent().get(&HubOracleKey::CachedRate(
+            from_asset.clone(),
+            to_asset.clone(),
+        ));
 
         let result = oracle::get_conversion_rate(
             &env,
@@ -464,10 +466,9 @@ impl RemittanceHubContract {
                     from_asset: from_asset.clone(),
                     to_asset: to_asset.clone(),
                 };
-                env.storage().persistent().set(
-                    &HubOracleKey::CachedRate(from_asset, to_asset),
-                    &new_cache,
-                );
+                env.storage()
+                    .persistent()
+                    .set(&HubOracleKey::CachedRate(from_asset, to_asset), &new_cache);
                 Ok(conversion)
             }
             Err(_) => {
@@ -489,10 +490,9 @@ impl RemittanceHubContract {
                             from_asset: from_asset.clone(),
                             to_asset: to_asset.clone(),
                         };
-                        env.storage().persistent().set(
-                            &HubOracleKey::CachedRate(from_asset, to_asset),
-                            &new_cache,
-                        );
+                        env.storage()
+                            .persistent()
+                            .set(&HubOracleKey::CachedRate(from_asset, to_asset), &new_cache);
                         Ok(conversion)
                     }
                     Err(_) => Err(RemittanceError::ConversionFailed),
@@ -501,7 +501,11 @@ impl RemittanceHubContract {
         }
     }
 
-    pub fn complete_remittance(env: Env, remittance_id: u64, caller: Address) -> Result<(), RemittanceError> {
+    pub fn complete_remittance(
+        env: Env,
+        remittance_id: u64,
+        caller: Address,
+    ) -> Result<(), RemittanceError> {
         caller.require_auth();
 
         let mut remittance: RemittanceData = env
@@ -539,6 +543,9 @@ impl RemittanceHubContract {
         escrow_id: u64,
         memo: String,
     ) -> Result<u64, RemittanceError> {
+        if upgradeable::is_paused(&env) {
+            return Err(RemittanceError::ContractPaused);
+        }
         sender.require_auth();
         Self::enforce_rate_limit(&env, &sender, FunctionType::Invoice)?;
 
@@ -551,13 +558,18 @@ impl RemittanceHubContract {
             return Err(RemittanceError::DueDateInPast);
         }
 
-        let mut counter: u64 = env.storage().persistent().get(&DataKey::InvoiceCounter).unwrap_or(0);
+        let mut counter: u64 = env
+            .storage()
+            .persistent()
+            .get(&DataKey::InvoiceCounter)
+            .unwrap_or(0);
         counter = counter.checked_add(1).unwrap_or(counter);
 
         let converted_amount = Self::convert_with_oracle(&env, amount, &asset.code);
 
         let fee_percentage = 250;
-        let fees = amount.checked_mul(fee_percentage)
+        let fees = amount
+            .checked_mul(fee_percentage)
             .unwrap_or(0)
             .checked_div(10000)
             .unwrap_or(0);
@@ -582,27 +594,37 @@ impl RemittanceHubContract {
             memo,
         };
 
-        env.storage().persistent().set(&DataKey::Invoice(counter), &invoice);
-        env.storage().persistent().set(&DataKey::InvoiceCounter, &counter);
+        env.storage()
+            .persistent()
+            .set(&DataKey::Invoice(counter), &invoice);
+        env.storage()
+            .persistent()
+            .set(&DataKey::InvoiceCounter, &counter);
 
         if escrow_id > 0 {
-            env.storage().persistent().set(&DataKey::EscrowInvoice(escrow_id), &counter);
+            env.storage()
+                .persistent()
+                .set(&DataKey::EscrowInvoice(escrow_id), &counter);
         }
 
         env.events().publish(
             (symbol_short!("inv_gen"), counter),
-            (sender, amount, total_due, due_date)
+            (sender, amount, total_due, due_date),
         );
 
         Ok(counter)
     }
 
     pub fn get_invoice(env: Env, invoice_id: u64) -> Option<Invoice> {
-        env.storage().persistent().get(&DataKey::Invoice(invoice_id))
+        env.storage()
+            .persistent()
+            .get(&DataKey::Invoice(invoice_id))
     }
 
     pub fn get_invoice_by_escrow(env: Env, escrow_id: u64) -> Option<u64> {
-        env.storage().persistent().get(&DataKey::EscrowInvoice(escrow_id))
+        env.storage()
+            .persistent()
+            .get(&DataKey::EscrowInvoice(escrow_id))
     }
 
     pub fn mark_invoice_paid(
@@ -610,10 +632,15 @@ impl RemittanceHubContract {
         invoice_id: u64,
         caller: Address,
     ) -> Result<(), RemittanceError> {
+        if upgradeable::is_paused(&env) {
+            return Err(RemittanceError::ContractPaused);
+        }
         caller.require_auth();
         Self::enforce_rate_limit(&env, &caller, FunctionType::Invoice)?;
 
-        let mut invoice: Invoice = env.storage().persistent()
+        let mut invoice: Invoice = env
+            .storage()
+            .persistent()
             .get(&DataKey::Invoice(invoice_id))
             .ok_or(RemittanceError::InvoiceNotFound)?;
 
@@ -628,26 +655,27 @@ impl RemittanceHubContract {
         invoice.status = InvoiceStatus::Paid;
         invoice.paid_at = env.ledger().timestamp();
 
-        env.storage().persistent().set(&DataKey::Invoice(invoice_id), &invoice);
+        env.storage()
+            .persistent()
+            .set(&DataKey::Invoice(invoice_id), &invoice);
 
         env.events().publish(
             (symbol_short!("inv_paid"), invoice_id),
-            (caller, invoice.paid_at)
+            (caller, invoice.paid_at),
         );
 
         Ok(())
     }
 
-    pub fn mark_invoice_overdue(
-        env: Env,
-        invoice_id: u64,
-    ) -> Result<(), RemittanceError> {
-        let mut invoice: Invoice = env.storage().persistent()
+    pub fn mark_invoice_overdue(env: Env, invoice_id: u64) -> Result<(), RemittanceError> {
+        let mut invoice: Invoice = env
+            .storage()
+            .persistent()
             .get(&DataKey::Invoice(invoice_id))
             .ok_or(RemittanceError::InvoiceNotFound)?;
 
         let current_time = env.ledger().timestamp();
-        
+
         if current_time <= invoice.due_date {
             return Err(RemittanceError::InvalidInvoiceStatus);
         }
@@ -658,12 +686,12 @@ impl RemittanceHubContract {
 
         invoice.status = InvoiceStatus::Overdue;
 
-        env.storage().persistent().set(&DataKey::Invoice(invoice_id), &invoice);
+        env.storage()
+            .persistent()
+            .set(&DataKey::Invoice(invoice_id), &invoice);
 
-        env.events().publish(
-            (symbol_short!("inv_over"), invoice_id),
-            current_time
-        );
+        env.events()
+            .publish((symbol_short!("inv_over"), invoice_id), current_time);
 
         Ok(())
     }
@@ -675,7 +703,9 @@ impl RemittanceHubContract {
     ) -> Result<(), RemittanceError> {
         caller.require_auth();
 
-        let mut invoice: Invoice = env.storage().persistent()
+        let mut invoice: Invoice = env
+            .storage()
+            .persistent()
             .get(&DataKey::Invoice(invoice_id))
             .ok_or(RemittanceError::InvoiceNotFound)?;
 
@@ -689,12 +719,12 @@ impl RemittanceHubContract {
 
         invoice.status = InvoiceStatus::Cancelled;
 
-        env.storage().persistent().set(&DataKey::Invoice(invoice_id), &invoice);
+        env.storage()
+            .persistent()
+            .set(&DataKey::Invoice(invoice_id), &invoice);
 
-        env.events().publish(
-            (symbol_short!("inv_canc"), invoice_id),
-            caller
-        );
+        env.events()
+            .publish((symbol_short!("inv_canc"), invoice_id), caller);
 
         Ok(())
     }
@@ -711,7 +741,9 @@ impl RemittanceHubContract {
             return Err(RemittanceError::InvalidAmount);
         }
 
-        let mut invoice: Invoice = env.storage().persistent()
+        let mut invoice: Invoice = env
+            .storage()
+            .persistent()
             .get(&DataKey::Invoice(invoice_id))
             .ok_or(RemittanceError::InvoiceNotFound)?;
 
@@ -724,7 +756,8 @@ impl RemittanceHubContract {
         }
 
         let fee_percentage = 250;
-        let fees = new_amount.checked_mul(fee_percentage)
+        let fees = new_amount
+            .checked_mul(fee_percentage)
             .unwrap_or(0)
             .checked_div(10000)
             .unwrap_or(0);
@@ -733,11 +766,13 @@ impl RemittanceHubContract {
         invoice.fees = fees;
         invoice.total_due = new_amount.checked_add(fees).unwrap_or(new_amount);
 
-        env.storage().persistent().set(&DataKey::Invoice(invoice_id), &invoice);
+        env.storage()
+            .persistent()
+            .set(&DataKey::Invoice(invoice_id), &invoice);
 
         env.events().publish(
             (symbol_short!("inv_upd"), invoice_id),
-            (caller, new_amount, invoice.total_due)
+            (caller, new_amount, invoice.total_due),
         );
 
         Ok(())
@@ -752,19 +787,163 @@ impl RemittanceHubContract {
         Self::convert_currency(env, amount, from_asset, to_asset)
     }
 
+    pub fn batch_create_escrows(
+        env: Env,
+        sender: Address,
+        requests: soroban_sdk::Vec<EscrowRequest>,
+    ) -> Result<soroban_sdk::Vec<u64>, RemittanceError> {
+        sender.require_auth();
+
+        if requests.len() > 10 {
+            return Err(RemittanceError::BatchTooLarge);
+        }
+
+        let mut ids = soroban_sdk::Vec::new(&env);
+        for request in requests.iter() {
+            let id = Self::create_escrow_internal(&env, &sender, request)?;
+            ids.push_back(id);
+        }
+
+        env.events().publish(
+            (symbol_short!("batch_cre"), sender),
+            ids.clone(),
+        );
+
+        Ok(ids)
+    }
+
+    fn create_escrow_internal(
+        env: &Env,
+        sender: &Address,
+        request: EscrowRequest,
+    ) -> Result<u64, RemittanceError> {
+        if request.amount <= 0 {
+            return Err(RemittanceError::InvalidAmount);
+        }
+
+        let current_time = env.ledger().timestamp();
+        if request.expiration_timestamp <= current_time {
+            return Err(RemittanceError::DueDateInPast);
+        }
+
+        let mut counter: u64 = env.storage().persistent().get(&DataKey::EscrowCounter).unwrap_or(0);
+        counter = counter.checked_add(1).ok_or(RemittanceError::InvalidAmount)?;
+
+        let escrow = EscrowData {
+            sender: sender.clone(),
+            recipient: request.recipient,
+            amount: request.amount,
+            asset: request.asset,
+            expiration_timestamp: request.expiration_timestamp,
+            status: symbol_short!("pending"),
+        };
+
+        env.storage().persistent().set(&DataKey::Escrow(counter), &escrow);
+        env.storage().persistent().set(&DataKey::EscrowCounter, &counter);
+
+        Ok(counter)
+    }
+
+    pub fn batch_deposit(
+        env: Env,
+        sender: Address,
+        escrow_ids: soroban_sdk::Vec<u64>,
+        token_address: Address,
+    ) -> Result<(), RemittanceError> {
+        sender.require_auth();
+
+        let mut total_amount: i128 = 0;
+        let mut total_fees: i128 = 0;
+        let fee_percentage = 250;
+
+        for id in escrow_ids.iter() {
+            let mut escrow: EscrowData = env.storage().persistent()
+                .get(&DataKey::Escrow(id))
+                .ok_or(RemittanceError::NotFound)?;
+            
+            if escrow.sender != sender {
+                return Err(RemittanceError::Unauthorized);
+            }
+            if escrow.status != symbol_short!("pending") {
+                return Err(RemittanceError::InvalidStatus);
+            }
+
+            let fees = escrow.amount.checked_mul(fee_percentage)
+                .unwrap_or(0)
+                .checked_div(10000)
+                .unwrap_or(0);
+            
+            total_amount = total_amount.checked_add(escrow.amount).ok_or(RemittanceError::InvalidAmount)?;
+            total_fees = total_fees.checked_add(fees).ok_or(RemittanceError::InvalidAmount)?;
+
+            escrow.status = symbol_short!("funded");
+            env.storage().persistent().set(&DataKey::Escrow(id), &escrow);
+        }
+
+        let total_transfer = total_amount.checked_add(total_fees).ok_or(RemittanceError::InvalidAmount)?;
+
+        if total_transfer > 0 {
+            let token_client = soroban_sdk::token::Client::new(&env, &token_address);
+            token_client.transfer(&sender, &env.current_contract_address(), &total_transfer);
+        }
+
+        env.events().publish(
+            (symbol_short!("batch_dep"), sender),
+            (escrow_ids, total_amount, total_fees),
+        );
+
+        Ok(())
+    }
+
+    pub fn batch_release(
+        env: Env,
+        caller: Address,
+        escrow_ids: soroban_sdk::Vec<u64>,
+        token_address: Address,
+    ) -> Result<(), RemittanceError> {
+        caller.require_auth();
+
+        for id in escrow_ids.iter() {
+            let mut escrow: EscrowData = env.storage().persistent()
+                .get(&DataKey::Escrow(id))
+                .ok_or(RemittanceError::NotFound)?;
+            
+            if escrow.recipient != caller && escrow.sender != caller {
+                return Err(RemittanceError::Unauthorized);
+            }
+            if escrow.status != symbol_short!("funded") {
+                return Err(RemittanceError::InvalidStatus);
+            }
+
+            escrow.status = symbol_short!("release");
+            env.storage().persistent().set(&DataKey::Escrow(id), &escrow);
+
+            let token_client = soroban_sdk::token::Client::new(&env, &token_address);
+            token_client.transfer(&env.current_contract_address(), &escrow.recipient, &escrow.amount);
+        }
+
+        env.events().publish(
+            (symbol_short!("batch_rel"), caller),
+            escrow_ids,
+        );
+
+        Ok(())
+    }
+
     fn convert_with_oracle(env: &Env, amount: i128, asset_code: &String) -> i128 {
         let target = String::from_str(env, "USD");
         if asset_code == &target {
             return amount;
         }
 
-        let config: Option<OracleConfig> = env.storage().persistent()
-            .get(&HubOracleKey::OracleConfig);
+        let config: Option<OracleConfig> =
+            env.storage().persistent().get(&HubOracleKey::OracleConfig);
 
         match config {
             Some(cfg) => {
-                let cached: Option<CachedRate> = env.storage().persistent()
-                    .get(&HubOracleKey::CachedRate(asset_code.clone(), target.clone()));
+                let cached: Option<CachedRate> = env.storage().persistent().get(
+                    &HubOracleKey::CachedRate(asset_code.clone(), target.clone()),
+                );
 
                 let result = oracle::get_conversion_rate(
                     env,
@@ -784,104 +963,62 @@ impl RemittanceHubContract {
         }
     }
 
-    pub fn configure_rate_limit(
+    // ── Upgradeable pattern ────────────────────────────────────────────
+
+    /// Return the current contract version.
+    pub fn version(env: Env) -> u32 {
+        upgradeable::get_version(&env)
+    }
+
+    /// Return `true` if the contract is paused.
+    pub fn is_paused(env: Env) -> bool {
+        upgradeable::is_paused(&env)
+    }
+
+    /// Pause the contract. Admin-only.
+    pub fn pause(env: Env, admin: Address) -> Result<(), upgradeable::UpgradeError> {
+        let stored_admin: Address =
+            env.storage().persistent().get(&DataKey::Admin).unwrap();
+        if admin != stored_admin {
+            return Err(upgradeable::UpgradeError::Unauthorized);
+        }
+        upgradeable::pause(&env, &admin)
+    }
+
+    /// Unpause the contract. Admin-only.
+    pub fn unpause(env: Env, admin: Address) -> Result<(), upgradeable::UpgradeError> {
+        let stored_admin: Address =
+            env.storage().persistent().get(&DataKey::Admin).unwrap();
+        if admin != stored_admin {
+            return Err(upgradeable::UpgradeError::Unauthorized);
+        }
+        upgradeable::unpause(&env, &admin)
+    }
+
+    /// Upgrade the contract WASM. Admin-only.
+    /// The contract is paused until `migrate` is called on the new code.
+    pub fn upgrade(
         env: Env,
         admin: Address,
-        max_count: u32,
-        interval: u64,
-    ) -> Result<(), RemittanceError> {
-        admin.require_auth();
-
-        let stored_admin: Address = env.storage().persistent()
-            .get(&DataKey::Admin)
-            .ok_or(RemittanceError::Unauthorized)?;
+        new_wasm_hash: BytesN<32>,
+    ) -> Result<(), upgradeable::UpgradeError> {
+        let stored_admin: Address =
+            env.storage().persistent().get(&DataKey::Admin).unwrap();
         if admin != stored_admin {
-            return Err(RemittanceError::Unauthorized);
+            return Err(upgradeable::UpgradeError::Unauthorized);
         }
-
-        let config = RateLimitConfig {
-            enabled: true,
-            max_count,
-            interval,
-        };
-        rate_limit::set_config(&env, config);
-
-        env.events().publish((symbol_short!("rl_cfg"),), (max_count, interval));
-
-        Ok(())
+        upgradeable::upgrade(&env, &admin, new_wasm_hash)
     }
 
-    pub fn configure_global_rate_limit(
-        env: Env,
-        admin: Address,
-        max_count: u32,
-        interval: u64,
-    ) -> Result<(), RemittanceError> {
-        admin.require_auth();
-
-        let stored_admin: Address = env.storage().persistent()
-            .get(&DataKey::Admin)
-            .ok_or(RemittanceError::Unauthorized)?;
+    /// Finalize migration after an upgrade. Admin-only.
+    /// Unpause the contract and return the new version number.
+    pub fn migrate(env: Env, admin: Address) -> Result<u32, upgradeable::UpgradeError> {
+        let stored_admin: Address =
+            env.storage().persistent().get(&DataKey::Admin).unwrap();
         if admin != stored_admin {
-            return Err(RemittanceError::Unauthorized);
+            return Err(upgradeable::UpgradeError::Unauthorized);
         }
-
-        let config = RateLimitConfig {
-            enabled: true,
-            max_count,
-            interval,
-        };
-        rate_limit::set_global_config(&env, config);
-
-        env.events().publish((symbol_short!("rl_gl_cf"),), (max_count, interval));
-
-        Ok(())
-    }
-
-    pub fn set_rate_limit_exemption(
-        env: Env,
-        admin: Address,
-        address: Address,
-        exempt: bool,
-    ) -> Result<(), RemittanceError> {
-        admin.require_auth();
-
-        let stored_admin: Address = env.storage().persistent()
-            .get(&DataKey::Admin)
-            .ok_or(RemittanceError::Unauthorized)?;
-        if admin != stored_admin {
-            return Err(RemittanceError::Unauthorized);
-        }
-
-        rate_limit::set_exemption(&env, &address, exempt);
-
-        env.events().publish((symbol_short!("rl_exmpt"),), (address, exempt));
-
-        Ok(())
-    }
-
-    pub fn get_rate_limit_config(env: Env) -> Option<RateLimitConfig> {
-        rate_limit::get_config(&env)
-    }
-
-    pub fn get_global_rate_limit_config(env: Env) -> Option<RateLimitConfig> {
-        rate_limit::get_global_config(&env)
-    }
-
-    pub fn is_rate_limit_exempt(env: Env, address: Address) -> bool {
-        rate_limit::is_exempt(&env, &address)
-    }
-
-    fn enforce_rate_limit(env: &Env, caller: &Address, function_type: FunctionType) -> Result<(), RemittanceError> {
-        let admin: Option<Address> = env.storage().persistent().get(&DataKey::Admin);
-        let admin = match admin {
-            Some(a) => a,
-            None => return Ok(()),
-        };
-        if !rate_limit::check_rate_limit(env, caller, function_type, &admin) {
-            return Err(RemittanceError::RateLimitExceeded);
-        }
-        Ok(())
+        upgradeable::migrate(&env, &admin)
     }
 }
 
@@ -935,7 +1072,7 @@ mod test {
             &2000,
             &String::from_str(&env, "Payment for services"),
             &0,
-            &String::from_str(&env, "Remittance memo")
+            &String::from_str(&env, "Remittance memo"),
         );
 
         assert_eq!(invoice_id, 1);
@@ -978,7 +1115,7 @@ mod test {
             &2000,
             &String::from_str(&env, "Payment"),
             &0,
-            &String::from_str(&env, "Memo")
+            &String::from_str(&env, "Memo"),
         );
 
         env.ledger().with_mut(|li| {
@@ -1020,7 +1157,7 @@ mod test {
             &2000,
             &String::from_str(&env, "Payment"),
             &0,
-            &String::from_str(&env, "Memo")
+            &String::from_str(&env, "Memo"),
         );
 
         env.ledger().with_mut(|li| {
@@ -1061,7 +1198,7 @@ mod test {
             &2000,
             &String::from_str(&env, "Payment"),
             &0,
-            &String::from_str(&env, "Memo")
+            &String::from_str(&env, "Memo"),
         );
 
         client.cancel_invoice(&invoice_id, &sender);
@@ -1098,7 +1235,7 @@ mod test {
             &2000,
             &String::from_str(&env, "Payment"),
             &0,
-            &String::from_str(&env, "Memo")
+            &String::from_str(&env, "Memo"),
         );
 
         client.update_invoice_amount(&invoice_id, &sender, &1500);
@@ -1139,7 +1276,7 @@ mod test {
             &2000,
             &String::from_str(&env, "Payment"),
             &escrow_id,
-            &String::from_str(&env, "Memo")
+            &String::from_str(&env, "Memo"),
         );
 
         let linked_invoice_id = client.get_invoice_by_escrow(&escrow_id);
@@ -1175,7 +1312,7 @@ mod test {
             &1500,
             &String::from_str(&env, "Payment"),
             &0,
-            &String::from_str(&env, "Memo")
+            &String::from_str(&env, "Memo"),
         );
 
         assert_eq!(result, Err(Ok(RemittanceError::DueDateInPast)));
@@ -1193,7 +1330,7 @@ mod test {
         let primary_oracle = Address::generate(&env);
         let secondary_oracle = Address::generate(&env);
 
-        client.initialize(&admin, &primary_oracle, &secondary_oracle, &3600);
+        client.init_hub(&admin, &primary_oracle, &secondary_oracle, &3600);
 
         let config = client.get_oracle_config();
         assert!(config.is_some());
@@ -1215,9 +1352,9 @@ mod test {
         let admin = Address::generate(&env);
         let oracle = Address::generate(&env);
 
-        client.initialize(&admin, &oracle, &oracle, &3600);
+        client.init_hub(&admin, &oracle, &oracle, &3600);
 
-        let result = client.try_initialize(&admin, &oracle, &oracle, &3600);
+        let result = client.try_init_hub(&admin, &oracle, &oracle, &3600);
         assert_eq!(result, Err(Ok(RemittanceError::AlreadyInitialized)));
     }
 
@@ -1235,7 +1372,7 @@ mod test {
         let new_primary = Address::generate(&env);
         let new_secondary = Address::generate(&env);
 
-        client.initialize(&admin, &primary, &secondary, &3600);
+        client.init_hub(&admin, &primary, &secondary, &3600);
         client.set_oracle(&admin, &new_primary, &new_secondary);
 
         let config = client.get_oracle_config().unwrap();
@@ -1255,7 +1392,7 @@ mod test {
         let oracle = Address::generate(&env);
         let other = Address::generate(&env);
 
-        client.initialize(&admin, &oracle, &oracle, &3600);
+        client.init_hub(&admin, &oracle, &oracle, &3600);
 
         let result = client.try_set_oracle(&other, &oracle, &oracle);
         assert_eq!(result, Err(Ok(RemittanceError::Unauthorized)));
@@ -1275,7 +1412,7 @@ mod test {
         let admin = Address::generate(&env);
         let oracle = Address::generate(&env);
 
-        client.initialize(&admin, &oracle, &oracle, &3600);
+        client.init_hub(&admin, &oracle, &oracle, &3600);
 
         let from = String::from_str(&env, "USDC");
         let to = String::from_str(&env, "EUR");
@@ -1294,7 +1431,7 @@ mod test {
         let admin = Address::generate(&env);
         let oracle = Address::generate(&env);
 
-        client.initialize(&admin, &oracle, &oracle, &3600);
+        client.init_hub(&admin, &oracle, &oracle, &3600);
 
         let from = String::from_str(&env, "USDC");
         let to = String::from_str(&env, "EUR");
@@ -1317,7 +1454,7 @@ mod test {
         let oracle_id = env.register_contract(None, crate::oracle::MockOracleContract);
         let oracle_client = crate::oracle::MockOracleContractClient::new(&env, &oracle_id);
         let oracle_admin = Address::generate(&env);
-        oracle_client.initialize(&oracle_admin);
+        oracle_client.init_oracle(&oracle_admin);
 
         let from = String::from_str(&env, "USDC");
         let to = String::from_str(&env, "EUR");
@@ -1327,7 +1464,7 @@ mod test {
         let client = RemittanceHubContractClient::new(&env, &contract_id);
 
         let admin = Address::generate(&env);
-        client.initialize(&admin, &oracle_id, &oracle_id, &3600);
+        client.init_hub(&admin, &oracle_id, &oracle_id, &3600);
 
         let result = client.convert_currency(&1000, &from, &to);
         assert_eq!(result.converted_amount, 920);
@@ -1346,13 +1483,13 @@ mod test {
         let oracle_id = env.register_contract(None, crate::oracle::MockOracleContract);
         let oracle_client = crate::oracle::MockOracleContractClient::new(&env, &oracle_id);
         let oracle_admin = Address::generate(&env);
-        oracle_client.initialize(&oracle_admin);
+        oracle_client.init_oracle(&oracle_admin);
 
         let contract_id = env.register_contract(None, RemittanceHubContract);
         let client = RemittanceHubContractClient::new(&env, &contract_id);
 
         let admin = Address::generate(&env);
-        client.initialize(&admin, &oracle_id, &oracle_id, &3600);
+        client.init_hub(&admin, &oracle_id, &oracle_id, &3600);
 
         let asset = String::from_str(&env, "USDC");
         let result = client.convert_currency(&5000, &asset, &asset);
@@ -1369,7 +1506,7 @@ mod test {
 
         let admin = Address::generate(&env);
         let oracle = Address::generate(&env);
-        client.initialize(&admin, &oracle, &oracle, &3600);
+        client.init_hub(&admin, &oracle, &oracle, &3600);
 
         let from = String::from_str(&env, "USDC");
         let to = String::from_str(&env, "EUR");
@@ -1406,7 +1543,7 @@ mod test {
         let secondary_id = env.register_contract(None, crate::oracle::MockOracleContract);
         let secondary_client = crate::oracle::MockOracleContractClient::new(&env, &secondary_id);
         let oracle_admin = Address::generate(&env);
-        secondary_client.initialize(&oracle_admin);
+        secondary_client.init_oracle(&oracle_admin);
 
         let from = String::from_str(&env, "USDC");
         let to = String::from_str(&env, "EUR");
@@ -1416,7 +1553,7 @@ mod test {
         let client = RemittanceHubContractClient::new(&env, &contract_id);
 
         let admin = Address::generate(&env);
-        client.initialize(&admin, &bogus_primary, &secondary_id, &3600);
+        client.init_hub(&admin, &bogus_primary, &secondary_id, &3600);
 
         let cached = CachedRate {
             rate: 900000,
@@ -1442,7 +1579,7 @@ mod test {
         let admin = Address::generate(&env);
         let oracle = Address::generate(&env);
 
-        client.initialize(&admin, &oracle, &oracle, &3600);
+        client.init_hub(&admin, &oracle, &oracle, &3600);
         client.set_max_staleness(&admin, &7200);
 
         let config = client.get_oracle_config().unwrap();
@@ -1460,7 +1597,7 @@ mod test {
         let oracle_id = env.register_contract(None, crate::oracle::MockOracleContract);
         let oracle_client = crate::oracle::MockOracleContractClient::new(&env, &oracle_id);
         let oracle_admin = Address::generate(&env);
-        oracle_client.initialize(&oracle_admin);
+        oracle_client.init_oracle(&oracle_admin);
 
         let from = String::from_str(&env, "USDC");
         let to = String::from_str(&env, "EUR");
@@ -1470,7 +1607,7 @@ mod test {
         let client = RemittanceHubContractClient::new(&env, &contract_id);
 
         let admin = Address::generate(&env);
-        client.initialize(&admin, &oracle_id, &oracle_id, &3600);
+        client.init_hub(&admin, &oracle_id, &oracle_id, &3600);
 
         let result = client.get_conversion_rate(&from, &to, &10000);
         assert_eq!(result.converted_amount, 8500);
@@ -1488,7 +1625,7 @@ mod test {
         let oracle_id = env.register_contract(None, crate::oracle::MockOracleContract);
         let oracle_client = crate::oracle::MockOracleContractClient::new(&env, &oracle_id);
         let oracle_admin = Address::generate(&env);
-        oracle_client.initialize(&oracle_admin);
+        oracle_client.init_oracle(&oracle_admin);
 
         let from = String::from_str(&env, "EUR");
         let to = String::from_str(&env, "USD");
@@ -1498,7 +1635,7 @@ mod test {
         let client = RemittanceHubContractClient::new(&env, &contract_id);
 
         let admin = Address::generate(&env);
-        client.initialize(&admin, &oracle_id, &oracle_id, &3600);
+        client.init_hub(&admin, &oracle_id, &oracle_id, &3600);
 
         let sender = Address::generate(&env);
         let recipient = Address::generate(&env);
@@ -1930,46 +2067,7 @@ mod test {
     }
 
     #[test]
-    fn test_configure_rate_limit() {
-        let env = Env::default();
-        env.mock_all_auths();
-
-        let contract_id = env.register_contract(None, RemittanceHubContract);
-        let client = RemittanceHubContractClient::new(&env, &contract_id);
-
-        let admin = Address::generate(&env);
-        let oracle = Address::generate(&env);
-        client.initialize(&admin, &oracle, &oracle, &3600);
-
-        client.configure_rate_limit(&admin, &5, &60);
-
-        let config = client.get_rate_limit_config();
-        assert!(config.is_some());
-        let cfg = config.unwrap();
-        assert_eq!(cfg.enabled, true);
-        assert_eq!(cfg.max_count, 5);
-        assert_eq!(cfg.interval, 60);
-    }
-
-    #[test]
-    fn test_configure_rate_limit_unauthorized() {
-        let env = Env::default();
-        env.mock_all_auths();
-
-        let contract_id = env.register_contract(None, RemittanceHubContract);
-        let client = RemittanceHubContractClient::new(&env, &contract_id);
-
-        let admin = Address::generate(&env);
-        let other = Address::generate(&env);
-        let oracle = Address::generate(&env);
-        client.initialize(&admin, &oracle, &oracle, &3600);
-
-        let result = client.try_configure_rate_limit(&other, &5, &60);
-        assert_eq!(result, Err(Ok(RemittanceError::Unauthorized)));
-    }
-
-    #[test]
-    fn test_rate_limit_blocks_remittance() {
+    fn test_batch_create_escrows_success() {
         let env = Env::default();
         env.mock_all_auths();
         env.ledger().with_mut(|li| {
@@ -1978,196 +2076,115 @@ mod test {
 
         let contract_id = env.register_contract(None, RemittanceHubContract);
         let client = RemittanceHubContractClient::new(&env, &contract_id);
-
-        let admin = Address::generate(&env);
-        let oracle = Address::generate(&env);
-        client.initialize(&admin, &oracle, &oracle, &3600);
-
-        // Max 2 calls per 60s window
-        client.configure_rate_limit(&admin, &2, &60);
-
-        let from = Address::generate(&env);
-        let to = Address::generate(&env);
-
-        // First two succeed
-        let _id1 = client.send_remittance(&from, &to, &1000, &symbol_short!("USD"));
-        let _id2 = client.send_remittance(&from, &to, &2000, &symbol_short!("USD"));
-
-        // Third should be rate limited
-        let result = client.try_send_remittance(&from, &to, &3000, &symbol_short!("USD"));
-        assert_eq!(result, Err(Ok(RemittanceError::RateLimitExceeded)));
-    }
-
-    #[test]
-    fn test_rate_limit_blocks_invoice() {
-        let env = Env::default();
-        env.mock_all_auths();
-        env.ledger().with_mut(|li| {
-            li.timestamp = 1000;
-        });
-
-        let contract_id = env.register_contract(None, RemittanceHubContract);
-        let client = RemittanceHubContractClient::new(&env, &contract_id);
-
-        let admin = Address::generate(&env);
-        let oracle = Address::generate(&env);
-        client.initialize(&admin, &oracle, &oracle, &3600);
-
-        // Max 1 call per 60s window
-        client.configure_rate_limit(&admin, &1, &60);
 
         let sender = Address::generate(&env);
-        let recipient = Address::generate(&env);
+        let recipient1 = Address::generate(&env);
+        let recipient2 = Address::generate(&env);
         let issuer = Address::generate(&env);
+
         let asset = Asset {
             code: String::from_str(&env, "USDC"),
             issuer,
         };
 
-        // First invoice succeeds
-        let _id = client.generate_invoice(
-            &sender, &recipient, &1000, &asset, &2000,
-            &String::from_str(&env, "svc"), &0, &String::from_str(&env, "memo"),
-        );
+        let req1 = EscrowRequest {
+            recipient: recipient1,
+            amount: 1000,
+            asset: asset.clone(),
+            expiration_timestamp: 2000,
+        };
+        let req2 = EscrowRequest {
+            recipient: recipient2,
+            amount: 2000,
+            asset: asset.clone(),
+            expiration_timestamp: 3000,
+        };
 
-        // Second should be rate limited
-        let result = client.try_generate_invoice(
-            &sender, &recipient, &500, &asset, &2000,
-            &String::from_str(&env, "svc2"), &0, &String::from_str(&env, "memo2"),
-        );
-        assert_eq!(result, Err(Ok(RemittanceError::RateLimitExceeded)));
+        let mut requests = soroban_sdk::Vec::new(&env);
+        requests.push_back(req1);
+        requests.push_back(req2);
+
+        let ids = client.batch_create_escrows(&sender, &requests);
+        assert_eq!(ids.len(), 2);
     }
 
     #[test]
-    fn test_rate_limit_window_reset() {
-        let env = Env::default();
-        env.mock_all_auths();
-        env.ledger().with_mut(|li| {
-            li.timestamp = 1000;
-        });
-
-        let contract_id = env.register_contract(None, RemittanceHubContract);
-        let client = RemittanceHubContractClient::new(&env, &contract_id);
-
-        let admin = Address::generate(&env);
-        let oracle = Address::generate(&env);
-        client.initialize(&admin, &oracle, &oracle, &3600);
-
-        // Max 1 call per 60s window
-        client.configure_rate_limit(&admin, &1, &60);
-
-        let from = Address::generate(&env);
-        let to = Address::generate(&env);
-
-        let _id1 = client.send_remittance(&from, &to, &1000, &symbol_short!("USD"));
-
-        // Blocked
-        let result = client.try_send_remittance(&from, &to, &2000, &symbol_short!("USD"));
-        assert_eq!(result, Err(Ok(RemittanceError::RateLimitExceeded)));
-
-        // Advance past window
-        env.ledger().with_mut(|li| {
-            li.timestamp = 1070;
-        });
-
-        // Should succeed after window reset
-        let _id2 = client.send_remittance(&from, &to, &3000, &symbol_short!("USD"));
-    }
-
-    #[test]
-    fn test_rate_limit_admin_exempt() {
-        let env = Env::default();
-        env.mock_all_auths();
-        env.ledger().with_mut(|li| {
-            li.timestamp = 1000;
-        });
-
-        let contract_id = env.register_contract(None, RemittanceHubContract);
-        let client = RemittanceHubContractClient::new(&env, &contract_id);
-
-        let admin = Address::generate(&env);
-        let oracle = Address::generate(&env);
-        client.initialize(&admin, &oracle, &oracle, &3600);
-
-        // Max 1 call per 60s window
-        client.configure_rate_limit(&admin, &1, &60);
-
-        let to = Address::generate(&env);
-
-        // Admin is exempt, can make multiple calls
-        let _id1 = client.send_remittance(&admin, &to, &1000, &symbol_short!("USD"));
-        let _id2 = client.send_remittance(&admin, &to, &2000, &symbol_short!("USD"));
-    }
-
-    #[test]
-    fn test_rate_limit_exemption() {
-        let env = Env::default();
-        env.mock_all_auths();
-        env.ledger().with_mut(|li| {
-            li.timestamp = 1000;
-        });
-
-        let contract_id = env.register_contract(None, RemittanceHubContract);
-        let client = RemittanceHubContractClient::new(&env, &contract_id);
-
-        let admin = Address::generate(&env);
-        let oracle = Address::generate(&env);
-        client.initialize(&admin, &oracle, &oracle, &3600);
-
-        // Max 1 call per 60s window
-        client.configure_rate_limit(&admin, &1, &60);
-
-        let from = Address::generate(&env);
-        let to = Address::generate(&env);
-
-        // Exempt the sender
-        client.set_rate_limit_exemption(&admin, &from, &true);
-        assert!(client.is_rate_limit_exempt(&from));
-
-        // Exempt user can make multiple calls
-        let _id1 = client.send_remittance(&from, &to, &1000, &symbol_short!("USD"));
-        let _id2 = client.send_remittance(&from, &to, &2000, &symbol_short!("USD"));
-    }
-
-    #[test]
-    fn test_configure_global_rate_limit() {
+    fn test_batch_create_escrows_too_large() {
         let env = Env::default();
         env.mock_all_auths();
 
         let contract_id = env.register_contract(None, RemittanceHubContract);
         let client = RemittanceHubContractClient::new(&env, &contract_id);
 
-        let admin = Address::generate(&env);
-        let oracle = Address::generate(&env);
-        client.initialize(&admin, &oracle, &oracle, &3600);
+        let sender = Address::generate(&env);
+        let recipient = Address::generate(&env);
+        let asset = Asset {
+            code: String::from_str(&env, "USDC"),
+            issuer: Address::generate(&env),
+        };
 
-        client.configure_global_rate_limit(&admin, &100, &300);
-
-        let config = client.get_global_rate_limit_config();
-        assert!(config.is_some());
-        let cfg = config.unwrap();
-        assert_eq!(cfg.enabled, true);
-        assert_eq!(cfg.max_count, 100);
-        assert_eq!(cfg.interval, 300);
-    }
-
-    #[test]
-    fn test_no_rate_limit_when_unconfigured() {
-        let env = Env::default();
-        env.mock_all_auths();
-        env.ledger().with_mut(|li| {
-            li.timestamp = 1000;
-        });
-
-        let contract_id = env.register_contract(None, RemittanceHubContract);
-        let client = RemittanceHubContractClient::new(&env, &contract_id);
-
-        let from = Address::generate(&env);
-        let to = Address::generate(&env);
-
-        // No rate limit configured, all should pass
-        for _ in 0..5u64 {
-            let _id = client.send_remittance(&from, &to, &1000, &symbol_short!("USD"));
+        let mut requests = soroban_sdk::Vec::new(&env);
+        for _ in 0..11 {
+            requests.push_back(EscrowRequest {
+                recipient: recipient.clone(),
+                amount: 100,
+                asset: asset.clone(),
+                expiration_timestamp: 2000,
+            });
         }
+
+        let result = client.try_batch_create_escrows(&sender, &requests);
+        assert_eq!(result, Err(Ok(RemittanceError::BatchTooLarge)));
+    }
+
+    #[test]
+    fn test_batch_deposit_and_release() {
+        let env = Env::default();
+        env.mock_all_auths();
+        env.ledger().with_mut(|li| {
+            li.timestamp = 1000;
+        });
+
+        let contract_id = env.register_contract(None, RemittanceHubContract);
+        let client = RemittanceHubContractClient::new(&env, &contract_id);
+
+        let token_admin = Address::generate(&env);
+        let token_id = env.register_stellar_asset_contract(token_admin.clone());
+        let token_client = soroban_sdk::token::StellarAssetClient::new(&env, &token_id);
+
+        let sender = Address::generate(&env);
+        let recipient = Address::generate(&env);
+        let asset = Asset {
+            code: String::from_str(&env, "USDC"),
+            issuer: Address::generate(&env),
+        };
+
+        token_client.mint(&sender, &10000);
+
+        let mut requests = soroban_sdk::Vec::new(&env);
+        requests.push_back(EscrowRequest {
+            recipient: recipient.clone(),
+            amount: 1000,
+            asset: asset.clone(),
+            expiration_timestamp: 2000,
+        });
+        requests.push_back(EscrowRequest {
+            recipient: recipient.clone(),
+            amount: 2000,
+            asset: asset.clone(),
+            expiration_timestamp: 3000,
+        });
+
+        let ids = client.batch_create_escrows(&sender, &requests);
+        
+        client.batch_deposit(&sender, &ids, &token_id);
+
+        let sender_balance = soroban_sdk::token::Client::new(&env, &token_id).balance(&sender);
+        assert_eq!(sender_balance, 10000 - 3075);
+
+        client.batch_release(&recipient, &ids, &token_id);
+        
+        let recipient_balance = soroban_sdk::token::Client::new(&env, &token_id).balance(&recipient);
+        assert_eq!(recipient_balance, 3000);
     }
 }
