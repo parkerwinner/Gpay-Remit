@@ -7,6 +7,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/yourusername/gpay-remit/config"
 	"github.com/yourusername/gpay-remit/handlers"
+	"github.com/yourusername/gpay-remit/middleware"
 )
 
 func main() {
@@ -48,21 +49,35 @@ func main() {
 	// API routes
 	api := router.Group("/api/v1")
 	{
-		// Remittance endpoints
-		remittanceHandler := handlers.NewRemittanceHandler(db, cfg)
-		api.POST("/remittances", remittanceHandler.SendRemittance)
-		api.GET("/remittances/:id", remittanceHandler.GetRemittance)
-		api.GET("/remittances", remittanceHandler.ListRemittances)
-		api.POST("/remittances/:id/complete", remittanceHandler.CompleteRemittance)
-
-		// Invoice endpoints
-		api.POST("/invoices", remittanceHandler.CreateInvoice)
-		api.GET("/invoices/:id", remittanceHandler.GetInvoice)
-
-		// User endpoints (stub)
+		// Public auth endpoints
+		authHandler := handlers.NewAuthHandler(db, cfg)
+		api.POST("/auth/refresh", authHandler.Refresh)
+		api.POST("/auth/login", func(c *gin.Context) {
+			// Stub login endpoint
+			c.JSON(http.StatusOK, gin.H{"message": "Login endpoint stub"})
+		})
+		
+		// Public user endpoints
 		api.POST("/users", func(c *gin.Context) {
 			c.JSON(http.StatusOK, gin.H{"message": "User creation endpoint"})
 		})
+
+		// Protected routes
+		protected := api.Group("/")
+		protected.Use(middleware.JwtAuthMiddleware(cfg))
+		{
+			// Remittance endpoints
+			remittanceHandler := handlers.NewRemittanceHandler(db, cfg)
+			protected.POST("/remittances/create", remittanceHandler.CreateRemittance)
+			protected.POST("/remittances", remittanceHandler.SendRemittance)
+			protected.GET("/remittances/:id", remittanceHandler.GetRemittance)
+			protected.GET("/remittances", remittanceHandler.ListRemittances)
+			protected.POST("/remittances/:id/complete", middleware.RequireRole("admin"), remittanceHandler.CompleteRemittance)
+
+			// Invoice endpoints
+			protected.POST("/invoices", remittanceHandler.CreateInvoice)
+			protected.GET("/invoices/:id", remittanceHandler.GetInvoice)
+		}
 	}
 
 	// Start server
