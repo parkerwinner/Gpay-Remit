@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"time"
@@ -8,19 +9,32 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/yourusername/gpay-remit/config"
 	"github.com/yourusername/gpay-remit/models"
+	"github.com/yourusername/gpay-remit/utils"
 	"gorm.io/gorm"
 )
 
 type RemittanceHandler struct {
-	db     *gorm.DB
-	config *config.Config
+	db            *gorm.DB
+	config        *config.Config
+	stellarClient utils.StellarClientInterface
 }
 
 func NewRemittanceHandler(db *gorm.DB, cfg *config.Config) *RemittanceHandler {
 	return &RemittanceHandler{
-		db:     db,
-		config: cfg,
+		db:            db,
+		config:        cfg,
+		stellarClient: utils.NewStellarClient(cfg.HorizonURL, cfg.NetworkPassphrase),
 	}
+}
+
+type CreateRemittanceRequest struct {
+	SenderAccount   string                 `json:"sender_account" binding:"required"`
+	RecipientAccount string                `json:"recipient_account" binding:"required"`
+	Amount          float64                `json:"amount" binding:"required,gt=0"`
+	AssetCode       string                 `json:"asset_code" binding:"required"`
+	AssetIssuer     string                 `json:"asset_issuer"`
+	Conditions      map[string]interface{} `json:"conditions"`
+	Notes           string                 `json:"notes"`
 }
 
 type SendRemittanceRequest struct {
@@ -54,10 +68,75 @@ func (h *RemittanceHandler) SendRemittance(c *gin.Context) {
 		return
 	}
 
-	// TODO: Call Soroban contract to initiate escrow
-	// stellarClient := utils.NewStellarClient(h.config.HorizonURL, h.config.NetworkPassphrase)
-
 	c.JSON(http.StatusCreated, payment)
+}
+
+func (h *RemittanceHandler) CreateRemittance(c *gin.Context) {
+	var req CreateRemittanceRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	// Validate Stellar accounts
+	if err := h.stellarClient.ValidateAccount(req.SenderAccount); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("Invalid sender account: %v", err)})
+		return
+	}
+	if err := h.stellarClient.ValidateAccount(req.RecipientAccount); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("Invalid recipient account: %v", err)})
+		return
+	}
+
+	// Auth: Extract sender user ID from context (set by JWT middleware)
+	userID, exists := c.Get("userID")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
+		return
+	}
+
+	// For simplicity, we'll assume the recipient user exists or we just store the account
+	// In a real app, we'd lookup or create the recipient user.
+	// For now, we'll just set RecipientID to 0 if not found, or use a placeholder.
+
+	conditionsJSON, _ := json.Marshal(req.Conditions)
+
+	payment := models.Payment{
+		SenderID:         userID.(uint),
+		SenderAccount:    req.SenderAccount,
+		RecipientAccount: req.RecipientAccount,
+		Amount:           req.Amount,
+		Currency:         req.AssetCode,
+		Status:           "pending",
+		Conditions:       string(conditionsJSON),
+		Notes:            req.Notes,
+	}
+
+	// DB Save
+	if err := h.db.Create(&payment).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create remittance record"})
+		return
+	}
+
+	// Stellar Integration: Build escrow transaction envelope
+	xdr, err := h.stellarClient.BuildEscrowTx(
+		req.SenderAccount,
+		req.RecipientAccount,
+		req.AssetCode,
+		req.AssetIssuer,
+		fmt.Sprintf("%.7f", req.Amount),
+	)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to build Stellar transaction: %v", err)})
+		return
+	}
+
+	c.JSON(http.StatusCreated, gin.H{
+		"remittance_id": payment.ID,
+		"status":        payment.Status,
+		"tx_envelope":   xdr,
+		"message":       "Remittance initiated successfully. Please sign and submit the transaction.",
+	})
 }
 
 func (h *RemittanceHandler) GetRemittance(c *gin.Context) {

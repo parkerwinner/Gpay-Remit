@@ -68,6 +68,7 @@ func main() {
 		{
 			// Remittance endpoints
 			remittanceHandler := handlers.NewRemittanceHandler(db, cfg)
+			protected.POST("/remittances/create", remittanceHandler.CreateRemittance)
 			protected.POST("/remittances", remittanceHandler.SendRemittance)
 			protected.GET("/remittances/:id", remittanceHandler.GetRemittance)
 			protected.GET("/remittances", remittanceHandler.ListRemittances)
