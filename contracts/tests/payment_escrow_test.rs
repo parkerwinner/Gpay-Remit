@@ -191,20 +191,27 @@ fn test_events_emitted() {
     
     // Check 'created' event
     let events = env.events().all();
-    let last_event = events.last().unwrap();
-    assert_eq!(last_event.0, client.address);
+    let created_event = events.into_iter().find(|e| {
+        let topics = &e.1;
+        topics.len() > 0 && Symbol::from_val(&env, &topics.get(0).unwrap()) == Symbol::new(&env, "created")
+    }).unwrap();
     
-    let topics = last_event.1;
+    assert_eq!(created_event.0, client.address);
+    let topics = created_event.1;
     assert_eq!(Symbol::from_val(&env, &topics.get(0).unwrap()), Symbol::new(&env, "created"));
     assert_eq!(u64::from_val(&env, &topics.get(1).unwrap()), escrow_id);
-    assert_eq!(Address::from_val(&env, &last_event.2), sender);
+    assert_eq!(Address::from_val(&env, &created_event.2), sender);
 
     client.deposit(&escrow_id, &sender, &amount, &token.address);
 
     // Check 'deposit' event
     let events = env.events().all();
-    let last_event = events.last().unwrap();
-    let topics = last_event.1;
+    let deposit_event = events.into_iter().find(|e| {
+        let topics = &e.1;
+        topics.len() > 0 && Symbol::from_val(&env, &topics.get(0).unwrap()) == Symbol::new(&env, "deposit")
+    }).unwrap();
+    
+    let topics = deposit_event.1;
     assert_eq!(Symbol::from_val(&env, &topics.get(0).unwrap()), Symbol::new(&env, "deposit"));
     assert_eq!(u64::from_val(&env, &topics.get(1).unwrap()), escrow_id);
 }

@@ -1,12 +1,12 @@
 use crate::kyc::{self, KycConfig, KycDataKey, KycRecord, KycStatus};
-use crate::rate_limit::{self, FunctionType, RateLimitConfig};
+use crate::rate_limit::{self, FunctionType};
+use crate::upgradeable;
 
 use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, symbol_short, token, Address, BytesN, Env,
     Map, String, Vec,
 };
 
-use crate::upgradeable;
 
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
@@ -58,6 +58,7 @@ pub enum Error {
     DisputeNotFound = 44,
     AlreadyVoted = 45,
     ContractPaused = 46,
+    RateLimitExceeded = 47,
 }
 
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -480,6 +481,32 @@ impl PaymentEscrowContract {
 
         Ok(())
     }
+
+    fn enforce_rate_limit(
+        env: &Env,
+        caller: &Address,
+        function_type: FunctionType,
+    ) -> Result<(), Error> {
+        let admin_opt: Option<Address> = env.storage().instance().get(&DataKey::Admin);
+        let admin = match admin_opt {
+            Some(a) => a,
+            None => return Ok(()),
+        };
+        let allowed = rate_limit::check_rate_limit(env, caller, function_type, &admin);
+        if allowed {
+            Ok(())
+        } else {
+            Err(Error::RateLimitExceeded)
+        }
+    }
+
+    fn notify_external(env: &Env, payload: NotificationPayload) {
+        env.events().publish(
+            (symbol_short!("notify"),),
+            (payload.escrow_id, payload.event_type, payload.amount, payload.timestamp),
+        );
+    }
+
 
     fn calculate_fees(env: &Env, amount: i128) -> Result<FeeBreakdown, Error> {
         let platform_percentage = env
