@@ -14,6 +14,8 @@ type User struct {
 	Email           string         `gorm:"uniqueIndex;size:255;not null" json:"email"`
 	Name            string         `gorm:"size:255;not null" json:"name"`
 	StellarAddress  string         `gorm:"uniqueIndex;size:56;not null" json:"stellar_address"`
+	PasswordHash    string         `gorm:"size:255;not null" json:"-"`
+	Role            string         `gorm:"size:20;default:'user'" json:"role"` // admin, user
 	Country         string         `gorm:"size:2" json:"country"` // ISO country code
 	KYCStatus       string         `gorm:"size:20;default:'pending'" json:"kyc_status"` // pending, verified, rejected
 	KYCVerifiedAt   *time.Time     `json:"kyc_verified_at"`
