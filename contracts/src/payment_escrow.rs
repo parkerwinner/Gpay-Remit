@@ -7,6 +7,8 @@ use soroban_sdk::{
     Map, String, Vec,
 };
 
+use crate::upgradeable;
+
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
 #[repr(u32)]
