@@ -58,6 +58,7 @@ pub enum Error {
     DisputeNotFound = 44,
     AlreadyVoted = 45,
     ContractPaused = 46,
+    RateLimitExceeded = 62,
 }
 
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -2312,6 +2313,28 @@ impl PaymentEscrowContract {
 
     pub fn get_dispute(env: Env, escrow_id: u64) -> Option<Dispute> {
         env.storage().instance().get(&DataKey::Dispute(escrow_id))
+    }
+
+    // ── Internal helpers ──────────────────────────────────────────────
+    fn enforce_rate_limit(
+        env: &Env,
+        caller: &Address,
+        function_type: crate::rate_limit::FunctionType,
+    ) -> Result<(), Error> {
+        let admin = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(Error::Unauthorized)?;
+
+        if !crate::rate_limit::check_rate_limit(env, caller, function_type, &admin) {
+            return Err(Error::RateLimitExceeded);
+        }
+        Ok(())
+    }
+
+    fn notify_external(_env: &Env, _payload: NotificationPayload) {
+        // Placeholder for external notifications
     }
 }
 
