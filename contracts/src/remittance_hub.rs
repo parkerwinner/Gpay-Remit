@@ -7,8 +7,6 @@ use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, symbol_short, Address, BytesN, Env, String, Symbol,
 };
 
-use crate::aml::{AmlConfig, AmlStatus, AmlScreeningResult};
-use crate::upgradeable;
 
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
@@ -464,7 +462,7 @@ impl RemittanceHubContract {
             to,
             amount,
             currency,
-            status: symbol_short!("pending"),
+            status,
         };
 
         env.storage().persistent().set(&remittance_id, &remittance);
