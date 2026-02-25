@@ -72,7 +72,7 @@ pub struct MockKycOracleContract;
 
 #[contractimpl]
 impl MockKycOracleContract {
-    pub fn initialize(env: Env, admin: Address) {
+    pub fn init_kyc(env: Env, admin: Address) {
         admin.require_auth();
         env.storage()
             .instance()
@@ -212,7 +212,7 @@ mod test {
         let admin = Address::generate(&env);
         let user = Address::generate(&env);
 
-        client.initialize(&admin);
+        client.init_kyc(&admin);
         client.set_status(&admin, &user, &1);
 
         let status = client.is_kyc(&user);
@@ -229,7 +229,7 @@ mod test {
         let admin = Address::generate(&env);
         let unknown = Address::generate(&env);
 
-        client.initialize(&admin);
+        client.init_kyc(&admin);
 
         let status = client.is_kyc(&unknown);
         assert_eq!(status, 0);
@@ -394,7 +394,7 @@ mod test {
         let sender = Address::generate(&env);
         let recipient = Address::generate(&env);
 
-        oracle_client.initialize(&admin);
+        oracle_client.init_kyc(&admin);
         oracle_client.set_status(&admin, &sender, &1);
         oracle_client.set_status(&admin, &recipient, &1);
 
@@ -425,7 +425,7 @@ mod test {
         let sender = Address::generate(&env);
         let recipient = Address::generate(&env);
 
-        oracle_client.initialize(&admin);
+        oracle_client.init_kyc(&admin);
         oracle_client.set_status(&admin, &recipient, &1);
 
         let config = KycConfig {

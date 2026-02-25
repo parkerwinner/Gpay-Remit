@@ -1304,7 +1304,7 @@
                 "bytes": "0000000000000000000000000000000000000000000000000000000000000005"
               },
               {
-                "symbol": "initialize"
+                "symbol": "init_escrow"
               }
             ],
             "data": {
@@ -1327,7 +1327,7 @@
                 "symbol": "fn_return"
               },
               {
-                "symbol": "initialize"
+                "symbol": "init_escrow"
               }
             ],
             "data": "void"
@@ -1762,7 +1762,7 @@
             ],
             "data": {
               "error": {
-                "contract": 18
+                "contract": 17
               }
             }
           }
@@ -1783,7 +1783,7 @@
               },
               {
                 "error": {
-                  "contract": 18
+                  "contract": 17
                 }
               }
             ],
@@ -1808,7 +1808,7 @@
               },
               {
                 "error": {
-                  "contract": 18
+                  "contract": 17
                 }
               }
             ],

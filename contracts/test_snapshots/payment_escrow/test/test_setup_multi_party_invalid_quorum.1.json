@@ -1305,7 +1305,7 @@
                 "bytes": "0000000000000000000000000000000000000000000000000000000000000005"
               },
               {
-                "symbol": "initialize"
+                "symbol": "init_escrow"
               }
             ],
             "data": {
@@ -1328,7 +1328,7 @@
                 "symbol": "fn_return"
               },
               {
-                "symbol": "initialize"
+                "symbol": "init_escrow"
               }
             ],
             "data": "void"
@@ -1779,7 +1779,7 @@
             ],
             "data": {
               "error": {
-                "contract": 42
+                "contract": 5
               }
             }
           }
@@ -1800,7 +1800,7 @@
               },
               {
                 "error": {
-                  "contract": 42
+                  "contract": 5
                 }
               }
             ],
@@ -1825,7 +1825,7 @@
               },
               {
                 "error": {
-                  "contract": 42
+                  "contract": 5
                 }
               }
             ],
@@ -1936,7 +1936,7 @@
             ],
             "data": {
               "error": {
-                "contract": 42
+                "contract": 5
               }
             }
           }
@@ -1957,7 +1957,7 @@
               },
               {
                 "error": {
-                  "contract": 42
+                  "contract": 5
                 }
               }
             ],
@@ -1982,7 +1982,7 @@
               },
               {
                 "error": {
-                  "contract": 42
+                  "contract": 5
                 }
               }
             ],

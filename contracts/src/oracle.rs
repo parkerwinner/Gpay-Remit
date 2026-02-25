@@ -67,7 +67,7 @@ pub struct MockOracleContract;
 
 #[contractimpl]
 impl MockOracleContract {
-    pub fn initialize(env: Env, admin: Address) {
+    pub fn init_oracle(env: Env, admin: Address) {
         admin.require_auth();
         env.storage()
             .instance()
@@ -264,7 +264,7 @@ mod test {
         let client = MockOracleContractClient::new(&env, &contract_id);
         let admin = Address::generate(&env);
 
-        client.initialize(&admin);
+        client.init_oracle(&admin);
 
         let from = String::from_str(&env, "USDC");
         let to = String::from_str(&env, "EUR");
@@ -373,7 +373,7 @@ mod test {
         let oracle_client = MockOracleContractClient::new(&env, &oracle_id);
         let admin = Address::generate(&env);
 
-        oracle_client.initialize(&admin);
+        oracle_client.init_oracle(&admin);
 
         let from = String::from_str(&env, "USDC");
         let to = String::from_str(&env, "EUR");

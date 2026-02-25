@@ -611,7 +611,7 @@
                 "bytes": "0000000000000000000000000000000000000000000000000000000000000001"
               },
               {
-                "symbol": "initialize"
+                "symbol": "init_escrow"
               }
             ],
             "data": {
@@ -634,7 +634,7 @@
                 "symbol": "fn_return"
               },
               {
-                "symbol": "initialize"
+                "symbol": "init_escrow"
               }
             ],
             "data": "void"

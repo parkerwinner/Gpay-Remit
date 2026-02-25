@@ -4,6 +4,7 @@ mod aml;
 mod kyc;
 mod oracle;
 mod payment_escrow;
+pub mod rate_limit;
 mod remittance_hub;
 pub mod upgradeable;
 
