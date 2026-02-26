@@ -11,12 +11,13 @@ import (
 )
 
 type StellarClientInterface interface {
-	SubmitPayment(sourceSecret, destination, assetCode, issuer, amount string) (string, error)
+	SubmitPayment(sourceSecret string, destination string, assetCode string, issuer string, amount string) (string, error)
 	ValidateAccount(accountID string) error
-	BuildEscrowTx(sender, recipient, assetCode, issuer, amount string) (string, error)
-	BuildPaymentTx(sourceAccount txnbuild.Account, destination, assetCode, issuer, amount string) (*txnbuild.Transaction, error)
+	BuildEscrowTx(sender string, recipient string, assetCode string, issuer string, amount string) (string, error)
+	BuildPaymentTx(sourceAccount txnbuild.Account, destination string, assetCode string, issuer string, amount string) (*txnbuild.Transaction, error)
 	SignTx(envelopeXDR string, secretKey string) (string, error)
 }
+
 
 
 type StellarClient struct {
@@ -75,7 +76,7 @@ func (s *StellarClient) SignTx(envelopeXDR string, secretKey string) (string, er
 }
 
 // BuildPaymentTx creates an unsigned payment transaction.
-func (s *StellarClient) BuildPaymentTx(sourceAccount txnbuild.Account, destination, assetCode, issuer, amount string) (*txnbuild.Transaction, error) {
+func (s *StellarClient) BuildPaymentTx(sourceAccount txnbuild.Account, destination string, assetCode string, issuer string, amount string) (*txnbuild.Transaction, error) {
 	var asset txnbuild.Asset
 	if strings.ToUpper(assetCode) == "XLM" || assetCode == "" {
 		asset = txnbuild.NativeAsset{}
@@ -100,12 +101,15 @@ func (s *StellarClient) BuildPaymentTx(sourceAccount txnbuild.Account, destinati
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to build payment transaction: %w", err)
+	}
 	return tx, nil
 }
 
+
 // SubmitPayment builds, signs, and submits a payment transaction in one go.
-func (s *StellarClient) SubmitPayment(sourceSecret, destination, assetCode, issuer, amount string) (string, error) {
+func (s *StellarClient) SubmitPayment(sourceSecret string, destination string, assetCode string, issuer string, amount string) (string, error) {
 	sourceKP, err := keypair.ParseFull(sourceSecret)
+
 	if err != nil {
 		return "", fmt.Errorf("invalid source secret: %w", err)
 	}
@@ -156,7 +160,7 @@ func (s *StellarClient) ValidateAccount(accountID string) error {
 	return nil
 }
 
-func (s *StellarClient) BuildEscrowTx(sender, recipient, assetCode, issuer, amount string) (string, error) {
+func (s *StellarClient) BuildEscrowTx(sender string, recipient string, assetCode string, issuer string, amount string) (string, error) {
 	sourceAccount, err := s.client.AccountDetail(horizonclient.AccountRequest{AccountID: sender})
 	if err != nil {
 		return "", fmt.Errorf("failed to load source account: %w", err)
