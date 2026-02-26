@@ -2,6 +2,8 @@ package utils
 
 import (
 	"fmt"
+	"log"
+	"strings"
 
 	"github.com/stellar/go/clients/horizonclient"
 	"github.com/stellar/go/keypair"
@@ -9,10 +11,14 @@ import (
 )
 
 type StellarClientInterface interface {
-	SubmitPayment(sourceSecret, destination, assetCode, issuer, amount string) (string, error)
+	SubmitPayment(sourceSecret string, destination string, assetCode string, issuer string, amount string) (string, error)
 	ValidateAccount(accountID string) error
-	BuildEscrowTx(sender, recipient, assetCode, issuer, amount string) (string, error)
+	BuildEscrowTx(sender string, recipient string, assetCode string, issuer string, amount string) (string, error)
+	BuildPaymentTx(sourceAccount txnbuild.Account, destination string, assetCode string, issuer string, amount string) (*txnbuild.Transaction, error)
+	SignTx(envelopeXDR string, secretKey string) (string, error)
 }
+
+
 
 type StellarClient struct {
 	client            *horizonclient.Client
@@ -26,21 +32,53 @@ func NewStellarClient(horizonURL, networkPassphrase string) StellarClientInterfa
 	}
 }
 
-func (s *StellarClient) SubmitPayment(sourceSecret, destination, assetCode, issuer string, amount string) (string, error) {
-	sourceKP, err := keypair.ParseFull(sourceSecret)
+// SignTx signs a transaction envelope XDR with the provided secret key.
+// It returns the signed XDR string. If signing fails, it returns the original XDR (as per requirements) and an error.
+func SignTx(envelopeXDR string, secretKey string, networkPassphrase string) (string, error) {
+	// Mask secret key in logs
+	maskedKey := "REDACTED"
+	if len(secretKey) > 8 {
+		maskedKey = secretKey[:4] + "..." + secretKey[len(secretKey)-4:]
+	}
+	log.Printf("Signing transaction with key: %s on network: %s", maskedKey, networkPassphrase)
+
+	genericTx, err := txnbuild.TransactionFromXDR(envelopeXDR)
 	if err != nil {
-		return "", fmt.Errorf("invalid source secret: %w", err)
+		return envelopeXDR, fmt.Errorf("failed to parse envelope XDR: %w", err)
 	}
 
-	sourceAccount, err := s.client.AccountDetail(horizonclient.AccountRequest{
-		AccountID: sourceKP.Address(),
-	})
-	if err != nil {
-		return "", fmt.Errorf("failed to load source account: %w", err)
+	tx, ok := genericTx.Transaction()
+	if !ok {
+		return envelopeXDR, fmt.Errorf("XDR is not a transaction envelope")
 	}
 
+	kp, err := keypair.ParseFull(secretKey)
+	if err != nil {
+		return envelopeXDR, fmt.Errorf("invalid secret key: %w", err)
+	}
+
+	signedTx, err := tx.Sign(networkPassphrase, kp)
+	if err != nil {
+		return envelopeXDR, fmt.Errorf("failed to sign transaction: %w", err)
+	}
+
+	signedXDR, err := signedTx.Base64()
+	if err != nil {
+		return envelopeXDR, fmt.Errorf("failed to encode signed transaction: %w", err)
+	}
+
+	return signedXDR, nil
+}
+
+// SignTx is a wrapper that uses the client's network passphrase.
+func (s *StellarClient) SignTx(envelopeXDR string, secretKey string) (string, error) {
+	return SignTx(envelopeXDR, secretKey, s.networkPassphrase)
+}
+
+// BuildPaymentTx creates an unsigned payment transaction.
+func (s *StellarClient) BuildPaymentTx(sourceAccount txnbuild.Account, destination string, assetCode string, issuer string, amount string) (*txnbuild.Transaction, error) {
 	var asset txnbuild.Asset
-	if assetCode == "XLM" {
+	if strings.ToUpper(assetCode) == "XLM" || assetCode == "" {
 		asset = txnbuild.NativeAsset{}
 	} else {
 		asset = txnbuild.CreditAsset{Code: assetCode, Issuer: issuer}
@@ -48,7 +86,7 @@ func (s *StellarClient) SubmitPayment(sourceSecret, destination, assetCode, issu
 
 	tx, err := txnbuild.NewTransaction(
 		txnbuild.TransactionParams{
-			SourceAccount:        &sourceAccount,
+			SourceAccount:        sourceAccount,
 			IncrementSequenceNum: true,
 			BaseFee:              txnbuild.MinBaseFee,
 			Preconditions:        txnbuild.Preconditions{TimeBounds: txnbuild.NewInfiniteTimeout()},
@@ -62,21 +100,57 @@ func (s *StellarClient) SubmitPayment(sourceSecret, destination, assetCode, issu
 		},
 	)
 	if err != nil {
-		return "", fmt.Errorf("failed to build transaction: %w", err)
+		return nil, fmt.Errorf("failed to build payment transaction: %w", err)
 	}
+	return tx, nil
+}
 
-	tx, err = tx.Sign(s.networkPassphrase, sourceKP)
+
+// SubmitPayment builds, signs, and submits a payment transaction in one go.
+func (s *StellarClient) SubmitPayment(sourceSecret string, destination string, assetCode string, issuer string, amount string) (string, error) {
+	sourceKP, err := keypair.ParseFull(sourceSecret)
+
 	if err != nil {
-		return "", fmt.Errorf("failed to sign transaction: %w", err)
+		return "", fmt.Errorf("invalid source secret: %w", err)
 	}
 
-	txResp, err := s.client.SubmitTransaction(tx)
+	sourceAccount, err := s.client.AccountDetail(horizonclient.AccountRequest{
+		AccountID: sourceKP.Address(),
+	})
+	if err != nil {
+		return "", fmt.Errorf("failed to load source account: %w", err)
+	}
+
+	tx, err := s.BuildPaymentTx(&sourceAccount, destination, assetCode, issuer, amount)
+	if err != nil {
+		return "", err
+	}
+
+	xdr, err := tx.Base64()
+	if err != nil {
+		return "", fmt.Errorf("failed to encode transaction: %w", err)
+	}
+
+	signedXDR, err := s.SignTx(xdr, sourceSecret)
+	if err != nil {
+		return "", err
+	}
+
+	// Re-parse signed XDR to submit
+	genericTx, err := txnbuild.TransactionFromXDR(signedXDR)
+	if err != nil {
+		return "", fmt.Errorf("failed to parse signed XDR: %w", err)
+	}
+	signedTx, _ := genericTx.Transaction()
+
+	txResp, err := s.client.SubmitTransaction(signedTx)
 	if err != nil {
 		return "", fmt.Errorf("failed to submit transaction: %w", err)
 	}
 
 	return txResp.Hash, nil
 }
+
 
 func (s *StellarClient) ValidateAccount(accountID string) error {
 	_, err := s.client.AccountDetail(horizonclient.AccountRequest{AccountID: accountID})
@@ -86,7 +160,7 @@ func (s *StellarClient) ValidateAccount(accountID string) error {
 	return nil
 }
 
-func (s *StellarClient) BuildEscrowTx(sender, recipient, assetCode, issuer, amount string) (string, error) {
+func (s *StellarClient) BuildEscrowTx(sender string, recipient string, assetCode string, issuer string, amount string) (string, error) {
 	sourceAccount, err := s.client.AccountDetail(horizonclient.AccountRequest{AccountID: sender})
 	if err != nil {
 		return "", fmt.Errorf("failed to load source account: %w", err)

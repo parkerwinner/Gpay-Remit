@@ -7,7 +7,6 @@ use soroban_sdk::{
     Map, String, Vec,
 };
 
-
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
 #[repr(u32)]
@@ -503,10 +502,14 @@ impl PaymentEscrowContract {
     fn notify_external(env: &Env, payload: NotificationPayload) {
         env.events().publish(
             (symbol_short!("notify"),),
-            (payload.escrow_id, payload.event_type, payload.amount, payload.timestamp),
+            (
+                payload.escrow_id,
+                payload.event_type,
+                payload.amount,
+                payload.timestamp,
+            ),
         );
     }
-
 
     fn calculate_fees(env: &Env, amount: i128) -> Result<FeeBreakdown, Error> {
         let platform_percentage = env
@@ -898,12 +901,15 @@ impl PaymentEscrowContract {
         env.events()
             .publish((symbol_short!("created"), counter), escrow.sender);
 
-        Self::notify_external(&env, NotificationPayload {
-            escrow_id: counter,
-            event_type: EventType::Created,
-            amount,
-            timestamp: env.ledger().timestamp(),
-        });
+        Self::notify_external(
+            &env,
+            NotificationPayload {
+                escrow_id: counter,
+                event_type: EventType::Created,
+                amount,
+                timestamp: env.ledger().timestamp(),
+            },
+        );
 
         Ok(counter)
     }
@@ -969,12 +975,15 @@ impl PaymentEscrowContract {
             (caller, amount, escrow.deposited_amount),
         );
 
-        Self::notify_external(&env, NotificationPayload {
-            escrow_id,
-            event_type: EventType::Deposit,
-            amount,
-            timestamp: env.ledger().timestamp(),
-        });
+        Self::notify_external(
+            &env,
+            NotificationPayload {
+                escrow_id,
+                event_type: EventType::Deposit,
+                amount,
+                timestamp: env.ledger().timestamp(),
+            },
+        );
 
         Ok(())
     }
@@ -1004,12 +1013,15 @@ impl PaymentEscrowContract {
         env.events()
             .publish((symbol_short!("approved"), escrow_id), approver);
 
-        Self::notify_external(&env, NotificationPayload {
-            escrow_id,
-            event_type: EventType::Approved,
-            amount: escrow.amount,
-            timestamp: env.ledger().timestamp(),
-        });
+        Self::notify_external(
+            &env,
+            NotificationPayload {
+                escrow_id,
+                event_type: EventType::Approved,
+                amount: escrow.amount,
+                timestamp: env.ledger().timestamp(),
+            },
+        );
 
         Ok(())
     }
