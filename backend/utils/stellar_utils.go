@@ -14,7 +14,10 @@ type StellarClientInterface interface {
 	SubmitPayment(sourceSecret, destination, assetCode, issuer, amount string) (string, error)
 	ValidateAccount(accountID string) error
 	BuildEscrowTx(sender, recipient, assetCode, issuer, amount string) (string, error)
+	BuildPaymentTx(sourceAccount txnbuild.Account, destination, assetCode, issuer, amount string) (*txnbuild.Transaction, error)
+	SignTx(envelopeXDR string, secretKey string) (string, error)
 }
+
 
 type StellarClient struct {
 	client            *horizonclient.Client
@@ -97,11 +100,36 @@ func (s *StellarClient) BuildPaymentTx(sourceAccount txnbuild.Account, destinati
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to build payment transaction: %w", err)
+	return tx, nil
+}
+
+// SubmitPayment builds, signs, and submits a payment transaction in one go.
+func (s *StellarClient) SubmitPayment(sourceSecret, destination, assetCode, issuer, amount string) (string, error) {
+	sourceKP, err := keypair.ParseFull(sourceSecret)
+	if err != nil {
+		return "", fmt.Errorf("invalid source secret: %w", err)
 	}
 
-	tx, err = tx.Sign(s.networkPassphrase, sourceKP)
+	sourceAccount, err := s.client.AccountDetail(horizonclient.AccountRequest{
+		AccountID: sourceKP.Address(),
+	})
 	if err != nil {
-		return "", fmt.Errorf("failed to sign transaction: %w", err)
+		return "", fmt.Errorf("failed to load source account: %w", err)
+	}
+
+	tx, err := s.BuildPaymentTx(&sourceAccount, destination, assetCode, issuer, amount)
+	if err != nil {
+		return "", err
+	}
+
+	xdr, err := tx.Base64()
+	if err != nil {
+		return "", fmt.Errorf("failed to encode transaction: %w", err)
+	}
+
+	signedXDR, err := s.SignTx(xdr, sourceSecret)
+	if err != nil {
+		return "", err
 	}
 
 	// Re-parse signed XDR to submit
@@ -118,6 +146,7 @@ func (s *StellarClient) BuildPaymentTx(sourceAccount txnbuild.Account, destinati
 
 	return txResp.Hash, nil
 }
+
 
 func (s *StellarClient) ValidateAccount(accountID string) error {
 	_, err := s.client.AccountDetail(horizonclient.AccountRequest{AccountID: accountID})

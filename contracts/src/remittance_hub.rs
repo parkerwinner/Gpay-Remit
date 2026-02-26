@@ -1,12 +1,11 @@
 use crate::aml::{self, AmlConfig, AmlScreeningResult, AmlStatus};
-
 use crate::oracle::{self as oracle_mod, CachedRate, OracleConfig};
 use crate::rate_limit::{self as rate_limit_mod, FunctionType};
 use crate::upgradeable;
 use soroban_sdk::{
-    contract, contracterror, contractimpl, contracttype, symbol_short, Address, BytesN, Env, String, Symbol,
+    contract, contracterror, contractimpl, contracttype, symbol_short, Address, BytesN, Env,
+    String, Symbol,
 };
-
 
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
@@ -172,7 +171,6 @@ impl RemittanceHubContract {
             .set(&HubOracleKey::OracleConfig, &config);
         env.events().publish((symbol_short!("hub_init"),), admin);
 
-
         Ok(())
     }
 
@@ -288,7 +286,9 @@ impl RemittanceHubContract {
     ) -> Result<(), RemittanceError> {
         caller.require_auth();
 
-        let stored_admin: Address = env.storage().persistent()
+        let stored_admin: Address = env
+            .storage()
+            .persistent()
             .get(&DataKey::Admin)
             .ok_or(RemittanceError::Unauthorized)?;
         if caller != stored_admin {
@@ -303,10 +303,7 @@ impl RemittanceHubContract {
         };
         env.storage().persistent().set(&AmlKey::Config, &config);
 
-        env.events().publish(
-            (symbol_short!("aml_cfg"),),
-            caller,
-        );
+        env.events().publish((symbol_short!("aml_cfg"),), caller);
 
         Ok(())
     }
@@ -317,24 +314,26 @@ impl RemittanceHubContract {
         risk_threshold: u32,
     ) -> Result<(), RemittanceError> {
         caller.require_auth();
-        let stored_admin: Address = env.storage().persistent()
+        let stored_admin: Address = env
+            .storage()
+            .persistent()
             .get(&DataKey::Admin)
             .ok_or(RemittanceError::Unauthorized)?;
         if caller != stored_admin {
             return Err(RemittanceError::Unauthorized);
         }
 
-        let mut config: AmlConfig = env.storage().persistent()
+        let mut config: AmlConfig = env
+            .storage()
+            .persistent()
             .get(&AmlKey::Config)
             .ok_or(RemittanceError::AmlNotConfigured)?;
 
         config.risk_threshold = risk_threshold;
         env.storage().persistent().set(&AmlKey::Config, &config);
 
-        env.events().publish(
-            (symbol_short!("aml_thr"),),
-            risk_threshold,
-        );
+        env.events()
+            .publish((symbol_short!("aml_thr"),), risk_threshold);
 
         Ok(())
     }
@@ -345,24 +344,26 @@ impl RemittanceHubContract {
         oracle_address: Address,
     ) -> Result<(), RemittanceError> {
         caller.require_auth();
-        let stored_admin: Address = env.storage().persistent()
+        let stored_admin: Address = env
+            .storage()
+            .persistent()
             .get(&DataKey::Admin)
             .ok_or(RemittanceError::Unauthorized)?;
         if caller != stored_admin {
             return Err(RemittanceError::Unauthorized);
         }
 
-        let mut config: AmlConfig = env.storage().persistent()
+        let mut config: AmlConfig = env
+            .storage()
+            .persistent()
             .get(&AmlKey::Config)
             .ok_or(RemittanceError::AmlNotConfigured)?;
 
         config.oracle_address = oracle_address.clone();
         env.storage().persistent().set(&AmlKey::Config, &config);
 
-        env.events().publish(
-            (symbol_short!("aml_orc"),),
-            oracle_address,
-        );
+        env.events()
+            .publish((symbol_short!("aml_orc"),), oracle_address);
 
         Ok(())
     }
@@ -377,31 +378,37 @@ impl RemittanceHubContract {
         remittance_id: u64,
     ) -> Result<(), RemittanceError> {
         caller.require_auth();
-        let stored_admin: Address = env.storage().persistent()
+        let stored_admin: Address = env
+            .storage()
+            .persistent()
             .get(&DataKey::Admin)
             .ok_or(RemittanceError::Unauthorized)?;
         if caller != stored_admin {
             return Err(RemittanceError::Unauthorized);
         }
 
-        let mut flag: AmlScreeningResult = env.storage().persistent()
+        let mut flag: AmlScreeningResult = env
+            .storage()
+            .persistent()
             .get(&AmlKey::Flag(remittance_id))
             .ok_or(RemittanceError::AmlFlagNotFound)?;
 
         flag.status = AmlStatus::Cleared;
-        env.storage().persistent().set(&AmlKey::Flag(remittance_id), &flag);
+        env.storage()
+            .persistent()
+            .set(&AmlKey::Flag(remittance_id), &flag);
 
-        let mut remittance: RemittanceData = env.storage().persistent()
+        let mut remittance: RemittanceData = env
+            .storage()
+            .persistent()
             .get(&remittance_id)
             .ok_or(RemittanceError::NotFound)?;
 
         remittance.status = symbol_short!("pending");
         env.storage().persistent().set(&remittance_id, &remittance);
 
-        env.events().publish(
-            (symbol_short!("aml_clr"), remittance_id),
-            caller,
-        );
+        env.events()
+            .publish((symbol_short!("aml_clr"), remittance_id), caller);
 
         Ok(())
     }
@@ -430,11 +437,17 @@ impl RemittanceHubContract {
         let remittance_id = env.ledger().sequence() as u64;
 
         // AML screening — gate remittance status on risk score
-        let status = if let Some(config) = env.storage().persistent().get::<AmlKey, AmlConfig>(&AmlKey::Config) {
+        let status = if let Some(config) = env
+            .storage()
+            .persistent()
+            .get::<AmlKey, AmlConfig>(&AmlKey::Config)
+        {
             match aml::screen_transaction(&env, &config, &from, &to, amount) {
                 Ok(result) => {
                     if result.status == AmlStatus::Flagged {
-                        env.storage().persistent().set(&AmlKey::Flag(remittance_id), &result);
+                        env.storage()
+                            .persistent()
+                            .set(&AmlKey::Flag(remittance_id), &result);
                         symbol_short!("flagged")
                     } else {
                         symbol_short!("pending")
@@ -449,7 +462,9 @@ impl RemittanceHubContract {
                         status: AmlStatus::Reviewing,
                         timestamp: env.ledger().timestamp(),
                     };
-                    env.storage().persistent().set(&AmlKey::Flag(remittance_id), &review_result);
+                    env.storage()
+                        .persistent()
+                        .set(&AmlKey::Flag(remittance_id), &review_result);
                     symbol_short!("review")
                 }
             }
@@ -558,7 +573,9 @@ impl RemittanceHubContract {
             .get(&remittance_id)
             .ok_or(RemittanceError::NotFound)?;
 
-        if remittance.status == symbol_short!("flagged") || remittance.status == symbol_short!("review") {
+        if remittance.status == symbol_short!("flagged")
+            || remittance.status == symbol_short!("review")
+        {
             return Err(RemittanceError::AmlHighRisk);
         }
 
@@ -855,10 +872,8 @@ impl RemittanceHubContract {
             ids.push_back(id);
         }
 
-        env.events().publish(
-            (symbol_short!("batch_cre"), sender),
-            ids.clone(),
-        );
+        env.events()
+            .publish((symbol_short!("batch_cre"), sender), ids.clone());
 
         Ok(ids)
     }
@@ -877,8 +892,14 @@ impl RemittanceHubContract {
             return Err(RemittanceError::DueDateInPast);
         }
 
-        let mut counter: u64 = env.storage().persistent().get(&DataKey::EscrowCounter).unwrap_or(0);
-        counter = counter.checked_add(1).ok_or(RemittanceError::InvalidAmount)?;
+        let mut counter: u64 = env
+            .storage()
+            .persistent()
+            .get(&DataKey::EscrowCounter)
+            .unwrap_or(0);
+        counter = counter
+            .checked_add(1)
+            .ok_or(RemittanceError::InvalidAmount)?;
 
         let escrow = EscrowData {
             sender: sender.clone(),
@@ -889,8 +910,12 @@ impl RemittanceHubContract {
             status: symbol_short!("pending"),
         };
 
-        env.storage().persistent().set(&DataKey::Escrow(counter), &escrow);
-        env.storage().persistent().set(&DataKey::EscrowCounter, &counter);
+        env.storage()
+            .persistent()
+            .set(&DataKey::Escrow(counter), &escrow);
+        env.storage()
+            .persistent()
+            .set(&DataKey::EscrowCounter, &counter);
 
         Ok(counter)
     }
@@ -908,10 +933,12 @@ impl RemittanceHubContract {
         let fee_percentage = 250;
 
         for id in escrow_ids.iter() {
-            let mut escrow: EscrowData = env.storage().persistent()
+            let mut escrow: EscrowData = env
+                .storage()
+                .persistent()
                 .get(&DataKey::Escrow(id))
                 .ok_or(RemittanceError::NotFound)?;
-            
+
             if escrow.sender != sender {
                 return Err(RemittanceError::Unauthorized);
             }
@@ -919,19 +946,29 @@ impl RemittanceHubContract {
                 return Err(RemittanceError::InvalidStatus);
             }
 
-            let fees = escrow.amount.checked_mul(fee_percentage)
+            let fees = escrow
+                .amount
+                .checked_mul(fee_percentage)
                 .unwrap_or(0)
                 .checked_div(10000)
                 .unwrap_or(0);
-            
-            total_amount = total_amount.checked_add(escrow.amount).ok_or(RemittanceError::InvalidAmount)?;
-            total_fees = total_fees.checked_add(fees).ok_or(RemittanceError::InvalidAmount)?;
+
+            total_amount = total_amount
+                .checked_add(escrow.amount)
+                .ok_or(RemittanceError::InvalidAmount)?;
+            total_fees = total_fees
+                .checked_add(fees)
+                .ok_or(RemittanceError::InvalidAmount)?;
 
             escrow.status = symbol_short!("funded");
-            env.storage().persistent().set(&DataKey::Escrow(id), &escrow);
+            env.storage()
+                .persistent()
+                .set(&DataKey::Escrow(id), &escrow);
         }
 
-        let total_transfer = total_amount.checked_add(total_fees).ok_or(RemittanceError::InvalidAmount)?;
+        let total_transfer = total_amount
+            .checked_add(total_fees)
+            .ok_or(RemittanceError::InvalidAmount)?;
 
         if total_transfer > 0 {
             let token_client = soroban_sdk::token::Client::new(&env, &token_address);
@@ -958,10 +995,12 @@ impl RemittanceHubContract {
         caller.require_auth();
 
         for id in escrow_ids.iter() {
-            let mut escrow: EscrowData = env.storage().persistent()
+            let mut escrow: EscrowData = env
+                .storage()
+                .persistent()
                 .get(&DataKey::Escrow(id))
                 .ok_or(RemittanceError::NotFound)?;
-            
+
             if escrow.recipient != caller && escrow.sender != caller {
                 return Err(RemittanceError::Unauthorized);
             }
@@ -970,16 +1009,20 @@ impl RemittanceHubContract {
             }
 
             escrow.status = symbol_short!("release");
-            env.storage().persistent().set(&DataKey::Escrow(id), &escrow);
+            env.storage()
+                .persistent()
+                .set(&DataKey::Escrow(id), &escrow);
 
             let token_client = soroban_sdk::token::Client::new(&env, &token_address);
-            token_client.transfer(&env.current_contract_address(), &escrow.recipient, &escrow.amount);
+            token_client.transfer(
+                &env.current_contract_address(),
+                &escrow.recipient,
+                &escrow.amount,
+            );
         }
 
-        env.events().publish(
-            (symbol_short!("batch_rel"), caller),
-            escrow_ids.clone(),
-        );
+        env.events()
+            .publish((symbol_short!("batch_rel"), caller), escrow_ids.clone());
 
         Self::track_metric(&env, MetricType::Success, escrow_ids.len() as i128);
 
@@ -1051,8 +1094,7 @@ impl RemittanceHubContract {
 
     /// Pause the contract. Admin-only.
     pub fn pause(env: Env, admin: Address) -> Result<(), upgradeable::UpgradeError> {
-        let stored_admin: Address =
-            env.storage().persistent().get(&DataKey::Admin).unwrap();
+        let stored_admin: Address = env.storage().persistent().get(&DataKey::Admin).unwrap();
         if admin != stored_admin {
             return Err(upgradeable::UpgradeError::Unauthorized);
         }
@@ -1061,8 +1103,7 @@ impl RemittanceHubContract {
 
     /// Unpause the contract. Admin-only.
     pub fn unpause(env: Env, admin: Address) -> Result<(), upgradeable::UpgradeError> {
-        let stored_admin: Address =
-            env.storage().persistent().get(&DataKey::Admin).unwrap();
+        let stored_admin: Address = env.storage().persistent().get(&DataKey::Admin).unwrap();
         if admin != stored_admin {
             return Err(upgradeable::UpgradeError::Unauthorized);
         }
@@ -1076,8 +1117,7 @@ impl RemittanceHubContract {
         admin: Address,
         new_wasm_hash: BytesN<32>,
     ) -> Result<(), upgradeable::UpgradeError> {
-        let stored_admin: Address =
-            env.storage().persistent().get(&DataKey::Admin).unwrap();
+        let stored_admin: Address = env.storage().persistent().get(&DataKey::Admin).unwrap();
         if admin != stored_admin {
             return Err(upgradeable::UpgradeError::Unauthorized);
         }
@@ -1087,8 +1127,7 @@ impl RemittanceHubContract {
     /// Finalize migration after an upgrade. Admin-only.
     /// Unpause the contract and return the new version number.
     pub fn migrate(env: Env, admin: Address) -> Result<u32, upgradeable::UpgradeError> {
-        let stored_admin: Address =
-            env.storage().persistent().get(&DataKey::Admin).unwrap();
+        let stored_admin: Address = env.storage().persistent().get(&DataKey::Admin).unwrap();
         if admin != stored_admin {
             return Err(upgradeable::UpgradeError::Unauthorized);
         }
@@ -1172,15 +1211,16 @@ impl RemittanceHubContract {
             .persistent()
             .set(&weekly_key, &(weekly_val + value));
 
-        env.events().publish((symbol_short!("met_upd"),), (metric_type, value, now));
+        env.events()
+            .publish((symbol_short!("met_upd"),), (metric_type, value, now));
     }
 }
 
 #[cfg(test)]
 mod test {
     use super::*;
-    use soroban_sdk::testutils::{Address as _, Ledger};
     use crate::aml::{MockAmlOracleContract, MockAmlOracleContractClient};
+    use soroban_sdk::testutils::{Address as _, Ledger};
 
     #[test]
     fn test_send_remittance() {
@@ -2330,15 +2370,16 @@ mod test {
         });
 
         let ids = client.batch_create_escrows(&sender, &requests);
-        
+
         client.batch_deposit(&sender, &ids, &token_id);
 
         let sender_balance = soroban_sdk::token::Client::new(&env, &token_id).balance(&sender);
         assert_eq!(sender_balance, 10000 - 3075);
 
         client.batch_release(&recipient, &ids, &token_id);
-        
-        let recipient_balance = soroban_sdk::token::Client::new(&env, &token_id).balance(&recipient);
+
+        let recipient_balance =
+            soroban_sdk::token::Client::new(&env, &token_id).balance(&recipient);
         assert_eq!(recipient_balance, 3000);
     }
 
@@ -2387,16 +2428,24 @@ mod test {
         assert_eq!(success, 1);
 
         // Verify Weekly Tracking
-        let weekly_volume = client.get_metric(&MetricType::Volume, &env.ledger().timestamp(), &true);
+        let weekly_volume =
+            client.get_metric(&MetricType::Volume, &env.ledger().timestamp(), &true);
         assert_eq!(weekly_volume, 1000);
 
         // Test Reset
-        client.reset_metric(&admin, &MetricType::Volume, &env.ledger().timestamp(), &false);
-        let reset_volume = client.get_metric(&MetricType::Volume, &env.ledger().timestamp(), &false);
+        client.reset_metric(
+            &admin,
+            &MetricType::Volume,
+            &env.ledger().timestamp(),
+            &false,
+        );
+        let reset_volume =
+            client.get_metric(&MetricType::Volume, &env.ledger().timestamp(), &false);
         assert_eq!(reset_volume, 0);
-        
+
         // Weekly should still be there
-        let weekly_volume_after = client.get_metric(&MetricType::Volume, &env.ledger().timestamp(), &true);
+        let weekly_volume_after =
+            client.get_metric(&MetricType::Volume, &env.ledger().timestamp(), &true);
         assert_eq!(weekly_volume_after, 1000);
     }
 }
