@@ -18,6 +18,8 @@ type Config struct {
 	ContractID        string
 	EscrowContractID  string
 	NetworkPassphrase string
+	JWTSecret         string
+	JWTRefreshSecret  string
 }
 
 func LoadConfig() (*Config, error) {
@@ -31,6 +33,8 @@ func LoadConfig() (*Config, error) {
 		ContractID:        os.Getenv("CONTRACT_ID"),
 		EscrowContractID:  os.Getenv("ESCROW_CONTRACT_ID"),
 		NetworkPassphrase: getEnvOrDefault("NETWORK_PASSPHRASE", "Test SDF Network ; September 2015"),
+		JWTSecret:         getEnvOrDefault("JWT_SECRET", "super-secret-key-change-me"),
+		JWTRefreshSecret:  getEnvOrDefault("JWT_REFRESH_SECRET", "super-secret-refresh-key-change-me"),
 	}, nil
 }
 

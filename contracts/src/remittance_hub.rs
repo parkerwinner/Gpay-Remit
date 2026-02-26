@@ -1,11 +1,10 @@
-use crate::oracle::{self, CachedRate, OracleConfig};
-use soroban_sdk::{
-    contract, contracterror, contractimpl, contracttype, symbol_short, Address, Env, String, Symbol, BytesN,
-};
-
-use crate::aml::{AmlConfig, AmlScreeningResult, AmlStatus};
+use crate::aml::{self, AmlConfig, AmlScreeningResult, AmlStatus};
+use crate::oracle::{self as oracle_mod, CachedRate, OracleConfig};
 use crate::rate_limit::{self, FunctionType};
 use crate::upgradeable;
+use soroban_sdk::{
+    contract, contracterror, contractimpl, contracttype, symbol_short, Address, BytesN, Env, String, Symbol,
+};
 
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
@@ -33,7 +32,8 @@ pub enum RemittanceError {
     AmlFlagNotFound = 20,
     BatchTooLarge = 21,
     DuplicateEscrowId = 22,
-    ContractPaused = 23,
+    ContractPaused = 32,
+    InvalidMetric = 33,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -43,6 +43,14 @@ pub enum InvoiceStatus {
     Paid,
     Overdue,
     Cancelled,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[contracttype]
+pub enum MetricType {
+    Volume,
+    Fee,
+    Success,
 }
 
 #[derive(Clone)]
@@ -111,6 +119,8 @@ pub enum DataKey {
     Admin,
     EscrowCounter,
     Escrow(u64),
+    MetricDaily(MetricType, u64),
+    MetricWeekly(MetricType, u64),
 }
 
 #[derive(Clone)]
@@ -417,12 +427,40 @@ impl RemittanceHubContract {
 
         let remittance_id = env.ledger().sequence() as u64;
 
+        // AML screening — gate remittance status on risk score
+        let status = if let Some(config) = env.storage().persistent().get::<AmlKey, AmlConfig>(&AmlKey::Config) {
+            match aml::screen_transaction(&env, &config, &from, &to, amount) {
+                Ok(result) => {
+                    if result.status == AmlStatus::Flagged {
+                        env.storage().persistent().set(&AmlKey::Flag(remittance_id), &result);
+                        symbol_short!("flagged")
+                    } else {
+                        symbol_short!("pending")
+                    }
+                }
+                Err(_) => {
+                    let review_result = AmlScreeningResult {
+                        sender: from.clone(),
+                        recipient: to.clone(),
+                        amount,
+                        risk_score: 0,
+                        status: AmlStatus::Reviewing,
+                        timestamp: env.ledger().timestamp(),
+                    };
+                    env.storage().persistent().set(&AmlKey::Flag(remittance_id), &review_result);
+                    symbol_short!("review")
+                }
+            }
+        } else {
+            symbol_short!("pending")
+        };
+
         let remittance = RemittanceData {
             from: from.clone(),
             to,
             amount,
             currency,
-            status: symbol_short!("pending"),
+            status,
         };
 
         env.storage().persistent().set(&remittance_id, &remittance);
@@ -435,7 +473,7 @@ impl RemittanceHubContract {
         amount: i128,
         from_asset: String,
         to_asset: String,
-    ) -> Result<oracle::ConversionResult, RemittanceError> {
+    ) -> Result<oracle_mod::ConversionResult, RemittanceError> {
         if amount <= 0 {
             return Err(RemittanceError::InvalidAmount);
         }
@@ -451,7 +489,7 @@ impl RemittanceHubContract {
             to_asset.clone(),
         ));
 
-        let result = oracle::get_conversion_rate(
+        let result = oracle_mod::get_conversion_rate(
             &env,
             &config.primary_oracle,
             &from_asset,
@@ -476,7 +514,7 @@ impl RemittanceHubContract {
                 Ok(conversion)
             }
             Err(_) => {
-                let secondary_result = oracle::get_conversion_rate(
+                let secondary_result = oracle_mod::get_conversion_rate(
                     &env,
                     &config.secondary_oracle,
                     &from_asset,
@@ -528,6 +566,8 @@ impl RemittanceHubContract {
 
         remittance.status = symbol_short!("complete");
         env.storage().persistent().set(&remittance_id, &remittance);
+
+        Self::track_metric(&env, MetricType::Success, 1);
 
         Ok(())
     }
@@ -611,6 +651,9 @@ impl RemittanceHubContract {
                 .set(&DataKey::EscrowInvoice(escrow_id), &counter);
         }
 
+        Self::track_metric(&env, MetricType::Volume, amount);
+        Self::track_metric(&env, MetricType::Fee, fees);
+
         env.events().publish(
             (symbol_short!("inv_gen"), counter),
             (sender, amount, total_due, due_date),
@@ -667,6 +710,8 @@ impl RemittanceHubContract {
             (symbol_short!("inv_paid"), invoice_id),
             (caller, invoice.paid_at),
         );
+
+        Self::track_metric(&env, MetricType::Success, 1);
 
         Ok(())
     }
@@ -787,7 +832,7 @@ impl RemittanceHubContract {
         from_asset: String,
         to_asset: String,
         amount: i128,
-    ) -> Result<oracle::ConversionResult, RemittanceError> {
+    ) -> Result<oracle_mod::ConversionResult, RemittanceError> {
         Self::convert_currency(env, amount, from_asset, to_asset)
     }
 
@@ -896,6 +941,9 @@ impl RemittanceHubContract {
             (escrow_ids, total_amount, total_fees),
         );
 
+        Self::track_metric(&env, MetricType::Volume, total_amount);
+        Self::track_metric(&env, MetricType::Fee, total_fees);
+
         Ok(())
     }
 
@@ -928,8 +976,10 @@ impl RemittanceHubContract {
 
         env.events().publish(
             (symbol_short!("batch_rel"), caller),
-            escrow_ids,
+            escrow_ids.clone(),
         );
+
+        Self::track_metric(&env, MetricType::Success, escrow_ids.len() as i128);
 
         Ok(())
     }
@@ -949,7 +999,7 @@ impl RemittanceHubContract {
                     &HubOracleKey::CachedRate(asset_code.clone(), target.clone()),
                 );
 
-                let result = oracle::get_conversion_rate(
+                let result = oracle_mod::get_conversion_rate(
                     env,
                     &cfg.primary_oracle,
                     asset_code,
@@ -964,6 +1014,24 @@ impl RemittanceHubContract {
                 }
             }
             None => amount,
+        }
+    }
+
+    fn enforce_rate_limit(
+        env: &Env,
+        caller: &Address,
+        function_type: FunctionType,
+    ) -> Result<(), RemittanceError> {
+        let admin_opt: Option<Address> = env.storage().persistent().get(&DataKey::Admin);
+        let admin = match admin_opt {
+            Some(a) => a,
+            None => return Ok(()), // No admin set yet, skip rate limiting
+        };
+        let allowed = rate_limit::check_rate_limit(env, caller, function_type, &admin);
+        if allowed {
+            Ok(())
+        } else {
+            Err(RemittanceError::RateLimitExceeded)
         }
     }
 
@@ -1025,20 +1093,87 @@ impl RemittanceHubContract {
         upgradeable::migrate(&env, &admin)
     }
 
-    fn enforce_rate_limit(
-        env: &Env,
-        caller: &Address,
-        ft: FunctionType,
+
+
+    // ── Analytics ──────────────────────────────────────────────────
+
+    pub fn get_metric(env: Env, metric_type: MetricType, timestamp: u64, is_weekly: bool) -> i128 {
+        if is_weekly {
+            let week = timestamp / (86400 * 7);
+            env.storage()
+                .persistent()
+                .get(&DataKey::MetricWeekly(metric_type, week))
+                .unwrap_or(0)
+        } else {
+            let day = timestamp / 86400;
+            env.storage()
+                .persistent()
+                .get(&DataKey::MetricDaily(metric_type, day))
+                .unwrap_or(0)
+        }
+    }
+
+    pub fn reset_metric(
+        env: Env,
+        caller: Address,
+        metric_type: MetricType,
+        timestamp: u64,
+        is_weekly: bool,
     ) -> Result<(), RemittanceError> {
-        let admin: Address = env
+        caller.require_auth();
+        let stored_admin: Address = env
             .storage()
             .persistent()
             .get(&DataKey::Admin)
             .ok_or(RemittanceError::Unauthorized)?;
-        if !rate_limit::check_rate_limit(env, caller, ft, &admin) {
-            return Err(RemittanceError::RateLimitExceeded);
+
+        if caller != stored_admin {
+            return Err(RemittanceError::Unauthorized);
         }
+
+        if is_weekly {
+            let week = timestamp / (86400 * 7);
+            env.storage()
+                .persistent()
+                .set(&DataKey::MetricWeekly(metric_type, week), &0i128);
+        } else {
+            let day = timestamp / 86400;
+            env.storage()
+                .persistent()
+                .set(&DataKey::MetricDaily(metric_type, day), &0i128);
+        }
+
+        env.events().publish(
+            (symbol_short!("met_rst"),),
+            (metric_type, timestamp, is_weekly),
+        );
+
         Ok(())
+    }
+
+    fn track_metric(env: &Env, metric_type: MetricType, value: i128) {
+        if value == 0 {
+            return;
+        }
+
+        let now = env.ledger().timestamp();
+        let day = now / 86400;
+        let week = now / (86400 * 7);
+
+        let daily_key = DataKey::MetricDaily(metric_type, day);
+        let weekly_key = DataKey::MetricWeekly(metric_type, week);
+
+        let daily_val: i128 = env.storage().persistent().get(&daily_key).unwrap_or(0);
+        let weekly_val: i128 = env.storage().persistent().get(&weekly_key).unwrap_or(0);
+
+        env.storage()
+            .persistent()
+            .set(&daily_key, &(daily_val + value));
+        env.storage()
+            .persistent()
+            .set(&weekly_key, &(weekly_val + value));
+
+        env.events().publish((symbol_short!("met_upd"),), (metric_type, value, now));
     }
 }
 
@@ -1695,7 +1830,7 @@ mod test {
         let primary = Address::generate(&env);
         let secondary = Address::generate(&env);
 
-        client.initialize(&admin, &primary, &secondary, &3600);
+        client.init_hub(&admin, &primary, &secondary, &3600);
         client.configure_aml(&admin, &oracle_addr, &50);
 
         let config = client.get_aml_config();
@@ -1721,7 +1856,7 @@ mod test {
         let primary = Address::generate(&env);
         let secondary = Address::generate(&env);
 
-        client.initialize(&admin, &primary, &secondary, &3600);
+        client.init_hub(&admin, &primary, &secondary, &3600);
 
         let result = client.try_configure_aml(&other, &oracle_addr, &60);
         assert_eq!(result, Err(Ok(RemittanceError::Unauthorized)));
@@ -1740,7 +1875,7 @@ mod test {
         let primary = Address::generate(&env);
         let secondary = Address::generate(&env);
 
-        client.initialize(&admin, &primary, &secondary, &3600);
+        client.init_hub(&admin, &primary, &secondary, &3600);
         client.configure_aml(&admin, &oracle_addr, &50);
         client.set_aml_threshold(&admin, &75);
 
@@ -1762,7 +1897,7 @@ mod test {
         let primary = Address::generate(&env);
         let secondary = Address::generate(&env);
 
-        client.initialize(&admin, &primary, &secondary, &3600);
+        client.init_hub(&admin, &primary, &secondary, &3600);
         client.configure_aml(&admin, &oracle_addr, &50);
         client.set_aml_oracle(&admin, &new_oracle);
 
@@ -1809,7 +1944,7 @@ mod test {
         let contract_id = env.register_contract(None, RemittanceHubContract);
         let client = RemittanceHubContractClient::new(&env, &contract_id);
 
-        client.initialize(&admin, &primary, &secondary, &3600);
+        client.init_hub(&admin, &primary, &secondary, &3600);
         client.configure_aml(&admin, &aml_oracle_id, &50);
 
         let remittance_id = client.send_remittance(&from, &to, &5000, &symbol_short!("USD"));
@@ -1843,7 +1978,7 @@ mod test {
         let contract_id = env.register_contract(None, RemittanceHubContract);
         let client = RemittanceHubContractClient::new(&env, &contract_id);
 
-        client.initialize(&admin, &primary, &secondary, &3600);
+        client.init_hub(&admin, &primary, &secondary, &3600);
         client.configure_aml(&admin, &aml_oracle_id, &50);
 
         let remittance_id = client.send_remittance(&from, &to, &5000, &symbol_short!("USD"));
@@ -1873,7 +2008,7 @@ mod test {
         let client = RemittanceHubContractClient::new(&env, &contract_id);
 
         let admin = Address::generate(&env);
-        client.initialize(&admin, &primary, &secondary, &3600);
+        client.init_hub(&admin, &primary, &secondary, &3600);
         client.configure_aml(&admin, &bogus_oracle, &50);
 
         let from = Address::generate(&env);
@@ -1912,7 +2047,7 @@ mod test {
         let contract_id = env.register_contract(None, RemittanceHubContract);
         let client = RemittanceHubContractClient::new(&env, &contract_id);
 
-        client.initialize(&admin, &primary, &secondary, &3600);
+        client.init_hub(&admin, &primary, &secondary, &3600);
         client.configure_aml(&admin, &aml_oracle_id, &50);
 
         let remittance_id = client.send_remittance(&from, &to, &5000, &symbol_short!("USD"));
@@ -1944,7 +2079,7 @@ mod test {
         let contract_id = env.register_contract(None, RemittanceHubContract);
         let client = RemittanceHubContractClient::new(&env, &contract_id);
 
-        client.initialize(&admin, &primary, &secondary, &3600);
+        client.init_hub(&admin, &primary, &secondary, &3600);
         client.configure_aml(&admin, &aml_oracle_id, &50);
 
         let remittance_id = client.send_remittance(&from, &to, &5000, &symbol_short!("USD"));
@@ -1989,7 +2124,7 @@ mod test {
         let contract_id = env.register_contract(None, RemittanceHubContract);
         let client = RemittanceHubContractClient::new(&env, &contract_id);
 
-        client.initialize(&admin, &primary, &secondary, &3600);
+        client.init_hub(&admin, &primary, &secondary, &3600);
         client.configure_aml(&admin, &aml_oracle_id, &50);
 
         let remittance_id = client.send_remittance(&from, &to, &5000, &symbol_short!("USD"));
@@ -2012,7 +2147,7 @@ mod test {
         let primary = Address::generate(&env);
         let secondary = Address::generate(&env);
 
-        client.initialize(&admin, &primary, &secondary, &3600);
+        client.init_hub(&admin, &primary, &secondary, &3600);
         client.configure_aml(&admin, &oracle, &50);
 
         let result = client.try_clear_aml_flag(&admin, &999);
@@ -2035,7 +2170,7 @@ mod test {
         let client = RemittanceHubContractClient::new(&env, &contract_id);
 
         let admin = Address::generate(&env);
-        client.initialize(&admin, &primary, &secondary, &3600);
+        client.init_hub(&admin, &primary, &secondary, &3600);
         client.configure_aml(&admin, &bogus_oracle, &50);
 
         let from = Address::generate(&env);
@@ -2061,7 +2196,7 @@ mod test {
         let primary = Address::generate(&env);
         let secondary = Address::generate(&env);
 
-        client.initialize(&admin, &primary, &secondary, &3600);
+        client.init_hub(&admin, &primary, &secondary, &3600);
         client.configure_aml(&admin, &oracle, &50);
 
         let result = client.try_set_aml_threshold(&other, &75);
@@ -2080,7 +2215,7 @@ mod test {
         let primary = Address::generate(&env);
         let secondary = Address::generate(&env);
 
-        client.initialize(&admin, &primary, &secondary, &3600);
+        client.init_hub(&admin, &primary, &secondary, &3600);
 
         let result = client.try_set_aml_threshold(&admin, &75);
         assert_eq!(result, Err(Ok(RemittanceError::AmlNotConfigured)));
@@ -2206,5 +2341,63 @@ mod test {
         
         let recipient_balance = soroban_sdk::token::Client::new(&env, &token_id).balance(&recipient);
         assert_eq!(recipient_balance, 3000);
+    }
+
+    #[test]
+    fn test_metrics_tracking() {
+        let env = Env::default();
+        env.mock_all_auths();
+        env.ledger().with_mut(|li| {
+            li.timestamp = 86400 * 10; // Day 10
+        });
+
+        let contract_id = env.register_contract(None, RemittanceHubContract);
+        let client = RemittanceHubContractClient::new(&env, &contract_id);
+
+        let admin = Address::generate(&env);
+        let oracle = Address::generate(&env);
+        client.init_hub(&admin, &oracle, &oracle, &3600);
+
+        let sender = Address::generate(&env);
+        let recipient = Address::generate(&env);
+        let asset = Asset {
+            code: String::from_str(&env, "USDC"),
+            issuer: Address::generate(&env),
+        };
+
+        // Track Volume and Fee via Invoice Generation
+        client.generate_invoice(
+            &sender,
+            &recipient,
+            &1000,
+            &asset,
+            &(env.ledger().timestamp() + 1000),
+            &String::from_str(&env, "Test"),
+            &0,
+            &String::from_str(&env, "Memo"),
+        );
+
+        let volume = client.get_metric(&MetricType::Volume, &env.ledger().timestamp(), &false);
+        let fee = client.get_metric(&MetricType::Fee, &env.ledger().timestamp(), &false);
+        assert_eq!(volume, 1000);
+        assert_eq!(fee, 1000 * 250 / 10000);
+
+        // Track Success via Marking Invoice Paid
+        client.mark_invoice_paid(&1, &sender);
+        let success = client.get_metric(&MetricType::Success, &env.ledger().timestamp(), &false);
+        assert_eq!(success, 1);
+
+        // Verify Weekly Tracking
+        let weekly_volume = client.get_metric(&MetricType::Volume, &env.ledger().timestamp(), &true);
+        assert_eq!(weekly_volume, 1000);
+
+        // Test Reset
+        client.reset_metric(&admin, &MetricType::Volume, &env.ledger().timestamp(), &false);
+        let reset_volume = client.get_metric(&MetricType::Volume, &env.ledger().timestamp(), &false);
+        assert_eq!(reset_volume, 0);
+        
+        // Weekly should still be there
+        let weekly_volume_after = client.get_metric(&MetricType::Volume, &env.ledger().timestamp(), &true);
+        assert_eq!(weekly_volume_after, 1000);
     }
 }

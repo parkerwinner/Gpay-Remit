@@ -52,7 +52,14 @@
           "contract_data": {
             "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM",
             "key": {
-              "u64": 0
+              "vec": [
+                {
+                  "symbol": "Remittance"
+                },
+                {
+                  "u64": 0
+                }
+              ]
             },
             "durability": "persistent"
           }
@@ -65,7 +72,14 @@
                 "ext": "v0",
                 "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM",
                 "key": {
-                  "u64": 0
+                  "vec": [
+                    {
+                      "symbol": "Remittance"
+                    },
+                    {
+                      "u64": 0
+                    }
+                  ]
                 },
                 "durability": "persistent",
                 "val": {
@@ -102,7 +116,11 @@
                         "symbol": "status"
                       },
                       "val": {
-                        "symbol": "pending"
+                        "vec": [
+                          {
+                            "symbol": "Pending"
+                          }
+                        ]
                       }
                     },
                     {
@@ -351,7 +369,11 @@
                     "symbol": "status"
                   },
                   "val": {
-                    "symbol": "pending"
+                    "vec": [
+                      {
+                        "symbol": "Pending"
+                      }
+                    ]
                   }
                 },
                 {

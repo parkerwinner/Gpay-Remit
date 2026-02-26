@@ -1,6 +1,6 @@
 use soroban_sdk::{
-    contract, contractimpl, contracttype, contracterror, Address, Env,
-    InvokeError, Symbol, Val, Vec, IntoVal,
+    contract, contracterror, contractimpl, contracttype, Address, Env, IntoVal, InvokeError,
+    Symbol, Val, Vec,
 };
 
 #[contracterror]
