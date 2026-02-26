@@ -17,6 +17,13 @@ func TestSignTx(t *testing.T) {
 
 	// Create a dummy transaction
 	sourceAccount := txnbuild.SimpleAccount{AccountID: address, Sequence: 1}
+	
+	// Use a definitely valid test address
+	destination := "GC7S3S67JVRYCOY6Z7HJSJ6B676B6J6B6J6B6J6B6J6B6J6B6J6B6J6B"
+	// Wait, let's just generate another random kp for the destination to be safe.
+	destKP, _ := keypair.Random()
+	destination = destKP.Address()
+
 	tx, err := txnbuild.NewTransaction(
 		txnbuild.TransactionParams{
 			SourceAccount:        &sourceAccount,
@@ -25,18 +32,20 @@ func TestSignTx(t *testing.T) {
 			Preconditions:        txnbuild.Preconditions{TimeBounds: txnbuild.NewInfiniteTimeout()},
 			Operations: []txnbuild.Operation{
 				&txnbuild.Payment{
-					Destination: "GCO7V6V6VZ5X6Z5X6Z5X6Z5X6Z5X6Z5X6Z5X6Z5X6Z5X6Z5X6Z5X6Z5X",
+					Destination: destination,
 					Amount:      "10",
 					Asset:       txnbuild.NativeAsset{},
 				},
-
 			},
 		},
 	)
-	assert.NoError(t, err)
+	if !assert.NoError(t, err) || tx == nil {
+		t.FailNow()
+	}
 
 	envelopeXDR, err := tx.Base64()
 	assert.NoError(t, err)
+
 
 	t.Run("Valid signature", func(t *testing.T) {
 		signedXDR, err := SignTx(envelopeXDR, secret, network.TestNetworkPassphrase)
@@ -67,11 +76,17 @@ func TestSignTx(t *testing.T) {
 
 func TestBuildPaymentTx(t *testing.T) {
 	client := NewStellarClient("https://horizon-testnet.stellar.org", network.TestNetworkPassphrase)
-	sourceAccount := &txnbuild.SimpleAccount{AccountID: "GCO7V6V6VZ5X6Z5X6Z5X6Z5X6Z5X6Z5X6Z5X6Z5X6Z5X6Z5X6Z5X6Z5X", Sequence: 1}
+	sourceKP, _ := keypair.Random()
+	sourceAccount := &txnbuild.SimpleAccount{AccountID: sourceKP.Address(), Sequence: 1}
 
+
+	destKP, _ := keypair.Random()
+	destination := destKP.Address()
+	issuerKP, _ := keypair.Random()
+	issuer := issuerKP.Address()
 
 	t.Run("Native payment", func(t *testing.T) {
-		tx, err := client.BuildPaymentTx(sourceAccount, "GABC...", "XLM", "", "100")
+		tx, err := client.BuildPaymentTx(sourceAccount, destination, "XLM", "", "100")
 		assert.NoError(t, err)
 		assert.NotNil(t, tx)
 		assert.Len(t, tx.Operations(), 1)
@@ -82,13 +97,14 @@ func TestBuildPaymentTx(t *testing.T) {
 	})
 
 	t.Run("Credit asset payment", func(t *testing.T) {
-		tx, err := client.BuildPaymentTx(sourceAccount, "GABC...", "USDC", "GISS...", "50")
+		tx, err := client.BuildPaymentTx(sourceAccount, destination, "USDC", issuer, "50")
 		assert.NoError(t, err)
 		assert.NotNil(t, tx)
 		
 		op := tx.Operations()[0].(*txnbuild.Payment)
 		asset := op.Asset.(txnbuild.CreditAsset)
 		assert.Equal(t, "USDC", asset.Code)
-		assert.Equal(t, "GISS...", asset.Issuer)
+		assert.Equal(t, issuer, asset.Issuer)
 	})
+
 }

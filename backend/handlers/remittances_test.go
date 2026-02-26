@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/yourusername/gpay-remit/config"
 	"github.com/yourusername/gpay-remit/models"
+	"github.com/stellar/go/txnbuild"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 )
