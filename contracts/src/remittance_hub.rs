@@ -3,7 +3,8 @@ use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, symbol_short, Address, Env, String, Symbol, BytesN,
 };
 
-use crate::aml::{AmlConfig, AmlStatus, AmlScreeningResult};
+use crate::aml::{AmlConfig, AmlScreeningResult, AmlStatus};
+use crate::rate_limit::{self, FunctionType};
 use crate::upgradeable;
 
 #[contracterror]
@@ -1022,6 +1023,22 @@ impl RemittanceHubContract {
             return Err(upgradeable::UpgradeError::Unauthorized);
         }
         upgradeable::migrate(&env, &admin)
+    }
+
+    fn enforce_rate_limit(
+        env: &Env,
+        caller: &Address,
+        ft: FunctionType,
+    ) -> Result<(), RemittanceError> {
+        let admin: Address = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Admin)
+            .ok_or(RemittanceError::Unauthorized)?;
+        if !rate_limit::check_rate_limit(env, caller, ft, &admin) {
+            return Err(RemittanceError::RateLimitExceeded);
+        }
+        Ok(())
     }
 }
 
