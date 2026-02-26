@@ -1,6 +1,6 @@
 use crate::aml::{self, AmlConfig, AmlScreeningResult, AmlStatus};
 use crate::oracle::{self as oracle_mod, CachedRate, OracleConfig};
-use crate::rate_limit::{self as rate_limit_mod, FunctionType};
+use crate::rate_limit::{self, FunctionType};
 use crate::upgradeable;
 use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, symbol_short, Address, BytesN, Env,
@@ -1072,7 +1072,7 @@ impl RemittanceHubContract {
             Some(a) => a,
             None => return Ok(()), // No admin set yet, skip rate limiting
         };
-        let allowed = rate_limit_mod::check_rate_limit(env, caller, function_type, &admin);
+        let allowed = rate_limit::check_rate_limit(env, caller, function_type, &admin);
         if allowed {
             Ok(())
         } else {
@@ -1134,6 +1134,8 @@ impl RemittanceHubContract {
         upgradeable::migrate(&env, &admin)
     }
 
+
+
     // ── Analytics ──────────────────────────────────────────────────
 
     pub fn get_metric(env: Env, metric_type: MetricType, timestamp: u64, is_weekly: bool) -> i128 {
@@ -1165,6 +1167,7 @@ impl RemittanceHubContract {
             .persistent()
             .get(&DataKey::Admin)
             .ok_or(RemittanceError::Unauthorized)?;
+
         if caller != stored_admin {
             return Err(RemittanceError::Unauthorized);
         }

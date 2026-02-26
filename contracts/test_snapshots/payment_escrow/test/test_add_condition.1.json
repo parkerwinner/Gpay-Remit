@@ -152,302 +152,6 @@
         {
           "contract_data": {
             "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM",
-            "key": {
-              "vec": [
-                {
-                  "symbol": "Escrow"
-                },
-                {
-                  "u64": 1
-                }
-              ]
-            },
-            "durability": "persistent"
-          }
-        },
-        [
-          {
-            "last_modified_ledger_seq": 0,
-            "data": {
-              "contract_data": {
-                "ext": "v0",
-                "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM",
-                "key": {
-                  "vec": [
-                    {
-                      "symbol": "Escrow"
-                    },
-                    {
-                      "u64": 1
-                    }
-                  ]
-                },
-                "durability": "persistent",
-                "val": {
-                  "map": [
-                    {
-                      "key": {
-                        "symbol": "amount"
-                      },
-                      "val": {
-                        "i128": {
-                          "hi": 0,
-                          "lo": 1000
-                        }
-                      }
-                    },
-                    {
-                      "key": {
-                        "symbol": "asset"
-                      },
-                      "val": {
-                        "map": [
-                          {
-                            "key": {
-                              "symbol": "code"
-                            },
-                            "val": {
-                              "string": "USDC"
-                            }
-                          },
-                          {
-                            "key": {
-                              "symbol": "issuer"
-                            },
-                            "val": {
-                              "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
-                            }
-                          }
-                        ]
-                      }
-                    },
-                    {
-                      "key": {
-                        "symbol": "created_at"
-                      },
-                      "val": {
-                        "u64": 0
-                      }
-                    },
-                    {
-                      "key": {
-                        "symbol": "deposited_amount"
-                      },
-                      "val": {
-                        "i128": {
-                          "hi": 0,
-                          "lo": 0
-                        }
-                      }
-                    },
-                    {
-                      "key": {
-                        "symbol": "escrow_id"
-                      },
-                      "val": {
-                        "u64": 1
-                      }
-                    },
-                    {
-                      "key": {
-                        "symbol": "flags"
-                      },
-                      "val": {
-                        "u32": 0
-                      }
-                    },
-                    {
-                      "key": {
-                        "symbol": "last_deposit_at"
-                      },
-                      "val": {
-                        "u64": 0
-                      }
-                    },
-                    {
-                      "key": {
-                        "symbol": "memo"
-                      },
-                      "val": {
-                        "string": "Test"
-                      }
-                    },
-                    {
-                      "key": {
-                        "symbol": "recipient"
-                      },
-                      "val": {
-                        "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAITA4"
-                      }
-                    },
-                    {
-                      "key": {
-                        "symbol": "refund_timestamp"
-                      },
-                      "val": {
-                        "u64": 0
-                      }
-                    },
-                    {
-                      "key": {
-                        "symbol": "refunded_amount"
-                      },
-                      "val": {
-                        "i128": {
-                          "hi": 0,
-                          "lo": 0
-                        }
-                      }
-                    },
-                    {
-                      "key": {
-                        "symbol": "release_conditions"
-                      },
-                      "val": {
-                        "map": [
-                          {
-                            "key": {
-                              "symbol": "conditions"
-                            },
-                            "val": {
-                              "vec": [
-                                {
-                                  "map": [
-                                    {
-                                      "key": {
-                                        "symbol": "condition_type"
-                                      },
-                                      "val": {
-                                        "vec": [
-                                          {
-                                            "symbol": "OraclePrice"
-                                          }
-                                        ]
-                                      }
-                                    },
-                                    {
-                                      "key": {
-                                        "symbol": "required"
-                                      },
-                                      "val": {
-                                        "bool": true
-                                      }
-                                    },
-                                    {
-                                      "key": {
-                                        "symbol": "threshold_value"
-                                      },
-                                      "val": {
-                                        "i128": {
-                                          "hi": 0,
-                                          "lo": 100
-                                        }
-                                      }
-                                    },
-                                    {
-                                      "key": {
-                                        "symbol": "verified"
-                                      },
-                                      "val": {
-                                        "bool": false
-                                      }
-                                    }
-                                  ]
-                                }
-                              ]
-                            }
-                          },
-                          {
-                            "key": {
-                              "symbol": "current_approvals"
-                            },
-                            "val": {
-                              "u32": 0
-                            }
-                          },
-                          {
-                            "key": {
-                              "symbol": "expiration_timestamp"
-                            },
-                            "val": {
-                              "u64": 2000
-                            }
-                          },
-                          {
-                            "key": {
-                              "symbol": "min_approvals"
-                            },
-                            "val": {
-                              "u32": 1
-                            }
-                          },
-                          {
-                            "key": {
-                              "symbol": "operator"
-                            },
-                            "val": {
-                              "vec": [
-                                {
-                                  "symbol": "And"
-                                }
-                              ]
-                            }
-                          }
-                        ]
-                      }
-                    },
-                    {
-                      "key": {
-                        "symbol": "release_timestamp"
-                      },
-                      "val": {
-                        "u64": 0
-                      }
-                    },
-                    {
-                      "key": {
-                        "symbol": "released_amount"
-                      },
-                      "val": {
-                        "i128": {
-                          "hi": 0,
-                          "lo": 0
-                        }
-                      }
-                    },
-                    {
-                      "key": {
-                        "symbol": "sender"
-                      },
-                      "val": {
-                        "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M"
-                      }
-                    },
-                    {
-                      "key": {
-                        "symbol": "status"
-                      },
-                      "val": {
-                        "vec": [
-                          {
-                            "symbol": "Pending"
-                          }
-                        ]
-                      }
-                    }
-                  ]
-                }
-              }
-            },
-            "ext": "v0"
-          },
-          4095
-        ]
-      ],
-      [
-        {
-          "contract_data": {
-            "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM",
             "key": "ledger_key_contract_instance",
             "durability": "persistent"
           }
@@ -477,6 +181,304 @@
                         },
                         "val": {
                           "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
+                        }
+                      },
+                      {
+                        "key": {
+                          "vec": [
+                            {
+                              "symbol": "Escrow"
+                            },
+                            {
+                              "u64": 1
+                            }
+                          ]
+                        },
+                        "val": {
+                          "map": [
+                            {
+                              "key": {
+                                "symbol": "allow_partial_release"
+                              },
+                              "val": {
+                                "bool": false
+                              }
+                            },
+                            {
+                              "key": {
+                                "symbol": "amount"
+                              },
+                              "val": {
+                                "i128": {
+                                  "hi": 0,
+                                  "lo": 1000
+                                }
+                              }
+                            },
+                            {
+                              "key": {
+                                "symbol": "asset"
+                              },
+                              "val": {
+                                "map": [
+                                  {
+                                    "key": {
+                                      "symbol": "code"
+                                    },
+                                    "val": {
+                                      "string": "USDC"
+                                    }
+                                  },
+                                  {
+                                    "key": {
+                                      "symbol": "issuer"
+                                    },
+                                    "val": {
+                                      "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
+                                    }
+                                  }
+                                ]
+                              }
+                            },
+                            {
+                              "key": {
+                                "symbol": "created_at"
+                              },
+                              "val": {
+                                "u64": 0
+                              }
+                            },
+                            {
+                              "key": {
+                                "symbol": "deposited_amount"
+                              },
+                              "val": {
+                                "i128": {
+                                  "hi": 0,
+                                  "lo": 0
+                                }
+                              }
+                            },
+                            {
+                              "key": {
+                                "symbol": "escrow_id"
+                              },
+                              "val": {
+                                "u64": 1
+                              }
+                            },
+                            {
+                              "key": {
+                                "symbol": "kyc_compliant"
+                              },
+                              "val": {
+                                "bool": false
+                              }
+                            },
+                            {
+                              "key": {
+                                "symbol": "last_deposit_at"
+                              },
+                              "val": {
+                                "u64": 0
+                              }
+                            },
+                            {
+                              "key": {
+                                "symbol": "memo"
+                              },
+                              "val": {
+                                "string": "Test"
+                              }
+                            },
+                            {
+                              "key": {
+                                "symbol": "multi_party_enabled"
+                              },
+                              "val": {
+                                "bool": false
+                              }
+                            },
+                            {
+                              "key": {
+                                "symbol": "recipient"
+                              },
+                              "val": {
+                                "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAITA4"
+                              }
+                            },
+                            {
+                              "key": {
+                                "symbol": "refund_timestamp"
+                              },
+                              "val": {
+                                "u64": 0
+                              }
+                            },
+                            {
+                              "key": {
+                                "symbol": "refunded_amount"
+                              },
+                              "val": {
+                                "i128": {
+                                  "hi": 0,
+                                  "lo": 0
+                                }
+                              }
+                            },
+                            {
+                              "key": {
+                                "symbol": "release_conditions"
+                              },
+                              "val": {
+                                "map": [
+                                  {
+                                    "key": {
+                                      "symbol": "conditions"
+                                    },
+                                    "val": {
+                                      "vec": [
+                                        {
+                                          "map": [
+                                            {
+                                              "key": {
+                                                "symbol": "condition_type"
+                                              },
+                                              "val": {
+                                                "vec": [
+                                                  {
+                                                    "symbol": "OraclePrice"
+                                                  }
+                                                ]
+                                              }
+                                            },
+                                            {
+                                              "key": {
+                                                "symbol": "required"
+                                              },
+                                              "val": {
+                                                "bool": true
+                                              }
+                                            },
+                                            {
+                                              "key": {
+                                                "symbol": "threshold_value"
+                                              },
+                                              "val": {
+                                                "i128": {
+                                                  "hi": 0,
+                                                  "lo": 100
+                                                }
+                                              }
+                                            },
+                                            {
+                                              "key": {
+                                                "symbol": "verified"
+                                              },
+                                              "val": {
+                                                "bool": false
+                                              }
+                                            }
+                                          ]
+                                        }
+                                      ]
+                                    }
+                                  },
+                                  {
+                                    "key": {
+                                      "symbol": "current_approvals"
+                                    },
+                                    "val": {
+                                      "u32": 0
+                                    }
+                                  },
+                                  {
+                                    "key": {
+                                      "symbol": "expiration_timestamp"
+                                    },
+                                    "val": {
+                                      "u64": 2000
+                                    }
+                                  },
+                                  {
+                                    "key": {
+                                      "symbol": "min_approvals"
+                                    },
+                                    "val": {
+                                      "u32": 1
+                                    }
+                                  },
+                                  {
+                                    "key": {
+                                      "symbol": "operator"
+                                    },
+                                    "val": {
+                                      "vec": [
+                                        {
+                                          "symbol": "And"
+                                        }
+                                      ]
+                                    }
+                                  },
+                                  {
+                                    "key": {
+                                      "symbol": "oracle_confirmation"
+                                    },
+                                    "val": {
+                                      "bool": false
+                                    }
+                                  },
+                                  {
+                                    "key": {
+                                      "symbol": "recipient_approval"
+                                    },
+                                    "val": {
+                                      "bool": false
+                                    }
+                                  }
+                                ]
+                              }
+                            },
+                            {
+                              "key": {
+                                "symbol": "release_timestamp"
+                              },
+                              "val": {
+                                "u64": 0
+                              }
+                            },
+                            {
+                              "key": {
+                                "symbol": "released_amount"
+                              },
+                              "val": {
+                                "i128": {
+                                  "hi": 0,
+                                  "lo": 0
+                                }
+                              }
+                            },
+                            {
+                              "key": {
+                                "symbol": "sender"
+                              },
+                              "val": {
+                                "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M"
+                              }
+                            },
+                            {
+                              "key": {
+                                "symbol": "status"
+                              },
+                              "val": {
+                                "vec": [
+                                  {
+                                    "symbol": "Pending"
+                                  }
+                                ]
+                              }
+                            }
+                          ]
                         }
                       },
                       {
@@ -1146,6 +1148,14 @@
               "map": [
                 {
                   "key": {
+                    "symbol": "allow_partial_release"
+                  },
+                  "val": {
+                    "bool": false
+                  }
+                },
+                {
+                  "key": {
                     "symbol": "amount"
                   },
                   "val": {
@@ -1209,10 +1219,10 @@
                 },
                 {
                   "key": {
-                    "symbol": "flags"
+                    "symbol": "kyc_compliant"
                   },
                   "val": {
-                    "u32": 0
+                    "bool": false
                   }
                 },
                 {
@@ -1229,6 +1239,14 @@
                   },
                   "val": {
                     "string": "Test"
+                  }
+                },
+                {
+                  "key": {
+                    "symbol": "multi_party_enabled"
+                  },
+                  "val": {
+                    "bool": false
                   }
                 },
                 {
@@ -1350,6 +1368,22 @@
                               "symbol": "And"
                             }
                           ]
+                        }
+                      },
+                      {
+                        "key": {
+                          "symbol": "oracle_confirmation"
+                        },
+                        "val": {
+                          "bool": false
+                        }
+                      },
+                      {
+                        "key": {
+                          "symbol": "recipient_approval"
+                        },
+                        "val": {
+                          "bool": false
                         }
                       }
                     ]
