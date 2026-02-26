@@ -25,10 +25,11 @@ func TestSignTx(t *testing.T) {
 			Preconditions:        txnbuild.Preconditions{TimeBounds: txnbuild.NewInfiniteTimeout()},
 			Operations: []txnbuild.Operation{
 				&txnbuild.Payment{
-					Destination: "GDQNY3Y7PNO5UAB6STH6YTP6S44R3S6SPJ7YNCK37N7I6U6YVCOV56V2",
+					Destination: "GCO7V6V6VZ5X6Z5X6Z5X6Z5X6Z5X6Z5X6Z5X6Z5X6Z5X6Z5X6Z5X6Z5X",
 					Amount:      "10",
 					Asset:       txnbuild.NativeAsset{},
 				},
+
 			},
 		},
 	)
@@ -66,7 +67,8 @@ func TestSignTx(t *testing.T) {
 
 func TestBuildPaymentTx(t *testing.T) {
 	client := NewStellarClient("https://horizon-testnet.stellar.org", network.TestNetworkPassphrase)
-	sourceAccount := &txnbuild.SimpleAccount{AccountID: "GDQNY3Y7PNO5UAB6STH6YTP6S44R3S6SPJ7YNCK37N7I6U6YVCOV56V2", Sequence: 1}
+	sourceAccount := &txnbuild.SimpleAccount{AccountID: "GCO7V6V6VZ5X6Z5X6Z5X6Z5X6Z5X6Z5X6Z5X6Z5X6Z5X6Z5X6Z5X6Z5X", Sequence: 1}
+
 
 	t.Run("Native payment", func(t *testing.T) {
 		tx, err := client.BuildPaymentTx(sourceAccount, "GABC...", "XLM", "", "100")

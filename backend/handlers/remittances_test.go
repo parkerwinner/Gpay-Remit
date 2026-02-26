@@ -25,6 +25,8 @@ type MockStellarClient struct {
 	ValidateAccountFunc func(accountID string) error
 	BuildEscrowTxFunc   func(sender, recipient, assetCode, issuer, amount string) (string, error)
 	SubmitPaymentFunc   func(sourceSecret, destination, assetCode, issuer, amount string) (string, error)
+	BuildPaymentTxFunc  func(sourceAccount txnbuild.Account, destination string, assetCode string, issuer string, amount string) (*txnbuild.Transaction, error)
+	SignTxFunc          func(envelopeXDR string, secretKey string) (string, error)
 }
 
 func (m *MockStellarClient) ValidateAccount(accountID string) error {
@@ -38,6 +40,15 @@ func (m *MockStellarClient) BuildEscrowTx(sender, recipient, assetCode, issuer, 
 func (m *MockStellarClient) SubmitPayment(sourceSecret, destination, assetCode, issuer, amount string) (string, error) {
 	return m.SubmitPaymentFunc(sourceSecret, destination, assetCode, issuer, amount)
 }
+
+func (m *MockStellarClient) BuildPaymentTx(sourceAccount txnbuild.Account, destination string, assetCode string, issuer string, amount string) (*txnbuild.Transaction, error) {
+	return m.BuildPaymentTxFunc(sourceAccount, destination, assetCode, issuer, amount)
+}
+
+func (m *MockStellarClient) SignTx(envelopeXDR string, secretKey string) (string, error) {
+	return m.SignTxFunc(envelopeXDR, secretKey)
+}
+
 
 func TestCreateRemittance(t *testing.T) {
 	gin.SetMode(gin.TestMode)
