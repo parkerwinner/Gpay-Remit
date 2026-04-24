@@ -22,7 +22,7 @@ type User struct {
 	Country         string         `gorm:"size:2" json:"country"`
 	KYCStatus       string         `gorm:"size:20;default:'pending'" json:"kyc_status"`
 	KYCVerifiedAt   *time.Time     `json:"kyc_verified_at"`
-	IsActive        bool           `gorm:"default:true" json:"is_active"`
+	IsActive        bool           `gorm:"index;default:true" json:"is_active"`
 	DefaultCurrency string         `gorm:"size:10;default:'USD'" json:"default_currency"`
 }
 
