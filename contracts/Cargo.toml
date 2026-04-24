@@ -20,3 +20,4 @@ harness = false
 
 [features]
 prop = []
+integration = []

@@ -2,12 +2,14 @@ package handlers
 
 import (
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/sirupsen/logrus"
 	"github.com/yourusername/gpay-remit/config"
+	"github.com/yourusername/gpay-remit/errors"
 	"github.com/yourusername/gpay-remit/logger"
 	"github.com/yourusername/gpay-remit/middleware"
 	"github.com/yourusername/gpay-remit/models"
@@ -69,6 +71,10 @@ func (h *AuthHandler) Register(c *gin.Context) {
 	}
 
 	if err := h.DB.Create(&user).Error; err != nil {
+		if strings.Contains(err.Error(), "unique") || strings.Contains(err.Error(), "duplicate") || strings.Contains(err.Error(), "UNIQUE") {
+			c.JSON(http.StatusConflict, gin.H{"error": "Email already registered"})
+			return
+		}
 		logger.Log.WithFields(logrus.Fields{
 			"endpoint": "/auth/register",
 		}).Error("Failed to create user")

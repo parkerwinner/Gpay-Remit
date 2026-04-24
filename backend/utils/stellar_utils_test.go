@@ -79,7 +79,6 @@ func TestBuildPaymentTx(t *testing.T) {
 	sourceKP, _ := keypair.Random()
 	sourceAccount := &txnbuild.SimpleAccount{AccountID: sourceKP.Address(), Sequence: 1}
 
-
 	destKP, _ := keypair.Random()
 	destination := destKP.Address()
 	issuerKP, _ := keypair.Random()
@@ -90,9 +89,24 @@ func TestBuildPaymentTx(t *testing.T) {
 		assert.NoError(t, err)
 		assert.NotNil(t, tx)
 		assert.Len(t, tx.Operations(), 1)
-		
+
 		op := tx.Operations()[0].(*txnbuild.Payment)
 		assert.Equal(t, "100", op.Amount)
+		assert.IsType(t, txnbuild.NativeAsset{}, op.Asset)
+	})
+
+	t.Run("Native payment lowercase xlm", func(t *testing.T) {
+		tx, err := client.BuildPaymentTx(sourceAccount, destination, "xlm", "", "1")
+		assert.NoError(t, err)
+		assert.NotNil(t, tx)
+		op := tx.Operations()[0].(*txnbuild.Payment)
+		assert.IsType(t, txnbuild.NativeAsset{}, op.Asset)
+	})
+
+	t.Run("Empty asset code treated as native", func(t *testing.T) {
+		tx, err := client.BuildPaymentTx(sourceAccount, destination, "", "", "10")
+		assert.NoError(t, err)
+		op := tx.Operations()[0].(*txnbuild.Payment)
 		assert.IsType(t, txnbuild.NativeAsset{}, op.Asset)
 	})
 
@@ -100,11 +114,18 @@ func TestBuildPaymentTx(t *testing.T) {
 		tx, err := client.BuildPaymentTx(sourceAccount, destination, "USDC", issuer, "50")
 		assert.NoError(t, err)
 		assert.NotNil(t, tx)
-		
+
 		op := tx.Operations()[0].(*txnbuild.Payment)
 		asset := op.Asset.(txnbuild.CreditAsset)
 		assert.Equal(t, "USDC", asset.Code)
 		assert.Equal(t, issuer, asset.Issuer)
 	})
 
+	t.Run("Payment destination matches", func(t *testing.T) {
+		tx, err := client.BuildPaymentTx(sourceAccount, destination, "XLM", "", "5")
+		assert.NoError(t, err)
+		op := tx.Operations()[0].(*txnbuild.Payment)
+		assert.Equal(t, destination, op.Destination)
+	})
 }
+

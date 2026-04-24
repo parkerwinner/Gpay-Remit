@@ -1,16 +1,13 @@
 package main
 
 import (
-	"net/http"
 	"os"
 
 	"github.com/gin-gonic/gin"
 	"github.com/yourusername/gpay-remit/config"
-	"github.com/yourusername/gpay-remit/errors"
 	"github.com/yourusername/gpay-remit/handlers"
 	"github.com/yourusername/gpay-remit/logger"
 	"github.com/yourusername/gpay-remit/middleware"
-	"github.com/yourusername/gpay-remit/utils"
 )
 
 func main() {
@@ -43,12 +40,10 @@ func main() {
 		c.Next()
 	})
 
-	router.GET("/health", func(c *gin.Context) {
-		c.JSON(http.StatusOK, gin.H{
-			"status":  "healthy",
-			"service": "gpay-remit-api",
-		})
-	})
+	healthHandler := handlers.NewHealthHandler(db, cfg)
+	router.GET("/health", healthHandler.Health)
+	router.GET("/health/ready", healthHandler.Ready)
+	router.GET("/health/live", healthHandler.Live)
 
 	api := router.Group("/api/v1")
 	{
