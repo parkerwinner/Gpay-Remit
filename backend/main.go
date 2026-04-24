@@ -1,7 +1,6 @@
 package main
 
 import (
-	"log"
 	"net/http"
 	"os"
 
@@ -9,39 +8,28 @@ import (
 	"github.com/yourusername/gpay-remit/config"
 	"github.com/yourusername/gpay-remit/errors"
 	"github.com/yourusername/gpay-remit/handlers"
+	"github.com/yourusername/gpay-remit/logger"
 	"github.com/yourusername/gpay-remit/middleware"
 	"github.com/yourusername/gpay-remit/utils"
 )
 
 func main() {
-	// Load configuration
+	env := os.Getenv("APP_ENV")
+	logger.Init(env)
+
 	cfg, err := config.LoadConfig()
 	if err != nil {
-		log.Fatalf("Failed to load config: %v", err)
+		logger.Log.WithField("error", err).Fatal("Failed to load config")
 	}
 
-	// Initialize database
 	db, err := config.InitDB(cfg)
 	if err != nil {
-		log.Fatalf("Failed to connect to database: %v", err)
+		logger.Log.WithField("error", err).Fatal("Failed to connect to database")
 	}
 
-	// Initialize Redis cache
-	redisURL := os.Getenv("REDIS_URL")
-	if redisURL == "" {
-		redisURL = "localhost:6379"
-	}
-	if err := utils.InitRedis(redisURL, "", 0); err != nil {
-		log.Printf("Warning: Failed to connect to Redis: %v. Caching will be disabled.", err)
-	}
-
-	// Setup router
-	router := gin.New() // Use New() to have full control over middleware
-
-	// Global middleware
-	router.Use(middleware.RequestIDMiddleware())
-	router.Use(middleware.ErrorHandler())
-	router.Use(gin.Logger()) // Re-add default logger
+	router := gin.New()
+	router.Use(gin.Recovery())
+	router.Use(middleware.RequestLogger())
 
 	// CORS middleware
 	router.Use(func(c *gin.Context) {
@@ -55,7 +43,6 @@ func main() {
 		c.Next()
 	})
 
-	// Health check
 	router.GET("/health", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{
 			"status":  "healthy",
@@ -63,27 +50,18 @@ func main() {
 		})
 	})
 
-	// API routes
 	api := router.Group("/api/v1")
 	{
-		// Public auth endpoints
 		authHandler := handlers.NewAuthHandler(db, cfg)
+		api.POST("/auth/register", authHandler.Register)
+		api.POST("/auth/login", authHandler.Login)
 		api.POST("/auth/refresh", authHandler.Refresh)
-		api.POST("/auth/login", func(c *gin.Context) {
-			// Stub login endpoint
-			c.JSON(http.StatusOK, gin.H{"message": "Login endpoint stub"})
-		})
-		
-		// Public user endpoints
-		api.POST("/users", func(c *gin.Context) {
-			c.JSON(http.StatusOK, gin.H{"message": "User creation endpoint"})
-		})
 
-		// Protected routes
+		api.POST("/users", authHandler.Register)
+
 		protected := api.Group("/")
 		protected.Use(middleware.JwtAuthMiddleware(cfg))
 		{
-			// Remittance endpoints
 			remittanceHandler := handlers.NewRemittanceHandler(db, cfg)
 			protected.POST("/remittances/create", remittanceHandler.CreateRemittance)
 			protected.POST("/remittances", remittanceHandler.SendRemittance)
@@ -91,20 +69,18 @@ func main() {
 			protected.GET("/remittances", remittanceHandler.ListRemittances)
 			protected.POST("/remittances/:id/complete", middleware.RequireRole("admin"), remittanceHandler.CompleteRemittance)
 
-			// Invoice endpoints
 			protected.POST("/invoices", remittanceHandler.CreateInvoice)
 			protected.GET("/invoices/:id", remittanceHandler.GetInvoice)
 		}
 	}
 
-	// Start server
 	port := cfg.Port
 	if port == "" {
 		port = "8080"
 	}
 
-	log.Printf("Starting Gpay-Remit API server on port %s", port)
+	logger.Log.WithField("port", port).Info("Starting Gpay-Remit API server")
 	if err := router.Run(":" + port); err != nil {
-		log.Fatalf("Failed to start server: %v", err)
+		logger.Log.WithField("error", err).Fatal("Failed to start server")
 	}
 }

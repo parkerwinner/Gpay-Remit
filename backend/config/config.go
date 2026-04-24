@@ -1,15 +1,10 @@
 package config
 
 import (
-	"database/sql"
 	"fmt"
-	"log"
 	"os"
 	"time"
 
-	"github.com/golang-migrate/migrate/v4"
-	_ "github.com/golang-migrate/migrate/v4/database/postgres"
-	_ "github.com/golang-migrate/migrate/v4/source/file"
 	"github.com/joho/godotenv"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
@@ -52,38 +47,12 @@ func LoadConfig() (*Config, error) {
 	}, nil
 }
 
-func RunMigrations(databaseURL string) error {
-	m, err := migrate.New(
-		"file://migrations",
-		databaseURL,
-	)
-	if err != nil {
-		return fmt.Errorf("failed to create migration instance: %w", err)
-	}
-
-	if err := m.Up(); err != nil && err != migrate.ErrNoChange {
-		return fmt.Errorf("failed to run migrations: %w", err)
-	}
-
-	log.Println("Database migrations completed successfully")
-	return nil
-}
-
 func InitDB(cfg *Config) (*gorm.DB, error) {
-	// Run migrations first
-	if err := RunMigrations(cfg.DatabaseURL); err != nil {
-		return nil, err
-	}
-
-	db, err := gorm.Open(postgres.Open(cfg.DatabaseURL), &gorm.Config{
-		PrepareStmt:            true, // Use prepared statements for all queries
-		SkipDefaultTransaction: true, // Optimize performance by skipping default transactions
-	})
+	db, err := gorm.Open(postgres.Open(cfg.DatabaseURL), &gorm.Config{})
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to database: %w", err)
 	}
 
-	// Configure connection pool
 	sqlDB, err := db.DB()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get sql.DB: %w", err)
