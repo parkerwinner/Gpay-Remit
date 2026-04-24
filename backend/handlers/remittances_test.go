@@ -95,10 +95,10 @@ func TestCreateRemittance(t *testing.T) {
 
 	t.Run("Invalid Amount", func(t *testing.T) {
 		reqBody := CreateRemittanceRequest{
-			SenderAccount:   "GCO7V6V6VZ5X6Z5X6Z5X6Z5X6Z5X6Z5X6Z5X6Z5X6Z5X6Z5X6Z5X6Z5X",
+			SenderAccount:    "GCO7V6V6VZ5X6Z5X6Z5X6Z5X6Z5X6Z5X6Z5X6Z5X6Z5X6Z5X6Z5X6Z5X",
 			RecipientAccount: "GCO7V6V6VZ5X6Z5X6Z5X6Z5X6Z5X6Z5X6Z5X6Z5X6Z5X6Z5X6Z5X6Z5X",
-			Amount:          -10,
-			AssetCode:       "USDC",
+			Amount:           -10,
+			AssetCode:        "USDC",
 		}
 		body, _ := json.Marshal(reqBody)
 		w := httptest.NewRecorder()
@@ -106,5 +106,81 @@ func TestCreateRemittance(t *testing.T) {
 		router.ServeHTTP(w, req)
 
 		assert.Equal(t, http.StatusBadRequest, w.Code)
+	})
+
+	t.Run("Zero Amount", func(t *testing.T) {
+		reqBody := CreateRemittanceRequest{
+			SenderAccount:    "GCO7V6V6VZ5X6Z5X6Z5X6Z5X6Z5X6Z5X6Z5X6Z5X6Z5X6Z5X6Z5X6Z5X",
+			RecipientAccount: "GCO7V6V6VZ5X6Z5X6Z5X6Z5X6Z5X6Z5X6Z5X6Z5X6Z5X6Z5X6Z5X6Z5X",
+			Amount:           0,
+			AssetCode:        "USDC",
+		}
+		body, _ := json.Marshal(reqBody)
+		w := httptest.NewRecorder()
+		req, _ := http.NewRequest("POST", "/remittances/create", bytes.NewBuffer(body))
+		router.ServeHTTP(w, req)
+
+		assert.Equal(t, http.StatusBadRequest, w.Code)
+	})
+
+	t.Run("Missing Asset Code", func(t *testing.T) {
+		reqBody := map[string]interface{}{
+			"sender_account":    "GCO7V6V6VZ5X6Z5X6Z5X6Z5X6Z5X6Z5X6Z5X6Z5X6Z5X6Z5X6Z5X6Z5X",
+			"recipient_account": "GCO7V6V6VZ5X6Z5X6Z5X6Z5X6Z5X6Z5X6Z5X6Z5X6Z5X6Z5X6Z5X6Z5X",
+			"amount":            100,
+		}
+		body, _ := json.Marshal(reqBody)
+		w := httptest.NewRecorder()
+		req, _ := http.NewRequest("POST", "/remittances/create", bytes.NewBuffer(body))
+		router.ServeHTTP(w, req)
+
+		assert.Equal(t, http.StatusBadRequest, w.Code)
+	})
+
+	t.Run("Stellar Client Failure", func(t *testing.T) {
+		failHandler := &RemittanceHandler{
+			db:     db,
+			config: &config.Config{},
+			stellarClient: &MockStellarClient{
+				ValidateAccountFunc: func(accountID string) error { return nil },
+				BuildEscrowTxFunc: func(sender, recipient, assetCode, issuer, amount string) (string, error) {
+					return "", assert.AnError
+				},
+			},
+		}
+		failRouter := gin.New()
+		failRouter.Use(func(c *gin.Context) {
+			c.Set("userID", uint(1))
+			c.Next()
+		})
+		failRouter.POST("/remittances/create", failHandler.CreateRemittance)
+
+		reqBody := CreateRemittanceRequest{
+			SenderAccount:    "GCO7V6V6VZ5X6Z5X6Z5X6Z5X6Z5X6Z5X6Z5X6Z5X6Z5X6Z5X6Z5X6Z5X",
+			RecipientAccount: "GCO7V6V6VZ5X6Z5X6Z5X6Z5X6Z5X6Z5X6Z5X6Z5X6Z5X6Z5X6Z5X6Z5X",
+			Amount:           50,
+			AssetCode:        "USDC",
+		}
+		body, _ := json.Marshal(reqBody)
+		w := httptest.NewRecorder()
+		req, _ := http.NewRequest("POST", "/remittances/create", bytes.NewBuffer(body))
+		failRouter.ServeHTTP(w, req)
+
+		assert.Equal(t, http.StatusInternalServerError, w.Code)
+	})
+
+	t.Run("Large Amount", func(t *testing.T) {
+		reqBody := CreateRemittanceRequest{
+			SenderAccount:    "GCO7V6V6VZ5X6Z5X6Z5X6Z5X6Z5X6Z5X6Z5X6Z5X6Z5X6Z5X6Z5X6Z5X",
+			RecipientAccount: "GCO7V6V6VZ5X6Z5X6Z5X6Z5X6Z5X6Z5X6Z5X6Z5X6Z5X6Z5X6Z5X6Z5X",
+			Amount:           999999999.99,
+			AssetCode:        "USDC",
+		}
+		body, _ := json.Marshal(reqBody)
+		w := httptest.NewRecorder()
+		req, _ := http.NewRequest("POST", "/remittances/create", bytes.NewBuffer(body))
+		router.ServeHTTP(w, req)
+
+		assert.Equal(t, http.StatusCreated, w.Code)
 	})
 }
