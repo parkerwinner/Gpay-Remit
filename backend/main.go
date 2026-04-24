@@ -3,11 +3,14 @@ package main
 import (
 	"log"
 	"net/http"
+	"os"
 
 	"github.com/gin-gonic/gin"
 	"github.com/yourusername/gpay-remit/config"
+	"github.com/yourusername/gpay-remit/errors"
 	"github.com/yourusername/gpay-remit/handlers"
 	"github.com/yourusername/gpay-remit/middleware"
+	"github.com/yourusername/gpay-remit/utils"
 )
 
 func main() {
@@ -23,8 +26,22 @@ func main() {
 		log.Fatalf("Failed to connect to database: %v", err)
 	}
 
+	// Initialize Redis cache
+	redisURL := os.Getenv("REDIS_URL")
+	if redisURL == "" {
+		redisURL = "localhost:6379"
+	}
+	if err := utils.InitRedis(redisURL, "", 0); err != nil {
+		log.Printf("Warning: Failed to connect to Redis: %v. Caching will be disabled.", err)
+	}
+
 	// Setup router
-	router := gin.Default()
+	router := gin.New() // Use New() to have full control over middleware
+
+	// Global middleware
+	router.Use(middleware.RequestIDMiddleware())
+	router.Use(middleware.ErrorHandler())
+	router.Use(gin.Logger()) // Re-add default logger
 
 	// CORS middleware
 	router.Use(func(c *gin.Context) {

@@ -7,6 +7,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/yourusername/gpay-remit/config"
+	"github.com/yourusername/gpay-remit/errors"
 	"github.com/yourusername/gpay-remit/middleware"
 	"github.com/yourusername/gpay-remit/models"
 	"gorm.io/gorm"
@@ -33,7 +34,7 @@ type RefreshTokenRequest struct {
 func (h *AuthHandler) Refresh(c *gin.Context) {
 	var req RefreshTokenRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		c.Error(errors.NewValidationError("Invalid request body", err.Error()))
 		return
 	}
 
@@ -44,32 +45,32 @@ func (h *AuthHandler) Refresh(c *gin.Context) {
 	})
 
 	if err != nil || !token.Valid {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid or expired refresh token", "code": "InvalidToken"})
+		c.Error(errors.NewUnauthorizedError("Invalid or expired refresh token"))
 		return
 	}
 
 	// Fetch user from DB to ensure they still exist and are active
 	var user models.User
 	if err := h.DB.First(&user, claims.UserID).Error; err != nil {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "User not found"})
+		c.Error(errors.NewUnauthorizedError("User not found"))
 		return
 	}
 
 	if !user.IsActive {
-		c.JSON(http.StatusForbidden, gin.H{"error": "User account is inactive"})
+		c.Error(errors.NewForbiddenError("User account is inactive"))
 		return
 	}
 
 	// Issue new access and refresh tokens
 	accessToken, err := middleware.GenerateToken(user.ID, user.Role, h.Cfg.JWTSecret, 15*time.Minute)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to generate access token"})
+		c.Error(errors.NewInternalError("Failed to generate access token", err))
 		return
 	}
 
 	refreshToken, err := middleware.GenerateToken(user.ID, user.Role, h.Cfg.JWTRefreshSecret, 7*24*time.Hour)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to generate refresh token"})
+		c.Error(errors.NewInternalError("Failed to generate refresh token", err))
 		return
 	}
 

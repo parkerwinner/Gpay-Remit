@@ -8,6 +8,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/yourusername/gpay-remit/config"
+	"github.com/yourusername/gpay-remit/errors"
 	"github.com/yourusername/gpay-remit/models"
 	"github.com/yourusername/gpay-remit/utils"
 	"gorm.io/gorm"
@@ -24,6 +25,31 @@ func NewRemittanceHandler(db *gorm.DB, cfg *config.Config) *RemittanceHandler {
 		db:            db,
 		config:        cfg,
 		stellarClient: utils.NewStellarClient(cfg.HorizonURL, cfg.NetworkPassphrase),
+	}
+}
+
+// Paginate is a GORM scope for pagination
+func Paginate(c *gin.Context) func(db *gorm.DB) *gorm.DB {
+	return func(db *gorm.DB) *gorm.DB {
+		page := 1
+		pageSize := 20
+
+		if p := c.Query("page"); p != "" {
+			fmt.Sscanf(p, "%d", &page)
+		}
+		if ps := c.Query("page_size"); ps != "" {
+			fmt.Sscanf(ps, "%d", &pageSize)
+		}
+
+		if page <= 0 {
+			page = 1
+		}
+		if pageSize <= 0 || pageSize > 100 {
+			pageSize = 20
+		}
+
+		offset := (page - 1) * pageSize
+		return db.Offset(offset).Limit(pageSize)
 	}
 }
 
@@ -49,7 +75,7 @@ type SendRemittanceRequest struct {
 func (h *RemittanceHandler) SendRemittance(c *gin.Context) {
 	var req SendRemittanceRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		c.Error(errors.NewValidationError("Invalid request body", err.Error()))
 		return
 	}
 
@@ -64,7 +90,7 @@ func (h *RemittanceHandler) SendRemittance(c *gin.Context) {
 	}
 
 	if err := h.db.Create(&payment).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create payment"})
+		c.Error(errors.NewInternalError("Failed to create payment", err))
 		return
 	}
 
@@ -144,7 +170,11 @@ func (h *RemittanceHandler) GetRemittance(c *gin.Context) {
 	var payment models.Payment
 
 	if err := h.db.First(&payment, id).Error; err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Payment not found"})
+		if err == gorm.ErrRecordNotFound {
+			c.Error(errors.NewNotFoundError("Payment not found"))
+		} else {
+			c.Error(errors.NewInternalError("Failed to fetch payment", err))
+		}
 		return
 	}
 
@@ -154,11 +184,26 @@ func (h *RemittanceHandler) GetRemittance(c *gin.Context) {
 func (h *RemittanceHandler) ListRemittances(c *gin.Context) {
 	var payments []models.Payment
 
-	if err := h.db.Find(&payments).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch payments"})
+	// Cache key based on query params
+	cacheKey := fmt.Sprintf("payments:list:%s:%s", c.Query("page"), c.Query("page_size"))
+	
+	// Try cache
+	if found, _ := utils.GetCached(cacheKey, &payments); found {
+		c.Header("X-Cache", "HIT")
+		c.JSON(http.StatusOK, payments)
 		return
 	}
 
+	// DB query with pagination
+	if err := h.db.Scopes(Paginate(c)).Order("created_at DESC").Find(&payments).Error; err != nil {
+		c.Error(errors.NewInternalError("Failed to fetch payments", err))
+		return
+	}
+
+	// Set cache for 30 seconds
+	utils.SetCached(cacheKey, payments, 30*time.Second)
+
+	c.Header("X-Cache", "MISS")
 	c.JSON(http.StatusOK, payments)
 }
 

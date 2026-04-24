@@ -15,11 +15,11 @@ type User struct {
 	Name            string         `gorm:"size:255;not null" json:"name"`
 	StellarAddress  string         `gorm:"uniqueIndex;size:56;not null" json:"stellar_address"`
 	PasswordHash    string         `gorm:"size:255;not null" json:"-"`
-	Role            string         `gorm:"size:20;default:'user'" json:"role"` // admin, user
-	Country         string         `gorm:"size:2" json:"country"` // ISO country code
-	KYCStatus       string         `gorm:"size:20;default:'pending'" json:"kyc_status"` // pending, verified, rejected
+	Role            string         `gorm:"index;size:20;default:'user'" json:"role"` // admin, user
+	Country         string         `gorm:"index;size:2" json:"country"` // ISO country code
+	KYCStatus       string         `gorm:"index;size:20;default:'pending'" json:"kyc_status"` // pending, verified, rejected
 	KYCVerifiedAt   *time.Time     `json:"kyc_verified_at"`
-	IsActive        bool           `gorm:"default:true" json:"is_active"`
+	IsActive        bool           `gorm:"index;default:true" json:"is_active"`
 	DefaultCurrency string         `gorm:"size:10;default:'USD'" json:"default_currency"`
 }
 

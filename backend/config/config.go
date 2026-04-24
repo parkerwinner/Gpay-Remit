@@ -75,7 +75,10 @@ func InitDB(cfg *Config) (*gorm.DB, error) {
 		return nil, err
 	}
 
-	db, err := gorm.Open(postgres.Open(cfg.DatabaseURL), &gorm.Config{})
+	db, err := gorm.Open(postgres.Open(cfg.DatabaseURL), &gorm.Config{
+		PrepareStmt:            true, // Use prepared statements for all queries
+		SkipDefaultTransaction: true, // Optimize performance by skipping default transactions
+	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to database: %w", err)
 	}
