@@ -171,8 +171,7 @@ pub fn get_conversion_rate(
         }
         Err(_) => match cached_rate {
             Some(ref cache) => {
-                let staleness_limit = max_staleness.checked_mul(3).unwrap_or(max_staleness);
-                validate_rate(cache, env.ledger().timestamp(), staleness_limit)?;
+                validate_rate(cache, env.ledger().timestamp(), max_staleness)?;
                 let converted = apply_conversion(amount, cache.rate, cache.denominator)?;
 
                 env.events().publish(

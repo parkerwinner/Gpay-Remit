@@ -1073,6 +1073,13 @@ impl PaymentEscrowContract {
                 .get(&DataKey::EscrowApprovals(escrow_id));
             match config_opt {
                 Some(config) => {
+                    let current_time = env.ledger().timestamp();
+                    if config.approval_timeout > 0 && current_time > config.approval_timeout {
+                        env.storage()
+                            .instance()
+                            .set(&DataKey::ReentrancyGuard, &false);
+                        return Err(Error::ApprovalExpired);
+                    }
                     if config.approvals.len() < config.required_approvals {
                         env.storage()
                             .instance()
@@ -1638,6 +1645,13 @@ impl PaymentEscrowContract {
                 .get(&DataKey::EscrowApprovals(escrow_id));
             match config_opt {
                 Some(config) => {
+                    let now = env.ledger().timestamp();
+                    if config.approval_timeout > 0 && now > config.approval_timeout {
+                        env.storage()
+                            .instance()
+                            .set(&DataKey::ReentrancyGuard, &false);
+                        return Err(Error::ApprovalExpired);
+                    }
                     if config.approvals.len() < config.required_approvals {
                         env.storage()
                             .instance()
