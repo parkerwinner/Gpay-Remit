@@ -23,7 +23,12 @@ type Payment struct {
 	TxHash          string         `gorm:"index;size:255" json:"tx_hash"`
 	ContractID      string         `gorm:"size:255" json:"contract_id"`
 	EscrowID        string         `gorm:"index;size:255" json:"escrow_id"`
-	Fee             float64        `gorm:"default:0" json:"fee"`
+	// Fee is the total of all fee components.
+	Fee           float64 `gorm:"default:0" json:"fee"`
+	PlatformFee   float64 `gorm:"default:0" json:"platform_fee"`
+	ForexFee      float64 `gorm:"default:0" json:"forex_fee"`
+	ComplianceFee float64 `gorm:"default:0" json:"compliance_fee"`
+	NetworkFee    float64 `gorm:"default:0" json:"network_fee"`
 	Conditions      string         `gorm:"type:text" json:"conditions"` // JSON blob of conditions
 	Notes           string         `gorm:"type:text" json:"notes"`
 }

@@ -9,7 +9,9 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/yourusername/gpay-remit/config"
 	"github.com/yourusername/gpay-remit/errors"
+	"github.com/yourusername/gpay-remit/middleware"
 	"github.com/yourusername/gpay-remit/models"
+	"github.com/yourusername/gpay-remit/services"
 	"github.com/yourusername/gpay-remit/utils"
 	"gorm.io/gorm"
 )
@@ -18,6 +20,7 @@ type RemittanceHandler struct {
 	db            *gorm.DB
 	config        *config.Config
 	stellarClient utils.StellarClientInterface
+	fees          *services.FeeService
 }
 
 func NewRemittanceHandler(db *gorm.DB, cfg *config.Config) *RemittanceHandler {
@@ -25,6 +28,7 @@ func NewRemittanceHandler(db *gorm.DB, cfg *config.Config) *RemittanceHandler {
 		db:            db,
 		config:        cfg,
 		stellarClient: utils.NewStellarClient(cfg.HorizonURL, cfg.NetworkPassphrase),
+		fees:          services.NewFeeService(cfg),
 	}
 }
 
@@ -79,6 +83,7 @@ func (h *RemittanceHandler) SendRemittance(c *gin.Context) {
 		return
 	}
 
+	feeBreakdown := h.fees.Calculate(req.Amount)
 	payment := models.Payment{
 		SenderID:       req.SenderID,
 		RecipientID:    req.RecipientID,
@@ -86,6 +91,11 @@ func (h *RemittanceHandler) SendRemittance(c *gin.Context) {
 		Currency:       req.Currency,
 		TargetCurrency: req.TargetCurrency,
 		Status:         "pending",
+		Fee:            feeBreakdown.TotalFee,
+		PlatformFee:    feeBreakdown.PlatformFee,
+		ForexFee:       feeBreakdown.ForexFee,
+		ComplianceFee:  feeBreakdown.ComplianceFee,
+		NetworkFee:     feeBreakdown.NetworkFee,
 		Notes:          req.Notes,
 	}
 
@@ -94,6 +104,7 @@ func (h *RemittanceHandler) SendRemittance(c *gin.Context) {
 		return
 	}
 
+	middleware.SetAuditNew(c, payment)
 	c.JSON(http.StatusCreated, payment)
 }
 
@@ -127,6 +138,7 @@ func (h *RemittanceHandler) CreateRemittance(c *gin.Context) {
 
 	conditionsJSON, _ := json.Marshal(req.Conditions)
 
+	feeBreakdown := h.fees.Calculate(req.Amount)
 	payment := models.Payment{
 		SenderID:         userID.(uint),
 		SenderAccount:    req.SenderAccount,
@@ -134,6 +146,11 @@ func (h *RemittanceHandler) CreateRemittance(c *gin.Context) {
 		Amount:           req.Amount,
 		Currency:         req.AssetCode,
 		Status:           "pending",
+		Fee:              feeBreakdown.TotalFee,
+		PlatformFee:      feeBreakdown.PlatformFee,
+		ForexFee:         feeBreakdown.ForexFee,
+		ComplianceFee:    feeBreakdown.ComplianceFee,
+		NetworkFee:       feeBreakdown.NetworkFee,
 		Conditions:       string(conditionsJSON),
 		Notes:            req.Notes,
 	}
@@ -160,6 +177,7 @@ func (h *RemittanceHandler) CreateRemittance(c *gin.Context) {
 	c.JSON(http.StatusCreated, gin.H{
 		"remittance_id": payment.ID,
 		"status":        payment.Status,
+		"fee_breakdown": feeBreakdown,
 		"tx_envelope":   xdr,
 		"message":       "Remittance initiated successfully. Please sign and submit the transaction.",
 	})
@@ -216,12 +234,14 @@ func (h *RemittanceHandler) CompleteRemittance(c *gin.Context) {
 		return
 	}
 
+	middleware.SetAuditOld(c, payment)
 	payment.Status = "completed"
 	if err := h.db.Save(&payment).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update payment"})
 		return
 	}
 
+	middleware.SetAuditNew(c, payment)
 	c.JSON(http.StatusOK, payment)
 }
 

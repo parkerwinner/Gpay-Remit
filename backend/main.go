@@ -8,6 +8,7 @@ import (
 	"github.com/yourusername/gpay-remit/handlers"
 	"github.com/yourusername/gpay-remit/logger"
 	"github.com/yourusername/gpay-remit/middleware"
+	"github.com/yourusername/gpay-remit/services"
 )
 
 func main() {
@@ -26,7 +27,9 @@ func main() {
 
 	router := gin.New()
 	router.Use(gin.Recovery())
+	router.Use(middleware.RequestIDMiddleware())
 	router.Use(middleware.RequestLogger())
+	router.Use(middleware.ErrorHandler())
 
 	// CORS middleware
 	router.Use(func(c *gin.Context) {
@@ -56,6 +59,7 @@ func main() {
 
 		protected := api.Group("/")
 		protected.Use(middleware.JwtAuthMiddleware(cfg))
+		protected.Use(middleware.AuditTrail(db))
 		{
 			remittanceHandler := handlers.NewRemittanceHandler(db, cfg)
 			protected.POST("/remittances/create", remittanceHandler.CreateRemittance)
@@ -66,6 +70,13 @@ func main() {
 
 			protected.POST("/invoices", remittanceHandler.CreateInvoice)
 			protected.GET("/invoices/:id", remittanceHandler.GetInvoice)
+
+			feeService := services.NewFeeService(cfg)
+			feeHandler := handlers.NewFeeHandler(feeService)
+			protected.GET("/fees/calculate", feeHandler.Calculate)
+
+			auditHandler := handlers.NewAuditLogHandler(db)
+			protected.GET("/audit/logs", middleware.RequireRole("admin"), auditHandler.List)
 		}
 	}
 

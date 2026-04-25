@@ -21,6 +21,19 @@ type Config struct {
 	JWTSecret         string
 	JWTRefreshSecret  string
 
+	// Fee configuration (basis points, i.e. 100 bps = 1%)
+	//
+	// NOTE: These values are intended to mirror the fee structure configured in
+	// the on-chain escrow contract (PaymentEscrow). Until the backend adds a
+	// direct Soroban RPC read of the contract's fee config, these env-backed
+	// values act as the source of truth for API calculations.
+	PlatformFeeBps   int
+	ForexFeeBps      int
+	ComplianceFeeBps int
+	NetworkFeeBps    int
+	MinFee           float64
+	MaxFee           float64
+
 	// Database connection pool settings
 	DBMaxIdleConns    int
 	DBMaxOpenConns    int
@@ -40,6 +53,13 @@ func LoadConfig() (*Config, error) {
 		NetworkPassphrase: getEnvOrDefault("NETWORK_PASSPHRASE", "Test SDF Network ; September 2015"),
 		JWTSecret:         getEnvOrDefault("JWT_SECRET", "super-secret-key-change-me"),
 		JWTRefreshSecret:  getEnvOrDefault("JWT_REFRESH_SECRET", "super-secret-refresh-key-change-me"),
+
+		PlatformFeeBps:   getEnvAsInt("PLATFORM_FEE_BPS", 50),
+		ForexFeeBps:      getEnvAsInt("FOREX_FEE_BPS", 25),
+		ComplianceFeeBps: getEnvAsInt("COMPLIANCE_FEE_BPS", 10),
+		NetworkFeeBps:    getEnvAsInt("NETWORK_FEE_BPS", 15),
+		MinFee:           getEnvAsFloat("MIN_FEE", 0),
+		MaxFee:           getEnvAsFloat("MAX_FEE", 0),
 
 		DBMaxIdleConns:    getEnvAsInt("DB_MAX_IDLE_CONNS", 10),
 		DBMaxOpenConns:    getEnvAsInt("DB_MAX_OPEN_CONNS", 100),
@@ -79,5 +99,15 @@ func getEnvAsInt(key string, defaultValue int) int {
 	}
 	var value int
 	fmt.Sscanf(valueStr, "%d", &value)
+	return value
+}
+
+func getEnvAsFloat(key string, defaultValue float64) float64 {
+	valueStr := os.Getenv(key)
+	if valueStr == "" {
+		return defaultValue
+	}
+	var value float64
+	fmt.Sscanf(valueStr, "%f", &value)
 	return value
 }

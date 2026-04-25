@@ -994,6 +994,8 @@ impl RemittanceHubContract {
     ) -> Result<(), RemittanceError> {
         caller.require_auth();
 
+        let token_client = soroban_sdk::token::Client::new(&env, &token_address);
+        let contract_address = env.current_contract_address();
         for id in escrow_ids.iter() {
             let mut escrow: EscrowData = env
                 .storage()
@@ -1013,9 +1015,8 @@ impl RemittanceHubContract {
                 .persistent()
                 .set(&DataKey::Escrow(id), &escrow);
 
-            let token_client = soroban_sdk::token::Client::new(&env, &token_address);
             token_client.transfer(
-                &env.current_contract_address(),
+                &contract_address,
                 &escrow.recipient,
                 &escrow.amount,
             );
