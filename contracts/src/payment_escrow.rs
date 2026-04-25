@@ -1,4 +1,5 @@
 use crate::kyc::{self, KycConfig, KycDataKey, KycRecord, KycStatus};
+use crate::events::{self, AssetRef, EventData};
 use crate::rate_limit::{self, FunctionType};
 use crate::upgradeable;
 
@@ -11,52 +12,99 @@ use soroban_sdk::{
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
 #[repr(u32)]
 pub enum Error {
+    /// Amount must be greater than zero.
     InvalidAmount = 1,
+    /// Sender and recipient must be different addresses.
     SameSenderRecipient = 2,
+    /// Escrow counter overflowed `u64`.
     CounterOverflow = 3,
+    /// The requested escrow id does not exist.
     EscrowNotFound = 4,
+    /// Operation is not valid for the escrow’s current status.
     InvalidStatus = 5,
+    /// Escrow must be approved before this action.
     NotApproved = 6,
+    /// Escrow is expired (current timestamp is past expiration).
     Expired = 7,
+    /// Caller is not authorized to perform this action.
     Unauthorized = 8,
+    /// Escrow has already been released.
     AlreadyReleased = 9,
+    /// Escrow is not yet expired.
     NotExpired = 10,
+    /// Caller is not the escrow sender.
     WrongSender = 11,
+    /// Escrow must be pending/fundable for this action.
     EscrowNotPending = 12,
+    /// Asset is not supported or invalid.
     InvalidAsset = 13,
+    /// Provided amount is insufficient for the requested operation.
     InsufficientAmount = 14,
+    /// Escrow is already funded.
     AlreadyFunded = 15,
+    /// Deposited amount overflowed `i128`.
     DepositOverflow = 16,
+    /// Release/refund conditions are not satisfied.
     ConditionsNotMet = 17,
+    /// Caller is not allowed for this method.
     UnauthorizedCaller = 18,
+    /// Not enough funds are available in escrow.
     InsufficientFunds = 19,
+    /// Currency conversion failed.
     ConversionFailed = 20,
+    /// Fee percentage must be within bounds (0–10000 bps).
     InvalidFeePercentage = 21,
+    /// Partial release is disabled for this escrow.
     PartialReleaseNotAllowed = 22,
+    /// Arithmetic overflow/underflow occurred.
     ArithmeticOverflow = 23,
+    /// Escrow has already been refunded.
     AlreadyRefunded = 24,
+    /// Refund is not authorized for the caller.
     UnauthorizedRefund = 25,
+    /// No remaining funds are available for release/refund.
     NoFundsAvailable = 26,
+    /// Refund amount is invalid (<= 0 or exceeds available).
     InvalidRefundAmount = 27,
+    /// Provided signature does not match expected signer.
     SignatureMismatch = 28,
+    /// Oracle call or validation failed.
     OracleFailure = 29,
+    /// Current timestamp has not reached the required time.
     TimestampNotReached = 30,
+    /// Approval is required before continuing.
     ApprovalRequired = 31,
+    /// Total fees exceed or equal the escrow amount.
     FeeExceedsAmount = 32,
+    /// Approval already exists for this escrow/approver.
     AlreadyApproved = 33,
+    /// Multi-party quorum has not been met.
     QuorumNotMet = 34,
+    /// Approver is not whitelisted for multi-party approval.
     ApproverNotWhitelisted = 35,
+    /// Approval window has expired.
     ApprovalExpired = 36,
+    /// Escrow is finalized and cannot be modified.
     EscrowFinalized = 37,
+    /// Approval record was not found.
     ApprovalNotFound = 38,
+    /// KYC checks failed for one or more parties.
     KycFailed = 39,
+    /// KYC has not been configured.
     KycNotConfigured = 40,
+    /// KYC proof/signature is required but missing.
     KycProofRequired = 41,
+    /// Dispute already exists for this escrow.
     AlreadyDisputed = 42,
+    /// Caller is not an arbitrator for this dispute.
     NotArbitrator = 43,
+    /// Dispute record was not found.
     DisputeNotFound = 44,
+    /// Voter has already voted on this dispute.
     AlreadyVoted = 45,
+    /// Contract is paused (upgradeable pause flag set).
     ContractPaused = 46,
+    /// Rate limit exceeded for this caller/function.
     RateLimitExceeded = 47,
 }
 
@@ -348,8 +396,18 @@ impl PaymentEscrowContract {
             .instance()
             .set(&DataKey::PlatformFeePercentage, &fee_percentage);
 
-        env.events()
-            .publish((symbol_short!("fee_set"),), fee_percentage);
+        events::emit(
+            &env,
+            symbol_short!("escrow"),
+            symbol_short!("fee_set"),
+            0,
+            &admin,
+            fee_percentage,
+            symbol_short!("na"),
+            EventData::AdminAction {
+                key: symbol_short!("fee_set"),
+            },
+        );
 
         Ok(())
     }
@@ -377,8 +435,18 @@ impl PaymentEscrowContract {
             .instance()
             .set(&DataKey::ProcessingFeePercentage, &fee_percentage);
 
-        env.events()
-            .publish((symbol_short!("proc_fee"),), fee_percentage);
+        events::emit(
+            &env,
+            symbol_short!("escrow"),
+            symbol_short!("proc_fee"),
+            0,
+            &admin,
+            fee_percentage,
+            symbol_short!("na"),
+            EventData::AdminAction {
+                key: symbol_short!("proc_fee"),
+            },
+        );
 
         Ok(())
     }
@@ -402,8 +470,18 @@ impl PaymentEscrowContract {
             .instance()
             .set(&DataKey::FeeWallet, &fee_wallet);
 
-        env.events()
-            .publish((symbol_short!("fee_wal"),), fee_wallet);
+        events::emit(
+            &env,
+            symbol_short!("escrow"),
+            symbol_short!("fee_wal"),
+            0,
+            &admin,
+            0,
+            symbol_short!("na"),
+            EventData::AdminAction {
+                key: symbol_short!("fee_wal"),
+            },
+        );
 
         Ok(())
     }
@@ -428,8 +506,18 @@ impl PaymentEscrowContract {
             .instance()
             .set(&DataKey::ForexFeePercentage, &fee_percentage);
 
-        env.events()
-            .publish((symbol_short!("forex_f"),), fee_percentage);
+        events::emit(
+            &env,
+            symbol_short!("escrow"),
+            symbol_short!("forex_f"),
+            0,
+            &admin,
+            fee_percentage,
+            symbol_short!("na"),
+            EventData::AdminAction {
+                key: symbol_short!("forex_f"),
+            },
+        );
 
         Ok(())
     }
@@ -450,7 +538,18 @@ impl PaymentEscrowContract {
             .instance()
             .set(&DataKey::ComplianceFlatFee, &flat_fee);
 
-        env.events().publish((symbol_short!("comp_fee"),), flat_fee);
+        events::emit(
+            &env,
+            symbol_short!("escrow"),
+            symbol_short!("comp_fee"),
+            0,
+            &admin,
+            flat_fee,
+            symbol_short!("na"),
+            EventData::AdminAction {
+                key: symbol_short!("comp_fee"),
+            },
+        );
 
         Ok(())
     }
@@ -475,8 +574,18 @@ impl PaymentEscrowContract {
         env.storage().instance().set(&DataKey::MinFee, &min_fee);
         env.storage().instance().set(&DataKey::MaxFee, &max_fee);
 
-        env.events()
-            .publish((symbol_short!("fee_lim"),), (min_fee, max_fee));
+        events::emit(
+            &env,
+            symbol_short!("escrow"),
+            symbol_short!("fee_lim"),
+            0,
+            &admin,
+            0,
+            symbol_short!("na"),
+            EventData::AdminAction {
+                key: symbol_short!("fee_lim"),
+            },
+        );
 
         Ok(())
     }
@@ -500,14 +609,27 @@ impl PaymentEscrowContract {
     }
 
     fn notify_external(env: &Env, payload: NotificationPayload) {
-        env.events().publish(
-            (symbol_short!("notify"),),
-            (
-                payload.escrow_id,
-                payload.event_type,
-                payload.amount,
-                payload.timestamp,
-            ),
+        let status = match payload.event_type {
+            EventType::Created => symbol_short!("created"),
+            EventType::Deposit => symbol_short!("deposit"),
+            EventType::Approved => symbol_short!("approved"),
+            EventType::Released => symbol_short!("released"),
+            EventType::PartialRelease => symbol_short!("part_rel"),
+            EventType::Refunded => symbol_short!("refunded"),
+            EventType::PartialRefund => symbol_short!("part_ref"),
+        };
+        let actor = env.current_contract_address();
+        events::emit(
+            env,
+            symbol_short!("escrow"),
+            symbol_short!("notify"),
+            payload.escrow_id,
+            &actor,
+            payload.amount,
+            status,
+            EventData::AdminAction {
+                key: symbol_short!("notify"),
+            },
         );
     }
 
@@ -609,7 +731,18 @@ impl PaymentEscrowContract {
         env.storage().instance().set(&DataKey::KycConfig, &config);
         env.storage().instance().set(&DataKey::KycEnabled, &true);
 
-        env.events().publish((symbol_short!("kyc_cfg"),), admin);
+        events::emit(
+            &env,
+            symbol_short!("escrow"),
+            symbol_short!("kyc_cfg"),
+            0,
+            &admin,
+            0,
+            symbol_short!("na"),
+            EventData::AdminAction {
+                key: symbol_short!("kyc_cfg"),
+            },
+        );
 
         Ok(())
     }
@@ -639,7 +772,19 @@ impl PaymentEscrowContract {
             .persistent()
             .set(&KycDataKey::Whitelist(account.clone()), &record);
 
-        env.events().publish((symbol_short!("kyc_add"),), account);
+        events::emit(
+            &env,
+            symbol_short!("escrow"),
+            symbol_short!("kyc_add"),
+            0,
+            &admin,
+            0,
+            symbol_short!("na"),
+            EventData::AddressAction {
+                key: symbol_short!("kyc_add"),
+                address: account,
+            },
+        );
 
         Ok(())
     }
@@ -664,7 +809,19 @@ impl PaymentEscrowContract {
             .persistent()
             .set(&KycDataKey::Whitelist(account.clone()), &record);
 
-        env.events().publish((symbol_short!("kyc_rem"),), account);
+        events::emit(
+            &env,
+            symbol_short!("escrow"),
+            symbol_short!("kyc_rem"),
+            0,
+            &admin,
+            0,
+            symbol_short!("na"),
+            EventData::AddressAction {
+                key: symbol_short!("kyc_rem"),
+                address: account,
+            },
+        );
 
         Ok(())
     }
@@ -681,7 +838,19 @@ impl PaymentEscrowContract {
             .persistent()
             .set(&KycDataKey::TrustedIssuer(issuer.clone()), &true);
 
-        env.events().publish((symbol_short!("kyc_iss"),), issuer);
+        events::emit(
+            &env,
+            symbol_short!("escrow"),
+            symbol_short!("kyc_iss"),
+            0,
+            &admin,
+            0,
+            symbol_short!("na"),
+            EventData::AddressAction {
+                key: symbol_short!("kyc_iss"),
+                address: issuer,
+            },
+        );
 
         Ok(())
     }
@@ -714,8 +883,18 @@ impl PaymentEscrowContract {
             .instance()
             .set(&DataKey::Escrow(escrow_id), &escrow);
 
-        env.events()
-            .publish((symbol_short!("kyc_ovr"), escrow_id), admin);
+        events::emit(
+            &env,
+            symbol_short!("escrow"),
+            symbol_short!("kyc_ovr"),
+            escrow_id,
+            &admin,
+            0,
+            symbol_short!("na"),
+            EventData::AdminAction {
+                key: symbol_short!("kyc_ovr"),
+            },
+        );
 
         Ok(())
     }
@@ -765,7 +944,19 @@ impl PaymentEscrowContract {
                         .persistent()
                         .set(&KycDataKey::Whitelist(account.clone()), &record);
 
-                    env.events().publish((symbol_short!("kyc_ok"),), account);
+                    events::emit(
+                        &env,
+                        symbol_short!("escrow"),
+                        symbol_short!("kyc_ok"),
+                        0,
+                        &account,
+                        0,
+                        symbol_short!("na"),
+                        EventData::AddressAction {
+                            key: symbol_short!("kyc_ok"),
+                            address: account,
+                        },
+                    );
                 }
                 Ok(valid)
             }
@@ -832,21 +1023,37 @@ impl PaymentEscrowContract {
             match kyc_result {
                 Ok(result) => {
                     if !result.sender_verified || !result.recipient_verified {
-                        env.events().publish(
-                            (symbol_short!("kyc_fail"),),
-                            (
-                                sender.clone(),
-                                result.sender_verified,
-                                result.recipient_verified,
-                            ),
+                        events::emit(
+                            &env,
+                            symbol_short!("escrow"),
+                            symbol_short!("kyc_fail"),
+                            0,
+                            &sender,
+                            0,
+                            symbol_short!("na"),
+                            EventData::PairAction {
+                                key: symbol_short!("kyc_fail"),
+                                first: sender.clone(),
+                                second: recipient.clone(),
+                            },
                         );
                         return Err(Error::KycFailed);
                     }
                     kyc_compliant = true;
 
-                    env.events().publish(
-                        (symbol_short!("kyc_pass"),),
-                        (sender.clone(), recipient.clone()),
+                    events::emit(
+                        &env,
+                        symbol_short!("escrow"),
+                        symbol_short!("kyc_pass"),
+                        0,
+                        &sender,
+                        0,
+                        symbol_short!("na"),
+                        EventData::PairAction {
+                            key: symbol_short!("kyc_pass"),
+                            first: sender.clone(),
+                            second: recipient.clone(),
+                        },
                     );
                 }
                 Err(_) => {
@@ -898,8 +1105,25 @@ impl PaymentEscrowContract {
             .instance()
             .set(&DataKey::EscrowCounter, &counter);
 
-        env.events()
-            .publish((symbol_short!("created"), counter), escrow.sender);
+        events::emit(
+            &env,
+            symbol_short!("escrow"),
+            symbol_short!("created"),
+            counter,
+            &escrow.sender,
+            escrow.amount,
+            symbol_short!("pending"),
+            EventData::EscrowCreated {
+                escrow_id: counter,
+                sender: escrow.sender.clone(),
+                recipient: escrow.recipient.clone(),
+                asset: AssetRef {
+                    code: escrow.asset.code.clone(),
+                    issuer: escrow.asset.issuer.clone(),
+                },
+                total_amount: escrow.amount,
+            },
+        );
 
         Self::notify_external(
             &env,
@@ -970,9 +1194,24 @@ impl PaymentEscrowContract {
             .instance()
             .set(&DataKey::Escrow(escrow_id), &escrow);
 
-        env.events().publish(
-            (symbol_short!("deposit"), escrow_id),
-            (caller, amount, escrow.deposited_amount),
+        let deposit_status = if escrow.deposited_amount == escrow.amount {
+            symbol_short!("funded")
+        } else {
+            symbol_short!("pending")
+        };
+        events::emit(
+            &env,
+            symbol_short!("escrow"),
+            symbol_short!("deposit"),
+            escrow_id,
+            &caller,
+            amount,
+            deposit_status,
+            EventData::EscrowDeposited {
+                escrow_id,
+                amount,
+                deposited_total: escrow.deposited_amount,
+            },
         );
 
         Self::notify_external(
@@ -1010,8 +1249,16 @@ impl PaymentEscrowContract {
             .instance()
             .set(&DataKey::Escrow(escrow_id), &escrow);
 
-        env.events()
-            .publish((symbol_short!("approved"), escrow_id), approver);
+        events::emit(
+            &env,
+            symbol_short!("escrow"),
+            symbol_short!("approved"),
+            escrow_id,
+            &approver,
+            escrow.amount,
+            symbol_short!("approved"),
+            EventData::EscrowApproved { escrow_id },
+        );
 
         Self::notify_external(
             &env,
@@ -1179,9 +1426,18 @@ impl PaymentEscrowContract {
             }
         }
 
-        env.events().publish(
-            (symbol_short!("released"), escrow_id),
-            (caller.clone(), recipient_amount, fee_amount, current_time),
+        events::emit(
+            &env,
+            symbol_short!("escrow"),
+            symbol_short!("released"),
+            escrow_id,
+            &caller,
+            recipient_amount,
+            symbol_short!("released"),
+            EventData::EscrowReleased {
+                escrow_id,
+                released_amount: recipient_amount,
+            },
         );
 
         env.storage()
@@ -1310,14 +1566,23 @@ impl PaymentEscrowContract {
             .instance()
             .set(&DataKey::Escrow(escrow_id), &escrow);
 
-        env.events().publish(
-            (symbol_short!("partial"), escrow_id),
-            (
-                caller.clone(),
-                recipient_amount,
-                fee_amount,
-                escrow.released_amount,
-            ),
+        let partial_status = if escrow.released_amount >= escrow.deposited_amount {
+            symbol_short!("released")
+        } else {
+            symbol_short!("funded")
+        };
+        events::emit(
+            &env,
+            symbol_short!("escrow"),
+            symbol_short!("partial"),
+            escrow_id,
+            &caller,
+            recipient_amount,
+            partial_status,
+            EventData::EscrowReleased {
+                escrow_id,
+                released_amount: recipient_amount,
+            },
         );
 
         env.storage()
@@ -1345,8 +1610,18 @@ impl PaymentEscrowContract {
             .instance()
             .set(&DataKey::Escrow(escrow_id), &escrow);
 
-        env.events()
-            .publish((symbol_short!("part_enab"), escrow_id), caller);
+        events::emit(
+            &env,
+            symbol_short!("escrow"),
+            symbol_short!("part_enab"),
+            escrow_id,
+            &caller,
+            0,
+            symbol_short!("na"),
+            EventData::AdminAction {
+                key: symbol_short!("part_enab"),
+            },
+        );
 
         Ok(())
     }
@@ -1388,8 +1663,18 @@ impl PaymentEscrowContract {
             .instance()
             .set(&DataKey::Escrow(escrow_id), &escrow);
 
-        env.events()
-            .publish((symbol_short!("cond_add"), escrow_id), condition_type);
+        events::emit(
+            &env,
+            symbol_short!("escrow"),
+            symbol_short!("cond_add"),
+            escrow_id,
+            &caller,
+            0,
+            symbol_short!("na"),
+            EventData::AdminAction {
+                key: symbol_short!("cond_add"),
+            },
+        );
 
         Ok(())
     }
@@ -1418,8 +1703,18 @@ impl PaymentEscrowContract {
             .instance()
             .set(&DataKey::Escrow(escrow_id), &escrow);
 
-        env.events()
-            .publish((symbol_short!("cond_op"), escrow_id), operator);
+        events::emit(
+            &env,
+            symbol_short!("escrow"),
+            symbol_short!("cond_op"),
+            escrow_id,
+            &caller,
+            0,
+            symbol_short!("na"),
+            EventData::AdminAction {
+                key: symbol_short!("cond_op"),
+            },
+        );
 
         Ok(())
     }
@@ -1498,9 +1793,21 @@ impl PaymentEscrowContract {
             failed_conditions,
         };
 
-        env.events().publish(
-            (symbol_short!("verified"), escrow_id),
-            (all_passed, passed_count),
+        events::emit(
+            &env,
+            symbol_short!("escrow"),
+            symbol_short!("verified"),
+            escrow_id,
+            &env.current_contract_address(),
+            0,
+            if all_passed {
+                symbol_short!("pass")
+            } else {
+                symbol_short!("fail")
+            },
+            EventData::AdminAction {
+                key: symbol_short!("verified"),
+            },
         );
 
         Ok(result)
@@ -1530,9 +1837,17 @@ impl PaymentEscrowContract {
             .instance()
             .set(&DataKey::Escrow(escrow_id), &escrow);
 
-        env.events().publish(
-            (symbol_short!("approval"), escrow_id),
-            (approver, escrow.release_conditions.current_approvals),
+        events::emit(
+            &env,
+            symbol_short!("escrow"),
+            symbol_short!("approval"),
+            escrow_id,
+            &approver,
+            0,
+            symbol_short!("na"),
+            EventData::AdminAction {
+                key: symbol_short!("approval"),
+            },
         );
 
         Ok(())
@@ -1562,8 +1877,18 @@ impl PaymentEscrowContract {
             .instance()
             .set(&DataKey::Escrow(escrow_id), &escrow);
 
-        env.events()
-            .publish((symbol_short!("min_appr"), escrow_id), min_approvals);
+        events::emit(
+            &env,
+            symbol_short!("escrow"),
+            symbol_short!("min_appr"),
+            escrow_id,
+            &caller,
+            min_approvals as i128,
+            symbol_short!("na"),
+            EventData::AdminAction {
+                key: symbol_short!("min_appr"),
+            },
+        );
 
         Ok(())
     }
@@ -1725,9 +2050,18 @@ impl PaymentEscrowContract {
             }
         }
 
-        env.events().publish(
-            (symbol_short!("refunded"), escrow_id),
-            (caller.clone(), refund_amount, processing_fee, reason),
+        events::emit(
+            &env,
+            symbol_short!("escrow"),
+            symbol_short!("refunded"),
+            escrow_id,
+            &caller,
+            refund_amount,
+            symbol_short!("refunded"),
+            EventData::EscrowRefunded {
+                escrow_id,
+                refunded_amount: refund_amount,
+            },
         );
 
         env.storage()
@@ -1854,14 +2188,23 @@ impl PaymentEscrowContract {
             .instance()
             .set(&DataKey::Escrow(escrow_id), &escrow);
 
-        env.events().publish(
-            (symbol_short!("ref_part"), escrow_id),
-            (
-                caller.clone(),
-                net_refund,
-                processing_fee,
-                escrow.refunded_amount,
-            ),
+        let refund_status = if escrow.refunded_amount >= escrow.deposited_amount {
+            symbol_short!("refunded")
+        } else {
+            symbol_short!("funded")
+        };
+        events::emit(
+            &env,
+            symbol_short!("escrow"),
+            symbol_short!("ref_part"),
+            escrow_id,
+            &caller,
+            net_refund,
+            refund_status,
+            EventData::EscrowRefunded {
+                escrow_id,
+                refunded_amount: net_refund,
+            },
         );
 
         env.storage()
@@ -1920,9 +2263,17 @@ impl PaymentEscrowContract {
             .instance()
             .set(&DataKey::EscrowApprovals(escrow_id), &config);
 
-        env.events().publish(
-            (symbol_short!("mp_setup"), escrow_id),
-            (required_approvals, approval_timeout),
+        events::emit(
+            &env,
+            symbol_short!("escrow"),
+            symbol_short!("mp_setup"),
+            escrow_id,
+            &caller,
+            required_approvals as i128,
+            symbol_short!("na"),
+            EventData::AdminAction {
+                key: symbol_short!("mp_setup"),
+            },
         );
 
         Ok(())
@@ -2086,15 +2437,31 @@ impl PaymentEscrowContract {
             .instance()
             .set(&DataKey::EscrowApprovals(escrow_id), &config);
 
-        env.events().publish(
-            (symbol_short!("mp_appr"), escrow_id),
-            (approver, approval_count),
+        events::emit(
+            &env,
+            symbol_short!("escrow"),
+            symbol_short!("mp_appr"),
+            escrow_id,
+            &approver,
+            approval_count as i128,
+            symbol_short!("na"),
+            EventData::AdminAction {
+                key: symbol_short!("mp_appr"),
+            },
         );
 
         if quorum_met {
-            env.events().publish(
-                (symbol_short!("quorum"), escrow_id),
-                (approval_count, config.required_approvals),
+            events::emit(
+                &env,
+                symbol_short!("escrow"),
+                symbol_short!("quorum"),
+                escrow_id,
+                &env.current_contract_address(),
+                approval_count as i128,
+                symbol_short!("na"),
+                EventData::AdminAction {
+                    key: symbol_short!("quorum"),
+                },
             );
         }
 

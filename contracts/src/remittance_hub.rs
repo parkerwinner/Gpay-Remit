@@ -1,4 +1,5 @@
 use crate::aml::{self, AmlConfig, AmlScreeningResult, AmlStatus};
+use crate::events::{self, AssetRef, EventData};
 use crate::oracle::{self as oracle_mod, CachedRate, OracleConfig};
 use crate::rate_limit::{self, FunctionType};
 use crate::upgradeable;
@@ -11,29 +12,53 @@ use soroban_sdk::{
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
 #[repr(u32)]
 pub enum RemittanceError {
+    /// Amount must be greater than zero.
     InvalidAmount = 1,
+    /// The requested remittance/escrow record was not found.
     NotFound = 2,
+    /// Operation is not valid for the current status.
     InvalidStatus = 3,
+    /// Due date must not be in the past.
     DueDateInPast = 4,
+    /// Expected an escrow mapping but none exists.
     MissingEscrow = 5,
+    /// Invoice id does not exist.
     InvoiceNotFound = 6,
+    /// Invoice status does not allow this operation.
     InvalidInvoiceStatus = 7,
+    /// Caller is not authorized to perform this action.
     Unauthorized = 8,
+    /// Oracle config has not been set.
     OracleNotConfigured = 9,
+    /// Oracle response timed out or exceeded staleness.
     OracleTimeout = 10,
+    /// Oracle returned an invalid rate.
     InvalidRate = 11,
+    /// Asset is not supported.
     AssetNotSupported = 12,
+    /// Oracle rate is stale.
     StaleRate = 13,
+    /// Currency conversion failed.
     ConversionFailed = 14,
+    /// Rate limit exceeded for this caller/function.
     RateLimitExceeded = 15,
+    /// Contract has already been initialized.
     AlreadyInitialized = 16,
+    /// AML screening flagged a high-risk result.
     AmlHighRisk = 17,
+    /// AML oracle call failed.
     AmlOracleError = 18,
+    /// AML configuration is missing.
     AmlNotConfigured = 19,
+    /// AML flag record was not found.
     AmlFlagNotFound = 20,
+    /// Batch size exceeds maximum allowed.
     BatchTooLarge = 21,
+    /// Duplicate escrow id encountered.
     DuplicateEscrowId = 22,
+    /// Contract is paused (upgradeable pause flag set).
     ContractPaused = 32,
+    /// Metric type is invalid or unsupported.
     InvalidMetric = 33,
 }
 
@@ -169,7 +194,18 @@ impl RemittanceHubContract {
         env.storage()
             .persistent()
             .set(&HubOracleKey::OracleConfig, &config);
-        env.events().publish((symbol_short!("hub_init"),), admin);
+        events::emit(
+            &env,
+            symbol_short!("hub"),
+            symbol_short!("hub_init"),
+            0,
+            &admin,
+            0,
+            symbol_short!("na"),
+            EventData::AdminAction {
+                key: symbol_short!("hub_init"),
+            },
+        );
 
         Ok(())
     }
@@ -202,9 +238,19 @@ impl RemittanceHubContract {
             .persistent()
             .set(&HubOracleKey::OracleConfig, &config);
 
-        env.events().publish(
-            (symbol_short!("orc_set"),),
-            (primary_oracle, secondary_oracle),
+        events::emit(
+            &env,
+            symbol_short!("hub"),
+            symbol_short!("orc_set"),
+            0,
+            &caller,
+            0,
+            symbol_short!("na"),
+            EventData::PairAction {
+                key: symbol_short!("orc_set"),
+                first: primary_oracle,
+                second: secondary_oracle,
+            },
         );
 
         Ok(())
@@ -303,7 +349,18 @@ impl RemittanceHubContract {
         };
         env.storage().persistent().set(&AmlKey::Config, &config);
 
-        env.events().publish((symbol_short!("aml_cfg"),), caller);
+        events::emit(
+            &env,
+            symbol_short!("hub"),
+            symbol_short!("aml_cfg"),
+            0,
+            &caller,
+            0,
+            symbol_short!("na"),
+            EventData::AdminAction {
+                key: symbol_short!("aml_cfg"),
+            },
+        );
 
         Ok(())
     }
@@ -332,8 +389,18 @@ impl RemittanceHubContract {
         config.risk_threshold = risk_threshold;
         env.storage().persistent().set(&AmlKey::Config, &config);
 
-        env.events()
-            .publish((symbol_short!("aml_thr"),), risk_threshold);
+        events::emit(
+            &env,
+            symbol_short!("hub"),
+            symbol_short!("aml_thr"),
+            0,
+            &caller,
+            risk_threshold as i128,
+            symbol_short!("na"),
+            EventData::AdminAction {
+                key: symbol_short!("aml_thr"),
+            },
+        );
 
         Ok(())
     }
@@ -362,8 +429,19 @@ impl RemittanceHubContract {
         config.oracle_address = oracle_address.clone();
         env.storage().persistent().set(&AmlKey::Config, &config);
 
-        env.events()
-            .publish((symbol_short!("aml_orc"),), oracle_address);
+        events::emit(
+            &env,
+            symbol_short!("hub"),
+            symbol_short!("aml_orc"),
+            0,
+            &caller,
+            0,
+            symbol_short!("na"),
+            EventData::AddressAction {
+                key: symbol_short!("aml_orc"),
+                address: oracle_address,
+            },
+        );
 
         Ok(())
     }
@@ -407,8 +485,18 @@ impl RemittanceHubContract {
         remittance.status = symbol_short!("pending");
         env.storage().persistent().set(&remittance_id, &remittance);
 
-        env.events()
-            .publish((symbol_short!("aml_clr"), remittance_id), caller);
+        events::emit(
+            &env,
+            symbol_short!("hub"),
+            symbol_short!("aml_clr"),
+            remittance_id,
+            &caller,
+            0,
+            symbol_short!("na"),
+            EventData::AdminAction {
+                key: symbol_short!("aml_clr"),
+            },
+        );
 
         Ok(())
     }
@@ -673,9 +761,25 @@ impl RemittanceHubContract {
         Self::track_metric(&env, MetricType::Volume, amount);
         Self::track_metric(&env, MetricType::Fee, fees);
 
-        env.events().publish(
-            (symbol_short!("inv_gen"), counter),
-            (sender, amount, total_due, due_date),
+        events::emit(
+            &env,
+            symbol_short!("hub"),
+            symbol_short!("inv_gen"),
+            counter,
+            &invoice.sender,
+            total_due,
+            symbol_short!("unpaid"),
+            EventData::InvoiceCreated {
+                invoice_id: counter,
+                escrow_id,
+                sender: invoice.sender.clone(),
+                recipient: invoice.recipient.clone(),
+                asset: AssetRef {
+                    code: invoice.asset.code.clone(),
+                    issuer: invoice.asset.issuer.clone(),
+                },
+                total_due,
+            },
         );
 
         Ok(counter)
@@ -725,9 +829,19 @@ impl RemittanceHubContract {
             .persistent()
             .set(&DataKey::Invoice(invoice_id), &invoice);
 
-        env.events().publish(
-            (symbol_short!("inv_paid"), invoice_id),
-            (caller, invoice.paid_at),
+        events::emit(
+            &env,
+            symbol_short!("hub"),
+            symbol_short!("inv_paid"),
+            invoice_id,
+            &caller,
+            invoice.total_due,
+            symbol_short!("paid"),
+            EventData::InvoicePaid {
+                invoice_id,
+                escrow_id: invoice.escrow_id,
+                paid_amount: invoice.total_due,
+            },
         );
 
         Self::track_metric(&env, MetricType::Success, 1);
@@ -758,8 +872,16 @@ impl RemittanceHubContract {
             .persistent()
             .set(&DataKey::Invoice(invoice_id), &invoice);
 
-        env.events()
-            .publish((symbol_short!("inv_over"), invoice_id), current_time);
+        events::emit(
+            &env,
+            symbol_short!("hub"),
+            symbol_short!("inv_over"),
+            invoice_id,
+            &env.current_contract_address(),
+            0,
+            symbol_short!("overdue"),
+            EventData::InvoiceOverdue { invoice_id },
+        );
 
         Ok(())
     }
@@ -791,8 +913,16 @@ impl RemittanceHubContract {
             .persistent()
             .set(&DataKey::Invoice(invoice_id), &invoice);
 
-        env.events()
-            .publish((symbol_short!("inv_canc"), invoice_id), caller);
+        events::emit(
+            &env,
+            symbol_short!("hub"),
+            symbol_short!("inv_canc"),
+            invoice_id,
+            &caller,
+            0,
+            symbol_short!("cancel"),
+            EventData::InvoiceCancelled { invoice_id },
+        );
 
         Ok(())
     }
@@ -838,9 +968,19 @@ impl RemittanceHubContract {
             .persistent()
             .set(&DataKey::Invoice(invoice_id), &invoice);
 
-        env.events().publish(
-            (symbol_short!("inv_upd"), invoice_id),
-            (caller, new_amount, invoice.total_due),
+        events::emit(
+            &env,
+            symbol_short!("hub"),
+            symbol_short!("inv_upd"),
+            invoice_id,
+            &caller,
+            invoice.total_due,
+            symbol_short!("unpaid"),
+            EventData::InvoiceUpdated {
+                invoice_id,
+                new_amount,
+                total_due: invoice.total_due,
+            },
         );
 
         Ok(())
@@ -872,8 +1012,18 @@ impl RemittanceHubContract {
             ids.push_back(id);
         }
 
-        env.events()
-            .publish((symbol_short!("batch_cre"), sender), ids.clone());
+        events::emit(
+            &env,
+            symbol_short!("hub"),
+            symbol_short!("batch_cre"),
+            0,
+            &sender,
+            ids.len() as i128,
+            symbol_short!("na"),
+            EventData::AdminAction {
+                key: symbol_short!("batch_cre"),
+            },
+        );
 
         Ok(ids)
     }
@@ -975,9 +1125,17 @@ impl RemittanceHubContract {
             token_client.transfer(&sender, &env.current_contract_address(), &total_transfer);
         }
 
-        env.events().publish(
-            (symbol_short!("batch_dep"), sender),
-            (escrow_ids, total_amount, total_fees),
+        events::emit(
+            &env,
+            symbol_short!("hub"),
+            symbol_short!("batch_dep"),
+            0,
+            &sender,
+            total_amount,
+            symbol_short!("na"),
+            EventData::AdminAction {
+                key: symbol_short!("batch_dep"),
+            },
         );
 
         Self::track_metric(&env, MetricType::Volume, total_amount);
@@ -1021,8 +1179,18 @@ impl RemittanceHubContract {
             );
         }
 
-        env.events()
-            .publish((symbol_short!("batch_rel"), caller), escrow_ids.clone());
+        events::emit(
+            &env,
+            symbol_short!("hub"),
+            symbol_short!("batch_rel"),
+            0,
+            &caller,
+            escrow_ids.len() as i128,
+            symbol_short!("na"),
+            EventData::AdminAction {
+                key: symbol_short!("batch_rel"),
+            },
+        );
 
         Self::track_metric(&env, MetricType::Success, escrow_ids.len() as i128);
 
@@ -1184,9 +1352,17 @@ impl RemittanceHubContract {
                 .set(&DataKey::MetricDaily(metric_type, day), &0i128);
         }
 
-        env.events().publish(
-            (symbol_short!("met_rst"),),
-            (metric_type, timestamp, is_weekly),
+        events::emit(
+            &env,
+            symbol_short!("hub"),
+            symbol_short!("met_rst"),
+            0,
+            &caller,
+            0,
+            symbol_short!("na"),
+            EventData::AdminAction {
+                key: symbol_short!("met_rst"),
+            },
         );
 
         Ok(())
@@ -1214,8 +1390,18 @@ impl RemittanceHubContract {
             .persistent()
             .set(&weekly_key, &(weekly_val + value));
 
-        env.events()
-            .publish((symbol_short!("met_upd"),), (metric_type, value, now));
+        events::emit(
+            &env,
+            symbol_short!("hub"),
+            symbol_short!("met_upd"),
+            0,
+            &env.current_contract_address(),
+            value,
+            symbol_short!("na"),
+            EventData::AdminAction {
+                key: symbol_short!("met_upd"),
+            },
+        );
     }
 }
 

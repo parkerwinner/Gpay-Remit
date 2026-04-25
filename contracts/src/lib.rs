@@ -1,6 +1,7 @@
 #![no_std]
 
 pub mod aml;
+pub mod events;
 pub mod kyc;
 pub mod oracle;
 pub mod payment_escrow;
