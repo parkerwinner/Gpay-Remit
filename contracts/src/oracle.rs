@@ -7,16 +7,27 @@ use soroban_sdk::{
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
 #[repr(u32)]
 pub enum OracleError {
+    /// Oracle has not been configured.
     OracleNotConfigured = 1,
+    /// Oracle response is too old or timed out.
     OracleTimeout = 2,
+    /// Oracle returned an invalid rate.
     InvalidRate = 3,
+    /// Asset pair is not supported.
     AssetNotSupported = 4,
+    /// Cached oracle rate is stale.
     StaleRate = 5,
+    /// Caller is not authorized.
     Unauthorized = 6,
+    /// Rate limit exceeded for oracle queries.
     RateLimitExceeded = 7,
+    /// Conversion arithmetic overflowed.
     ConversionOverflow = 8,
+    /// Amount must be greater than zero.
     InvalidAmount = 9,
+    /// Fallback oracle path failed.
     FallbackFailed = 10,
+    /// From/to asset are the same (no conversion needed).
     SameAsset = 11,
 }
 

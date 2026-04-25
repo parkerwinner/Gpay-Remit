@@ -7,16 +7,27 @@ use soroban_sdk::{
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
 #[repr(u32)]
 pub enum KycError {
+    /// KYC module has not been configured.
     NotConfigured = 1,
+    /// Account is not verified under the configured KYC policy.
     AccountNotVerified = 2,
+    /// Provided proof/signature is invalid.
     InvalidProof = 3,
+    /// KYC oracle is unavailable or invocation failed.
     OracleUnavailable = 4,
+    /// Caller is not authorized.
     Unauthorized = 5,
+    /// Account is already verified.
     AlreadyVerified = 6,
+    /// Proof has expired.
     ProofExpired = 7,
+    /// Issuer is not trusted/valid.
     InvalidIssuer = 8,
+    /// Rate limit exceeded.
     RateLimited = 9,
+    /// Account is suspended.
     AccountSuspended = 10,
+    /// KYC module is already configured.
     AlreadyConfigured = 11,
 }
 
