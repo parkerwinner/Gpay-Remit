@@ -7,11 +7,17 @@ use soroban_sdk::{
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
 #[repr(u32)]
 pub enum AmlError {
+    /// AML module has not been configured.
     NotConfigured = 1,
+    /// AML oracle is unavailable or invocation failed.
     OracleUnavailable = 2,
+    /// Screening result exceeded configured risk threshold.
     HighRisk = 3,
+    /// Caller is not authorized.
     Unauthorized = 4,
+    /// Risk threshold is invalid.
     InvalidThreshold = 5,
+    /// Requested AML flag record was not found.
     FlagNotFound = 6,
 }
 

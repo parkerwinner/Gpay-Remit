@@ -1,9 +1,18 @@
 package workers
 
-import "fmt"
+import (
+	"context"
+	"sync"
 
-func StartMonitor() {
+	"github.com/yourusername/gpay-remit/logger"
+)
+
+func StartMonitor(ctx context.Context, wg *sync.WaitGroup) {
+	wg.Add(1)
 	go func() {
-		fmt.Println("Worker started...")
+		defer wg.Done()
+		logger.Log.Info("Monitor worker started")
+		<-ctx.Done()
+		logger.Log.Info("Monitor worker stopped")
 	}()
 }

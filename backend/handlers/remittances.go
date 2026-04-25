@@ -104,7 +104,9 @@ func (h *RemittanceHandler) SendRemittance(c *gin.Context) {
 		return
 	}
 
-	middleware.SetAuditNew(c, payment)
+	// Set response for idempotency caching
+	middleware.SetIdempotencyResponse(c, payment)
+
 	c.JSON(http.StatusCreated, payment)
 }
 
@@ -174,13 +176,18 @@ func (h *RemittanceHandler) CreateRemittance(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusCreated, gin.H{
+	response := gin.H{
 		"remittance_id": payment.ID,
 		"status":        payment.Status,
 		"fee_breakdown": feeBreakdown,
 		"tx_envelope":   xdr,
 		"message":       "Remittance initiated successfully. Please sign and submit the transaction.",
-	})
+	}
+
+	// Set response for idempotency caching
+	middleware.SetIdempotencyResponse(c, response)
+
+	c.JSON(http.StatusCreated, response)
 }
 
 func (h *RemittanceHandler) GetRemittance(c *gin.Context) {
@@ -278,6 +285,9 @@ func (h *RemittanceHandler) CreateInvoice(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create invoice"})
 		return
 	}
+
+	// Set response for idempotency caching
+	middleware.SetIdempotencyResponse(c, invoice)
 
 	c.JSON(http.StatusCreated, invoice)
 }

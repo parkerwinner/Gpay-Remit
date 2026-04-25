@@ -7,16 +7,27 @@ use soroban_sdk::{
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
 #[repr(u32)]
 pub enum KycError {
+    /// KYC module has not been configured.
     NotConfigured = 1,
+    /// Account is not verified under the configured KYC policy.
     AccountNotVerified = 2,
+    /// Provided proof/signature is invalid.
     InvalidProof = 3,
+    /// KYC oracle is unavailable or invocation failed.
     OracleUnavailable = 4,
+    /// Caller is not authorized.
     Unauthorized = 5,
+    /// Account is already verified.
     AlreadyVerified = 6,
+    /// Proof has expired.
     ProofExpired = 7,
+    /// Issuer is not trusted/valid.
     InvalidIssuer = 8,
+    /// Rate limit exceeded.
     RateLimited = 9,
+    /// Account is suspended.
     AccountSuspended = 10,
+    /// KYC module is already configured.
     AlreadyConfigured = 11,
 }
 
@@ -64,6 +75,8 @@ pub enum KycDataKey {
     Config,
     Whitelist(Address),
     TrustedIssuer(Address),
+    IssuerKey(Address),
+    RevokedProof(BytesN<64>),
     CheckCount(Address),
 }
 
@@ -189,12 +202,49 @@ pub fn verify_proof(
         return Err(KycError::InvalidIssuer);
     }
 
+    let revoked_key = KycDataKey::RevokedProof(proof_signature.clone());
+    let revoked: bool = env.storage().persistent().get(&revoked_key).unwrap_or(false);
+    if revoked {
+        return Err(KycError::InvalidProof);
+    }
+
     let all_zero = proof_signature.iter().all(|b| b == 0);
     if all_zero {
         return Err(KycError::InvalidProof);
     }
 
+    if _proof_validity_period > 0 {
+        let issued_at = proof_signature
+            .iter()
+            .take(8)
+            .enumerate()
+            .fold(0u64, |acc, (i, b)| acc | ((b as u64) << (8 * i)));
+
+        if issued_at != 0 {
+            let current_time = env.ledger().timestamp();
+            let expires_at = issued_at
+                .checked_add(_proof_validity_period)
+                .ok_or(KycError::InvalidProof)?;
+            if current_time > expires_at {
+                return Err(KycError::ProofExpired);
+            }
+        }
+    }
+
     Ok(true)
+}
+
+pub fn revoke_proof(env: &Env, admin: &Address, proof_signature: &BytesN<64>) -> Result<(), KycError> {
+    admin.require_auth();
+    let config: Option<KycConfig> = env.storage().persistent().get(&KycDataKey::Config);
+    let config = config.ok_or(KycError::NotConfigured)?;
+    if *admin != config.admin {
+        return Err(KycError::Unauthorized);
+    }
+    env.storage()
+        .persistent()
+        .set(&KycDataKey::RevokedProof(proof_signature.clone()), &true);
+    Ok(())
 }
 
 #[cfg(test)]
