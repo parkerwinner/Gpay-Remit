@@ -163,3 +163,13 @@ soroban contract invoke --id <CONTRACT_ID> \
 soroban contract invoke --id <CONTRACT_ID> \
   --network testnet -- version
 ```
+
+## Rollbacks
+
+Soroban upgrades replace the contract WASM for subsequent invocations while
+preserving storage. There is no automatic rollback of an already-upgraded WASM.
+If an upgrade introduces a bug, the practical rollback strategy is to:
+
+1. Pause the contract.
+2. Upgrade again to a previously known-good WASM hash.
+3. Run `migrate` (if needed by that version) to re-enable operations.
