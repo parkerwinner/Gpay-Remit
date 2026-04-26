@@ -301,11 +301,11 @@ fn test_set_fee_limits_non_admin() {
     let (client, admin, sender, recipient, _token, asset) = setup_test(&env);
 
     let non_admin = recipient;
-    let result = client.try_set_fee_limits(&non_admin, &50, &1000, &10, &5000);
+    let result = client.try_set_fee_limits(&non_admin, &50, &1000);
     assert_eq!(result, Err(Ok(Error::Unauthorized)));
     
     // Verify admin can set the limits
-    client.set_fee_limits(&admin, &50, &1000, &10, &5000);
+    client.set_fee_limits(&admin, &50, &1000);
 }
 
 // Test non-admin cannot add supported asset
