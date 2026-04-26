@@ -147,6 +147,7 @@ pub enum DataKey {
     Escrow(u64),
     MetricDaily(MetricType, u64),
     MetricWeekly(MetricType, u64),
+    MaxBatchSize,
 }
 
 #[derive(Clone)]
@@ -202,9 +203,7 @@ impl RemittanceHubContract {
             &admin,
             0,
             symbol_short!("na"),
-            EventData::AdminAction {
-                key: symbol_short!("hub_init"),
-            },
+            EventData::AdminAction(symbol_short!("hub_init")),
         );
 
         Ok(())
@@ -246,11 +245,7 @@ impl RemittanceHubContract {
             &caller,
             0,
             symbol_short!("na"),
-            EventData::PairAction {
-                key: symbol_short!("orc_set"),
-                first: primary_oracle,
-                second: secondary_oracle,
-            },
+            EventData::PairAction(symbol_short!("orc_set"), primary_oracle, secondary_oracle),
         );
 
         Ok(())
@@ -357,9 +352,7 @@ impl RemittanceHubContract {
             &caller,
             0,
             symbol_short!("na"),
-            EventData::AdminAction {
-                key: symbol_short!("aml_cfg"),
-            },
+            EventData::AdminAction(symbol_short!("aml_cfg")),
         );
 
         Ok(())
@@ -397,9 +390,7 @@ impl RemittanceHubContract {
             &caller,
             risk_threshold as i128,
             symbol_short!("na"),
-            EventData::AdminAction {
-                key: symbol_short!("aml_thr"),
-            },
+            EventData::AdminAction(symbol_short!("aml_thr")),
         );
 
         Ok(())
@@ -437,10 +428,7 @@ impl RemittanceHubContract {
             &caller,
             0,
             symbol_short!("na"),
-            EventData::AddressAction {
-                key: symbol_short!("aml_orc"),
-                address: oracle_address,
-            },
+            EventData::AddressAction(symbol_short!("aml_orc"), oracle_address),
         );
 
         Ok(())
@@ -493,9 +481,7 @@ impl RemittanceHubContract {
             &caller,
             0,
             symbol_short!("na"),
-            EventData::AdminAction {
-                key: symbol_short!("aml_clr"),
-            },
+            EventData::AdminAction(symbol_short!("aml_clr")),
         );
 
         Ok(())
@@ -769,17 +755,17 @@ impl RemittanceHubContract {
             &invoice.sender,
             total_due,
             symbol_short!("unpaid"),
-            EventData::InvoiceCreated {
-                invoice_id: counter,
+            EventData::InvoiceCreated(
+                counter,
                 escrow_id,
-                sender: invoice.sender.clone(),
-                recipient: invoice.recipient.clone(),
-                asset: AssetRef {
+                invoice.sender.clone(),
+                invoice.recipient.clone(),
+                AssetRef {
                     code: invoice.asset.code.clone(),
                     issuer: invoice.asset.issuer.clone(),
                 },
                 total_due,
-            },
+            ),
         );
 
         Ok(counter)
@@ -837,11 +823,7 @@ impl RemittanceHubContract {
             &caller,
             invoice.total_due,
             symbol_short!("paid"),
-            EventData::InvoicePaid {
-                invoice_id,
-                escrow_id: invoice.escrow_id,
-                paid_amount: invoice.total_due,
-            },
+            EventData::InvoicePaid(invoice_id, invoice.escrow_id, invoice.total_due),
         );
 
         Self::track_metric(&env, MetricType::Success, 1);
@@ -880,7 +862,7 @@ impl RemittanceHubContract {
             &env.current_contract_address(),
             0,
             symbol_short!("overdue"),
-            EventData::InvoiceOverdue { invoice_id },
+            EventData::InvoiceOverdue(invoice_id),
         );
 
         Ok(())
@@ -921,7 +903,7 @@ impl RemittanceHubContract {
             &caller,
             0,
             symbol_short!("cancel"),
-            EventData::InvoiceCancelled { invoice_id },
+            EventData::InvoiceCancelled(invoice_id),
         );
 
         Ok(())
@@ -976,11 +958,7 @@ impl RemittanceHubContract {
             &caller,
             invoice.total_due,
             symbol_short!("unpaid"),
-            EventData::InvoiceUpdated {
-                invoice_id,
-                new_amount,
-                total_due: invoice.total_due,
-            },
+            EventData::InvoiceUpdated(invoice_id, new_amount, invoice.total_due),
         );
 
         Ok(())
@@ -1002,7 +980,8 @@ impl RemittanceHubContract {
     ) -> Result<soroban_sdk::Vec<u64>, RemittanceError> {
         sender.require_auth();
 
-        if requests.len() > 10 {
+        let max_batch = Self::get_max_batch_size(env.clone());
+        if requests.len() > max_batch {
             return Err(RemittanceError::BatchTooLarge);
         }
 
@@ -1020,9 +999,7 @@ impl RemittanceHubContract {
             &sender,
             ids.len() as i128,
             symbol_short!("na"),
-            EventData::AdminAction {
-                key: symbol_short!("batch_cre"),
-            },
+            EventData::AdminAction(symbol_short!("batch_cre")),
         );
 
         Ok(ids)
@@ -1077,6 +1054,11 @@ impl RemittanceHubContract {
         token_address: Address,
     ) -> Result<(), RemittanceError> {
         sender.require_auth();
+
+        let max_batch = Self::get_max_batch_size(env.clone());
+        if escrow_ids.len() > max_batch {
+            return Err(RemittanceError::BatchTooLarge);
+        }
 
         let mut total_amount: i128 = 0;
         let mut total_fees: i128 = 0;
@@ -1133,9 +1115,7 @@ impl RemittanceHubContract {
             &sender,
             total_amount,
             symbol_short!("na"),
-            EventData::AdminAction {
-                key: symbol_short!("batch_dep"),
-            },
+            EventData::AdminAction(symbol_short!("batch_dep")),
         );
 
         Self::track_metric(&env, MetricType::Volume, total_amount);
@@ -1151,6 +1131,11 @@ impl RemittanceHubContract {
         token_address: Address,
     ) -> Result<(), RemittanceError> {
         caller.require_auth();
+
+        let max_batch = Self::get_max_batch_size(env.clone());
+        if escrow_ids.len() > max_batch {
+            return Err(RemittanceError::BatchTooLarge);
+        }
 
         let token_client = soroban_sdk::token::Client::new(&env, &token_address);
         let contract_address = env.current_contract_address();
@@ -1188,14 +1173,34 @@ impl RemittanceHubContract {
             &caller,
             escrow_ids.len() as i128,
             symbol_short!("na"),
-            EventData::AdminAction {
-                key: symbol_short!("batch_rel"),
-            },
+            EventData::AdminAction(symbol_short!("batch_rel")),
         );
 
         Self::track_metric(&env, MetricType::Success, escrow_ids.len() as i128);
 
         Ok(())
+    }
+
+    pub fn set_max_batch_size(
+        env: Env,
+        caller: Address,
+        limit: u32,
+    ) -> Result<(), RemittanceError> {
+        caller.require_auth();
+        let stored_admin: Address = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Admin)
+            .ok_or(RemittanceError::Unauthorized)?;
+        if caller != stored_admin {
+            return Err(RemittanceError::Unauthorized);
+        }
+        env.storage().persistent().set(&DataKey::MaxBatchSize, &limit);
+        Ok(())
+    }
+
+    pub fn get_max_batch_size(env: Env) -> u32 {
+        env.storage().persistent().get(&DataKey::MaxBatchSize).unwrap_or(10)
     }
 
     fn convert_with_oracle(env: &Env, amount: i128, asset_code: &String) -> i128 {
@@ -1220,11 +1225,25 @@ impl RemittanceHubContract {
                     &target,
                     amount,
                     cfg.max_staleness,
-                    cached,
+                    cached.clone(),
                 );
                 match result {
                     Ok(conversion) => conversion.converted_amount,
-                    Err(_) => amount,
+                    Err(_) => {
+                        let secondary_result = oracle_mod::get_conversion_rate(
+                            env,
+                            &cfg.secondary_oracle,
+                            asset_code,
+                            &target,
+                            amount,
+                            cfg.max_staleness,
+                            cached,
+                        );
+                        match secondary_result {
+                            Ok(conversion) => conversion.converted_amount,
+                            Err(_) => amount,
+                        }
+                    }
                 }
             }
             None => amount,
@@ -1247,6 +1266,83 @@ impl RemittanceHubContract {
         } else {
             Err(RemittanceError::RateLimitExceeded)
         }
+    }
+
+    // ── Rate Limit Configuration ─────────────────────────────────────
+
+    pub fn set_rate_limit_config(
+        env: Env,
+        caller: Address,
+        function_type: rate_limit::FunctionType,
+        config: rate_limit::RateLimitConfig,
+    ) -> Result<(), RemittanceError> {
+        caller.require_auth();
+        let stored_admin: Address = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Admin)
+            .ok_or(RemittanceError::Unauthorized)?;
+        if caller != stored_admin {
+            return Err(RemittanceError::Unauthorized);
+        }
+        rate_limit::set_config(&env, function_type, config);
+        Ok(())
+    }
+
+    pub fn get_rate_limit_config(
+        env: Env,
+        function_type: rate_limit::FunctionType,
+    ) -> Option<rate_limit::RateLimitConfig> {
+        rate_limit::get_config(&env, function_type)
+    }
+
+    pub fn set_global_rate_limit_config(
+        env: Env,
+        caller: Address,
+        function_type: rate_limit::FunctionType,
+        config: rate_limit::RateLimitConfig,
+    ) -> Result<(), RemittanceError> {
+        caller.require_auth();
+        let stored_admin: Address = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Admin)
+            .ok_or(RemittanceError::Unauthorized)?;
+        if caller != stored_admin {
+            return Err(RemittanceError::Unauthorized);
+        }
+        rate_limit::set_global_config(&env, function_type, config);
+        Ok(())
+    }
+
+    pub fn get_global_rate_limit_config(
+        env: Env,
+        function_type: rate_limit::FunctionType,
+    ) -> Option<rate_limit::RateLimitConfig> {
+        rate_limit::get_global_config(&env, function_type)
+    }
+
+    pub fn set_rate_limit_exemption(
+        env: Env,
+        caller: Address,
+        address: Address,
+        exempt: bool,
+    ) -> Result<(), RemittanceError> {
+        caller.require_auth();
+        let stored_admin: Address = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Admin)
+            .ok_or(RemittanceError::Unauthorized)?;
+        if caller != stored_admin {
+            return Err(RemittanceError::Unauthorized);
+        }
+        rate_limit::set_exemption(&env, &address, exempt);
+        Ok(())
+    }
+
+    pub fn is_rate_limit_exempt(env: Env, address: Address) -> bool {
+        rate_limit::is_exempt(&env, &address)
     }
 
     // ── Upgradeable pattern ────────────────────────────────────────────
@@ -1361,9 +1457,7 @@ impl RemittanceHubContract {
             &caller,
             0,
             symbol_short!("na"),
-            EventData::AdminAction {
-                key: symbol_short!("met_rst"),
-            },
+            EventData::AdminAction(symbol_short!("met_rst")),
         );
 
         Ok(())
@@ -1399,9 +1493,7 @@ impl RemittanceHubContract {
             &env.current_contract_address(),
             value,
             symbol_short!("na"),
-            EventData::AdminAction {
-                key: symbol_short!("met_upd"),
-            },
+            EventData::AdminAction(symbol_short!("met_upd")),
         );
     }
 }

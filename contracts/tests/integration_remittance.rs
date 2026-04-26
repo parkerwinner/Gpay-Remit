@@ -91,7 +91,7 @@ mod integration_remittance {
 
         // Release
         let pre_balance = token.balance(&recipient);
-        client.release(&escrow_id, &recipient);
+        client.release_escrow(&escrow_id, &recipient, &token.address);
 
         let post = client.get_escrow(&escrow_id).unwrap();
         assert_eq!(post.status, EscrowStatus::Released);
@@ -126,7 +126,7 @@ mod integration_remittance {
         env.ledger().with_mut(|li| li.timestamp = expiration + 1);
 
         let pre_balance = token.balance(&sender);
-        client.refund(&escrow_id, &sender);
+        client.refund_escrow(&escrow_id, &sender, &token.address, &gpay_remit_contracts::payment_escrow::RefundReason::Expiration);
 
         let post = client.get_escrow(&escrow_id).unwrap();
         assert_eq!(post.status, EscrowStatus::Refunded);
@@ -164,7 +164,7 @@ mod integration_remittance {
         let funded = client.get_escrow(&escrow_id).unwrap();
         assert_eq!(funded.status, EscrowStatus::Funded);
 
-        client.release(&escrow_id, &recipient);
+        client.release_escrow(&escrow_id, &recipient, &token.address);
         let released = client.get_escrow(&escrow_id).unwrap();
         assert_eq!(released.status, EscrowStatus::Released);
     }
@@ -214,7 +214,7 @@ mod integration_remittance {
             &String::from_str(&env, ""),
         );
 
-        let result = client.try_deposit(&escrow_id, &sender, &amount + 1, &token.address);
+        let result = client.try_deposit(&escrow_id, &sender, &(amount + 1), &token.address);
         assert!(result.is_err());
     }
 
@@ -222,7 +222,7 @@ mod integration_remittance {
     #[test]
     fn test_flow_release_unfunded_rejected() {
         let env = Env::default();
-        let (client, _admin, sender, recipient, _token, _token_admin, asset) = setup(&env);
+        let (client, _admin, sender, recipient, token, _token_admin, asset) = setup(&env);
 
         env.ledger().with_mut(|li| li.timestamp = 1_000);
 
@@ -235,7 +235,7 @@ mod integration_remittance {
             &String::from_str(&env, ""),
         );
 
-        let result = client.try_release(&escrow_id, &recipient);
+        let result = client.try_release_escrow(&escrow_id, &recipient, &token.address);
         assert!(result.is_err());
     }
 
@@ -261,7 +261,7 @@ mod integration_remittance {
 
         client.deposit(&escrow_id, &sender, &amount, &token.address);
 
-        let result = client.try_refund(&escrow_id, &sender);
+        let result = client.try_refund_escrow(&escrow_id, &sender, &token.address, &gpay_remit_contracts::payment_escrow::RefundReason::Expiration);
         assert_eq!(result, Err(Ok(Error::NotExpired)));
     }
 
@@ -287,7 +287,7 @@ mod integration_remittance {
         );
 
         client.deposit(&escrow_id, &sender, &amount, &token.address);
-        client.release(&escrow_id, &recipient);
+        client.release_escrow(&escrow_id, &recipient, &token.address);
 
         let post = client.get_escrow(&escrow_id).unwrap();
         assert_eq!(post.status, EscrowStatus::Released);
@@ -328,7 +328,7 @@ mod integration_remittance {
         client.deposit(&id1, &sender, &a1, &token.address);
         client.deposit(&id2, &sender, &a2, &token.address);
 
-        client.release(&id1, &recipient);
+        client.release_escrow(&id1, &recipient, &token.address);
 
         let e1 = client.get_escrow(&id1).unwrap();
         let e2 = client.get_escrow(&id2).unwrap();
