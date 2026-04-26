@@ -98,6 +98,7 @@ fn test_fee_calculation_max_percentage_overflow() {
         Err(Err(_)) => {},
         Err(Ok(Error::ArithmeticOverflow)) | Ok(_) => {}
         Err(Ok(_)) => {} // Other errors are also acceptable
+        Err(Err(_)) => {} // Invoke errors
     }
 }
 
@@ -462,8 +463,11 @@ fn test_maximum_escrow_amount_handling() {
         match result {
         Err(Err(_)) => {},
             Ok(_) | Err(Ok(Error::ArithmeticOverflow)) | Err(Ok(Error::InvalidAmount)) => {}
-            Err(Ok(e)) => {
+            Err(Ok(_)) => {
                 // Other errors are acceptable
+            }
+            Err(Err(_)) => {
+                // Invoke errors are also possible
             }
         }
     }

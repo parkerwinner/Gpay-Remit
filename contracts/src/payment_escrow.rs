@@ -1215,7 +1215,7 @@ impl PaymentEscrowContract {
             &approver,
             escrow.amount,
             symbol_short!("approved"),
-            EventData::EscrowApproved(escrow_id),
+            EventData::EscrowApproved,
         );
 
         Self::notify_external(
@@ -1399,7 +1399,7 @@ impl PaymentEscrowContract {
             &caller,
             recipient_amount,
             symbol_short!("released"),
-            EventData::EscrowReleased(escrow_id, recipient_amount),
+            EventData::EscrowReleased,
         );
 
         env.storage()
@@ -1586,7 +1586,7 @@ impl PaymentEscrowContract {
             &caller,
             recipient_amount,
             partial_status,
-            EventData::EscrowReleased(escrow_id, recipient_amount),
+            EventData::EscrowReleased,
         );
 
         env.storage()
@@ -1622,7 +1622,7 @@ impl PaymentEscrowContract {
             &caller,
             0,
             symbol_short!("na"),
-            EventData::AdminAction(symbol_short!("part_enab")),
+            EventData::AdminAction,
         );
 
         Ok(())
@@ -1673,7 +1673,7 @@ impl PaymentEscrowContract {
             &caller,
             0,
             symbol_short!("na"),
-            EventData::AdminAction(symbol_short!("cond_add")),
+            EventData::AdminAction,
         );
 
         Ok(())
@@ -1711,7 +1711,7 @@ impl PaymentEscrowContract {
             &caller,
             0,
             symbol_short!("na"),
-            EventData::AdminAction(symbol_short!("cond_op")),
+            EventData::AdminAction,
         );
 
         Ok(())
@@ -1803,7 +1803,7 @@ impl PaymentEscrowContract {
             } else {
                 symbol_short!("fail")
             },
-            EventData::AdminAction(symbol_short!("verified")),
+            EventData::AdminAction,
         );
 
         Ok(result)
@@ -1841,7 +1841,7 @@ impl PaymentEscrowContract {
             &approver,
             0,
             symbol_short!("na"),
-            EventData::AdminAction(symbol_short!("approval")),
+            EventData::AdminAction,
         );
 
         Ok(())
@@ -1879,7 +1879,7 @@ impl PaymentEscrowContract {
             &caller,
             min_approvals as i128,
             symbol_short!("na"),
-            EventData::AdminAction(symbol_short!("min_appr")),
+            EventData::AdminAction,
         );
 
         Ok(())
@@ -2057,7 +2057,7 @@ impl PaymentEscrowContract {
             &caller,
             refund_amount,
             symbol_short!("refunded"),
-            EventData::EscrowRefunded(escrow_id, refund_amount),
+            EventData::EscrowRefunded,
         );
 
         env.storage()
@@ -2242,7 +2242,7 @@ impl PaymentEscrowContract {
             &caller,
             net_refund,
             refund_status,
-            EventData::EscrowRefunded(escrow_id, net_refund),
+            EventData::EscrowRefunded,
         );
 
         env.storage()
@@ -2309,7 +2309,7 @@ impl PaymentEscrowContract {
             &caller,
             required_approvals as i128,
             symbol_short!("na"),
-            EventData::AdminAction(symbol_short!("mp_setup")),
+            EventData::AdminAction,
         );
 
         Ok(())
@@ -2481,7 +2481,7 @@ impl PaymentEscrowContract {
             &approver,
             approval_count as i128,
             symbol_short!("na"),
-            EventData::AdminAction(symbol_short!("mp_appr")),
+            EventData::AdminAction,
         );
 
         if quorum_met {
@@ -2493,7 +2493,7 @@ impl PaymentEscrowContract {
                 &env.current_contract_address(),
                 approval_count as i128,
                 symbol_short!("na"),
-                EventData::AdminAction(symbol_short!("quorum")),
+                EventData::AdminAction,
             );
         }
 

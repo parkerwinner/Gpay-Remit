@@ -302,7 +302,7 @@ fn test_set_fee_limits_non_admin() {
 
     let non_admin = recipient;
     let result = client.try_set_fee_limits(&non_admin, &50, &1000);
-    assert_eq!(result, Err(Ok(Error::UnauthorizedCaller)));
+    assert_eq!(result, Err(Ok(Error::Unauthorized)));
     
     // Verify admin can set the limits
     client.set_fee_limits(&admin, &50, &1000);
