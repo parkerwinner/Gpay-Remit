@@ -202,9 +202,7 @@ impl RemittanceHubContract {
             &admin,
             0,
             symbol_short!("na"),
-            EventData::AdminAction {
-                key: symbol_short!("hub_init"),
-            },
+            EventData::AdminAction,
         );
 
         Ok(())
@@ -246,11 +244,7 @@ impl RemittanceHubContract {
             &caller,
             0,
             symbol_short!("na"),
-            EventData::PairAction {
-                key: symbol_short!("orc_set"),
-                first: primary_oracle,
-                second: secondary_oracle,
-            },
+            EventData::PairAction,
         );
 
         Ok(())
@@ -357,9 +351,7 @@ impl RemittanceHubContract {
             &caller,
             0,
             symbol_short!("na"),
-            EventData::AdminAction {
-                key: symbol_short!("aml_cfg"),
-            },
+            EventData::AdminAction,
         );
 
         Ok(())
@@ -397,9 +389,7 @@ impl RemittanceHubContract {
             &caller,
             risk_threshold as i128,
             symbol_short!("na"),
-            EventData::AdminAction {
-                key: symbol_short!("aml_thr"),
-            },
+            EventData::AdminAction,
         );
 
         Ok(())
@@ -437,10 +427,7 @@ impl RemittanceHubContract {
             &caller,
             0,
             symbol_short!("na"),
-            EventData::AddressAction {
-                key: symbol_short!("aml_orc"),
-                address: oracle_address,
-            },
+            EventData::AddressAction,
         );
 
         Ok(())
@@ -493,9 +480,7 @@ impl RemittanceHubContract {
             &caller,
             0,
             symbol_short!("na"),
-            EventData::AdminAction {
-                key: symbol_short!("aml_clr"),
-            },
+            EventData::AdminAction,
         );
 
         Ok(())
@@ -769,17 +754,7 @@ impl RemittanceHubContract {
             &invoice.sender,
             total_due,
             symbol_short!("unpaid"),
-            EventData::InvoiceCreated {
-                invoice_id: counter,
-                escrow_id,
-                sender: invoice.sender.clone(),
-                recipient: invoice.recipient.clone(),
-                asset: AssetRef {
-                    code: invoice.asset.code.clone(),
-                    issuer: invoice.asset.issuer.clone(),
-                },
-                total_due,
-            },
+            EventData::InvoiceCreated,
         );
 
         Ok(counter)
@@ -837,11 +812,7 @@ impl RemittanceHubContract {
             &caller,
             invoice.total_due,
             symbol_short!("paid"),
-            EventData::InvoicePaid {
-                invoice_id,
-                escrow_id: invoice.escrow_id,
-                paid_amount: invoice.total_due,
-            },
+            EventData::InvoicePaid,
         );
 
         Self::track_metric(&env, MetricType::Success, 1);
@@ -880,7 +851,7 @@ impl RemittanceHubContract {
             &env.current_contract_address(),
             0,
             symbol_short!("overdue"),
-            EventData::InvoiceOverdue { invoice_id },
+            EventData::InvoiceOverdue,
         );
 
         Ok(())
@@ -921,7 +892,7 @@ impl RemittanceHubContract {
             &caller,
             0,
             symbol_short!("cancel"),
-            EventData::InvoiceCancelled { invoice_id },
+            EventData::InvoiceCancelled,
         );
 
         Ok(())
@@ -976,11 +947,7 @@ impl RemittanceHubContract {
             &caller,
             invoice.total_due,
             symbol_short!("unpaid"),
-            EventData::InvoiceUpdated {
-                invoice_id,
-                new_amount,
-                total_due: invoice.total_due,
-            },
+            EventData::InvoiceUpdated,
         );
 
         Ok(())
@@ -1020,9 +987,7 @@ impl RemittanceHubContract {
             &sender,
             ids.len() as i128,
             symbol_short!("na"),
-            EventData::AdminAction {
-                key: symbol_short!("batch_cre"),
-            },
+            EventData::AdminAction,
         );
 
         Ok(ids)
@@ -1133,9 +1098,7 @@ impl RemittanceHubContract {
             &sender,
             total_amount,
             symbol_short!("na"),
-            EventData::AdminAction {
-                key: symbol_short!("batch_dep"),
-            },
+            EventData::AdminAction,
         );
 
         Self::track_metric(&env, MetricType::Volume, total_amount);
@@ -1188,9 +1151,7 @@ impl RemittanceHubContract {
             &caller,
             escrow_ids.len() as i128,
             symbol_short!("na"),
-            EventData::AdminAction {
-                key: symbol_short!("batch_rel"),
-            },
+            EventData::AdminAction,
         );
 
         Self::track_metric(&env, MetricType::Success, escrow_ids.len() as i128);
@@ -1361,9 +1322,7 @@ impl RemittanceHubContract {
             &caller,
             0,
             symbol_short!("na"),
-            EventData::AdminAction {
-                key: symbol_short!("met_rst"),
-            },
+            EventData::AdminAction,
         );
 
         Ok(())
@@ -1399,9 +1358,7 @@ impl RemittanceHubContract {
             &env.current_contract_address(),
             value,
             symbol_short!("na"),
-            EventData::AdminAction {
-                key: symbol_short!("met_upd"),
-            },
+            EventData::AdminAction,
         );
     }
 }

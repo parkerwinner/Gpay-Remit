@@ -404,9 +404,7 @@ impl PaymentEscrowContract {
             &admin,
             fee_percentage,
             symbol_short!("na"),
-            EventData::AdminAction {
-                key: symbol_short!("fee_set"),
-            },
+            EventData::AdminAction,
         );
 
         Ok(())
@@ -443,9 +441,7 @@ impl PaymentEscrowContract {
             &admin,
             fee_percentage,
             symbol_short!("na"),
-            EventData::AdminAction {
-                key: symbol_short!("proc_fee"),
-            },
+            EventData::AdminAction,
         );
 
         Ok(())
@@ -478,9 +474,7 @@ impl PaymentEscrowContract {
             &admin,
             0,
             symbol_short!("na"),
-            EventData::AdminAction {
-                key: symbol_short!("fee_wal"),
-            },
+            EventData::AdminAction,
         );
 
         Ok(())
@@ -514,9 +508,7 @@ impl PaymentEscrowContract {
             &admin,
             fee_percentage,
             symbol_short!("na"),
-            EventData::AdminAction {
-                key: symbol_short!("forex_f"),
-            },
+            EventData::AdminAction,
         );
 
         Ok(())
@@ -546,9 +538,7 @@ impl PaymentEscrowContract {
             &admin,
             flat_fee,
             symbol_short!("na"),
-            EventData::AdminAction {
-                key: symbol_short!("comp_fee"),
-            },
+            EventData::AdminAction,
         );
 
         Ok(())
@@ -582,9 +572,7 @@ impl PaymentEscrowContract {
             &admin,
             0,
             symbol_short!("na"),
-            EventData::AdminAction {
-                key: symbol_short!("fee_lim"),
-            },
+            EventData::AdminAction,
         );
 
         Ok(())
@@ -627,9 +615,7 @@ impl PaymentEscrowContract {
             &actor,
             payload.amount,
             status,
-            EventData::AdminAction {
-                key: symbol_short!("notify"),
-            },
+            EventData::AdminAction,
         );
     }
 
@@ -739,9 +725,7 @@ impl PaymentEscrowContract {
             &admin,
             0,
             symbol_short!("na"),
-            EventData::AdminAction {
-                key: symbol_short!("kyc_cfg"),
-            },
+            EventData::AdminAction,
         );
 
         Ok(())
@@ -780,10 +764,7 @@ impl PaymentEscrowContract {
             &admin,
             0,
             symbol_short!("na"),
-            EventData::AddressAction {
-                key: symbol_short!("kyc_add"),
-                address: account,
-            },
+            EventData::AddressAction,
         );
 
         Ok(())
@@ -817,10 +798,7 @@ impl PaymentEscrowContract {
             &admin,
             0,
             symbol_short!("na"),
-            EventData::AddressAction {
-                key: symbol_short!("kyc_rem"),
-                address: account,
-            },
+            EventData::AddressAction,
         );
 
         Ok(())
@@ -846,10 +824,7 @@ impl PaymentEscrowContract {
             &admin,
             0,
             symbol_short!("na"),
-            EventData::AddressAction {
-                key: symbol_short!("kyc_iss"),
-                address: issuer,
-            },
+            EventData::AddressAction,
         );
 
         Ok(())
@@ -891,9 +866,7 @@ impl PaymentEscrowContract {
             &admin,
             0,
             symbol_short!("na"),
-            EventData::AdminAction {
-                key: symbol_short!("kyc_ovr"),
-            },
+            EventData::AdminAction,
         );
 
         Ok(())
@@ -952,10 +925,7 @@ impl PaymentEscrowContract {
                         &account,
                         0,
                         symbol_short!("na"),
-                        EventData::AddressAction {
-                            key: symbol_short!("kyc_ok"),
-                            address: account,
-                        },
+                        EventData::AddressAction,
                     );
                 }
                 Ok(valid)
@@ -1031,11 +1001,7 @@ impl PaymentEscrowContract {
                             &sender,
                             0,
                             symbol_short!("na"),
-                            EventData::PairAction {
-                                key: symbol_short!("kyc_fail"),
-                                first: sender.clone(),
-                                second: recipient.clone(),
-                            },
+                            EventData::PairAction,
                         );
                         return Err(Error::KycFailed);
                     }
@@ -1049,11 +1015,7 @@ impl PaymentEscrowContract {
                         &sender,
                         0,
                         symbol_short!("na"),
-                        EventData::PairAction {
-                            key: symbol_short!("kyc_pass"),
-                            first: sender.clone(),
-                            second: recipient.clone(),
-                        },
+                        EventData::PairAction,
                     );
                 }
                 Err(_) => {
@@ -1113,16 +1075,7 @@ impl PaymentEscrowContract {
             &escrow.sender,
             escrow.amount,
             symbol_short!("pending"),
-            EventData::EscrowCreated {
-                escrow_id: counter,
-                sender: escrow.sender.clone(),
-                recipient: escrow.recipient.clone(),
-                asset: AssetRef {
-                    code: escrow.asset.code.clone(),
-                    issuer: escrow.asset.issuer.clone(),
-                },
-                total_amount: escrow.amount,
-            },
+            EventData::EscrowCreated,
         );
 
         Self::notify_external(
@@ -1207,11 +1160,7 @@ impl PaymentEscrowContract {
             &caller,
             amount,
             deposit_status,
-            EventData::EscrowDeposited {
-                escrow_id,
-                amount,
-                deposited_total: escrow.deposited_amount,
-            },
+            EventData::EscrowDeposited,
         );
 
         Self::notify_external(
@@ -1257,7 +1206,7 @@ impl PaymentEscrowContract {
             &approver,
             escrow.amount,
             symbol_short!("approved"),
-            EventData::EscrowApproved { escrow_id },
+            EventData::EscrowApproved,
         );
 
         Self::notify_external(
@@ -1441,10 +1390,7 @@ impl PaymentEscrowContract {
             &caller,
             recipient_amount,
             symbol_short!("released"),
-            EventData::EscrowReleased {
-                escrow_id,
-                released_amount: recipient_amount,
-            },
+            EventData::EscrowReleased,
         );
 
         env.storage()
@@ -1586,10 +1532,7 @@ impl PaymentEscrowContract {
             &caller,
             recipient_amount,
             partial_status,
-            EventData::EscrowReleased {
-                escrow_id,
-                released_amount: recipient_amount,
-            },
+            EventData::EscrowReleased,
         );
 
         env.storage()
@@ -1625,9 +1568,7 @@ impl PaymentEscrowContract {
             &caller,
             0,
             symbol_short!("na"),
-            EventData::AdminAction {
-                key: symbol_short!("part_enab"),
-            },
+            EventData::AdminAction,
         );
 
         Ok(())
@@ -1678,9 +1619,7 @@ impl PaymentEscrowContract {
             &caller,
             0,
             symbol_short!("na"),
-            EventData::AdminAction {
-                key: symbol_short!("cond_add"),
-            },
+            EventData::AdminAction,
         );
 
         Ok(())
@@ -1718,9 +1657,7 @@ impl PaymentEscrowContract {
             &caller,
             0,
             symbol_short!("na"),
-            EventData::AdminAction {
-                key: symbol_short!("cond_op"),
-            },
+            EventData::AdminAction,
         );
 
         Ok(())
@@ -1812,9 +1749,7 @@ impl PaymentEscrowContract {
             } else {
                 symbol_short!("fail")
             },
-            EventData::AdminAction {
-                key: symbol_short!("verified"),
-            },
+            EventData::AdminAction,
         );
 
         Ok(result)
@@ -1852,9 +1787,7 @@ impl PaymentEscrowContract {
             &approver,
             0,
             symbol_short!("na"),
-            EventData::AdminAction {
-                key: symbol_short!("approval"),
-            },
+            EventData::AdminAction,
         );
 
         Ok(())
@@ -1892,9 +1825,7 @@ impl PaymentEscrowContract {
             &caller,
             min_approvals as i128,
             symbol_short!("na"),
-            EventData::AdminAction {
-                key: symbol_short!("min_appr"),
-            },
+            EventData::AdminAction,
         );
 
         Ok(())
@@ -2072,10 +2003,7 @@ impl PaymentEscrowContract {
             &caller,
             refund_amount,
             symbol_short!("refunded"),
-            EventData::EscrowRefunded {
-                escrow_id,
-                refunded_amount: refund_amount,
-            },
+            EventData::EscrowRefunded,
         );
 
         env.storage()
@@ -2215,10 +2143,7 @@ impl PaymentEscrowContract {
             &caller,
             net_refund,
             refund_status,
-            EventData::EscrowRefunded {
-                escrow_id,
-                refunded_amount: net_refund,
-            },
+            EventData::EscrowRefunded,
         );
 
         env.storage()
@@ -2285,9 +2210,7 @@ impl PaymentEscrowContract {
             &caller,
             required_approvals as i128,
             symbol_short!("na"),
-            EventData::AdminAction {
-                key: symbol_short!("mp_setup"),
-            },
+            EventData::AdminAction,
         );
 
         Ok(())
@@ -2459,9 +2382,7 @@ impl PaymentEscrowContract {
             &approver,
             approval_count as i128,
             symbol_short!("na"),
-            EventData::AdminAction {
-                key: symbol_short!("mp_appr"),
-            },
+            EventData::AdminAction,
         );
 
         if quorum_met {
@@ -2473,9 +2394,7 @@ impl PaymentEscrowContract {
                 &env.current_contract_address(),
                 approval_count as i128,
                 symbol_short!("na"),
-                EventData::AdminAction {
-                    key: symbol_short!("quorum"),
-                },
+                EventData::AdminAction,
             );
         }
 

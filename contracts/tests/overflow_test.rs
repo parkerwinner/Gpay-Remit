@@ -95,6 +95,7 @@ fn test_fee_calculation_max_percentage_overflow() {
     match result {
         Err(Ok(Error::ArithmeticOverflow)) | Ok(_) => {}
         Err(Ok(_)) => {} // Other errors are also acceptable
+        Err(Err(_)) => {} // Invoke errors
     }
 }
 
@@ -457,8 +458,11 @@ fn test_maximum_escrow_amount_handling() {
         let result = client.try_create_escrow(&sender, &recipient, &amount, &asset, &2000, &String::from_str(&env, ""));
         match result {
             Ok(_) | Err(Ok(Error::ArithmeticOverflow)) | Err(Ok(Error::InvalidAmount)) => {}
-            Err(Ok(e)) => {
+            Err(Ok(_)) => {
                 // Other errors are acceptable
+            }
+            Err(Err(_)) => {
+                // Invoke errors are also possible
             }
         }
     }
