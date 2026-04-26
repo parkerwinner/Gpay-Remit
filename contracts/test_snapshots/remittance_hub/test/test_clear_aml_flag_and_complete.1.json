@@ -1201,11 +1201,71 @@
           "v0": {
             "topics": [
               {
+                "symbol": "gpayremit"
+              },
+              {
+                "symbol": "hub"
+              },
+              {
                 "symbol": "hub_init"
+              },
+              {
+                "u64": 0
               }
             ],
             "data": {
-              "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
+              "map": [
+                {
+                  "key": {
+                    "symbol": "actor"
+                  },
+                  "val": {
+                    "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
+                  }
+                },
+                {
+                  "key": {
+                    "symbol": "amount"
+                  },
+                  "val": {
+                    "i128": {
+                      "hi": 0,
+                      "lo": 0
+                    }
+                  }
+                },
+                {
+                  "key": {
+                    "symbol": "data"
+                  },
+                  "val": {
+                    "vec": [
+                      {
+                        "symbol": "AdminAction"
+                      },
+                      {
+                        "symbol": "hub_init"
+                      }
+                    ]
+                  }
+                },
+                {
+                  "key": {
+                    "symbol": "status"
+                  },
+                  "val": {
+                    "symbol": "na"
+                  }
+                },
+                {
+                  "key": {
+                    "symbol": "timestamp"
+                  },
+                  "val": {
+                    "u64": 1000
+                  }
+                }
+              ]
             }
           }
         }
@@ -1278,11 +1338,71 @@
           "v0": {
             "topics": [
               {
+                "symbol": "gpayremit"
+              },
+              {
+                "symbol": "hub"
+              },
+              {
                 "symbol": "aml_cfg"
+              },
+              {
+                "u64": 0
               }
             ],
             "data": {
-              "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
+              "map": [
+                {
+                  "key": {
+                    "symbol": "actor"
+                  },
+                  "val": {
+                    "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
+                  }
+                },
+                {
+                  "key": {
+                    "symbol": "amount"
+                  },
+                  "val": {
+                    "i128": {
+                      "hi": 0,
+                      "lo": 0
+                    }
+                  }
+                },
+                {
+                  "key": {
+                    "symbol": "data"
+                  },
+                  "val": {
+                    "vec": [
+                      {
+                        "symbol": "AdminAction"
+                      },
+                      {
+                        "symbol": "aml_cfg"
+                      }
+                    ]
+                  }
+                },
+                {
+                  "key": {
+                    "symbol": "status"
+                  },
+                  "val": {
+                    "symbol": "na"
+                  }
+                },
+                {
+                  "key": {
+                    "symbol": "timestamp"
+                  },
+                  "val": {
+                    "u64": 1000
+                  }
+                }
+              ]
             }
           }
         }
@@ -1572,6 +1692,12 @@
           "v0": {
             "topics": [
               {
+                "symbol": "gpayremit"
+              },
+              {
+                "symbol": "hub"
+              },
+              {
                 "symbol": "aml_clr"
               },
               {
@@ -1579,7 +1705,58 @@
               }
             ],
             "data": {
-              "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
+              "map": [
+                {
+                  "key": {
+                    "symbol": "actor"
+                  },
+                  "val": {
+                    "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
+                  }
+                },
+                {
+                  "key": {
+                    "symbol": "amount"
+                  },
+                  "val": {
+                    "i128": {
+                      "hi": 0,
+                      "lo": 0
+                    }
+                  }
+                },
+                {
+                  "key": {
+                    "symbol": "data"
+                  },
+                  "val": {
+                    "vec": [
+                      {
+                        "symbol": "AdminAction"
+                      },
+                      {
+                        "symbol": "aml_clr"
+                      }
+                    ]
+                  }
+                },
+                {
+                  "key": {
+                    "symbol": "status"
+                  },
+                  "val": {
+                    "symbol": "na"
+                  }
+                },
+                {
+                  "key": {
+                    "symbol": "timestamp"
+                  },
+                  "val": {
+                    "u64": 1000
+                  }
+                }
+              ]
             }
           }
         }
@@ -1847,26 +2024,69 @@
           "v0": {
             "topics": [
               {
+                "symbol": "gpayremit"
+              },
+              {
+                "symbol": "hub"
+              },
+              {
                 "symbol": "met_upd"
+              },
+              {
+                "u64": 0
               }
             ],
             "data": {
-              "vec": [
+              "map": [
                 {
-                  "vec": [
-                    {
-                      "symbol": "Success"
-                    }
-                  ]
-                },
-                {
-                  "i128": {
-                    "hi": 0,
-                    "lo": 1
+                  "key": {
+                    "symbol": "actor"
+                  },
+                  "val": {
+                    "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAOLZM"
                   }
                 },
                 {
-                  "u64": 1000
+                  "key": {
+                    "symbol": "amount"
+                  },
+                  "val": {
+                    "i128": {
+                      "hi": 0,
+                      "lo": 1
+                    }
+                  }
+                },
+                {
+                  "key": {
+                    "symbol": "data"
+                  },
+                  "val": {
+                    "vec": [
+                      {
+                        "symbol": "AdminAction"
+                      },
+                      {
+                        "symbol": "met_upd"
+                      }
+                    ]
+                  }
+                },
+                {
+                  "key": {
+                    "symbol": "status"
+                  },
+                  "val": {
+                    "symbol": "na"
+                  }
+                },
+                {
+                  "key": {
+                    "symbol": "timestamp"
+                  },
+                  "val": {
+                    "u64": 1000
+                  }
                 }
               ]
             }

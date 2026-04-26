@@ -147,6 +147,7 @@ pub enum DataKey {
     Escrow(u64),
     MetricDaily(MetricType, u64),
     MetricWeekly(MetricType, u64),
+    MaxBatchSize,
 }
 
 #[derive(Clone)]
@@ -969,7 +970,8 @@ impl RemittanceHubContract {
     ) -> Result<soroban_sdk::Vec<u64>, RemittanceError> {
         sender.require_auth();
 
-        if requests.len() > 10 {
+        let max_batch = Self::get_max_batch_size(env.clone());
+        if requests.len() > max_batch {
             return Err(RemittanceError::BatchTooLarge);
         }
 
@@ -1043,6 +1045,11 @@ impl RemittanceHubContract {
     ) -> Result<(), RemittanceError> {
         sender.require_auth();
 
+        let max_batch = Self::get_max_batch_size(env.clone());
+        if escrow_ids.len() > max_batch {
+            return Err(RemittanceError::BatchTooLarge);
+        }
+
         let mut total_amount: i128 = 0;
         let mut total_fees: i128 = 0;
         let fee_percentage = 250;
@@ -1115,6 +1122,11 @@ impl RemittanceHubContract {
     ) -> Result<(), RemittanceError> {
         caller.require_auth();
 
+        let max_batch = Self::get_max_batch_size(env.clone());
+        if escrow_ids.len() > max_batch {
+            return Err(RemittanceError::BatchTooLarge);
+        }
+
         let token_client = soroban_sdk::token::Client::new(&env, &token_address);
         let contract_address = env.current_contract_address();
         for id in escrow_ids.iter() {
@@ -1159,6 +1171,28 @@ impl RemittanceHubContract {
         Ok(())
     }
 
+    pub fn set_max_batch_size(
+        env: Env,
+        caller: Address,
+        limit: u32,
+    ) -> Result<(), RemittanceError> {
+        caller.require_auth();
+        let stored_admin: Address = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Admin)
+            .ok_or(RemittanceError::Unauthorized)?;
+        if caller != stored_admin {
+            return Err(RemittanceError::Unauthorized);
+        }
+        env.storage().persistent().set(&DataKey::MaxBatchSize, &limit);
+        Ok(())
+    }
+
+    pub fn get_max_batch_size(env: Env) -> u32 {
+        env.storage().persistent().get(&DataKey::MaxBatchSize).unwrap_or(10)
+    }
+
     fn convert_with_oracle(env: &Env, amount: i128, asset_code: &String) -> i128 {
         let target = String::from_str(env, "USD");
         if asset_code == &target {
@@ -1181,11 +1215,25 @@ impl RemittanceHubContract {
                     &target,
                     amount,
                     cfg.max_staleness,
-                    cached,
+                    cached.clone(),
                 );
                 match result {
                     Ok(conversion) => conversion.converted_amount,
-                    Err(_) => amount,
+                    Err(_) => {
+                        let secondary_result = oracle_mod::get_conversion_rate(
+                            env,
+                            &cfg.secondary_oracle,
+                            asset_code,
+                            &target,
+                            amount,
+                            cfg.max_staleness,
+                            cached,
+                        );
+                        match secondary_result {
+                            Ok(conversion) => conversion.converted_amount,
+                            Err(_) => amount,
+                        }
+                    }
                 }
             }
             None => amount,
@@ -1208,6 +1256,83 @@ impl RemittanceHubContract {
         } else {
             Err(RemittanceError::RateLimitExceeded)
         }
+    }
+
+    // ── Rate Limit Configuration ─────────────────────────────────────
+
+    pub fn set_rate_limit_config(
+        env: Env,
+        caller: Address,
+        function_type: rate_limit::FunctionType,
+        config: rate_limit::RateLimitConfig,
+    ) -> Result<(), RemittanceError> {
+        caller.require_auth();
+        let stored_admin: Address = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Admin)
+            .ok_or(RemittanceError::Unauthorized)?;
+        if caller != stored_admin {
+            return Err(RemittanceError::Unauthorized);
+        }
+        rate_limit::set_config(&env, function_type, config);
+        Ok(())
+    }
+
+    pub fn get_rate_limit_config(
+        env: Env,
+        function_type: rate_limit::FunctionType,
+    ) -> Option<rate_limit::RateLimitConfig> {
+        rate_limit::get_config(&env, function_type)
+    }
+
+    pub fn set_global_rate_limit_config(
+        env: Env,
+        caller: Address,
+        function_type: rate_limit::FunctionType,
+        config: rate_limit::RateLimitConfig,
+    ) -> Result<(), RemittanceError> {
+        caller.require_auth();
+        let stored_admin: Address = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Admin)
+            .ok_or(RemittanceError::Unauthorized)?;
+        if caller != stored_admin {
+            return Err(RemittanceError::Unauthorized);
+        }
+        rate_limit::set_global_config(&env, function_type, config);
+        Ok(())
+    }
+
+    pub fn get_global_rate_limit_config(
+        env: Env,
+        function_type: rate_limit::FunctionType,
+    ) -> Option<rate_limit::RateLimitConfig> {
+        rate_limit::get_global_config(&env, function_type)
+    }
+
+    pub fn set_rate_limit_exemption(
+        env: Env,
+        caller: Address,
+        address: Address,
+        exempt: bool,
+    ) -> Result<(), RemittanceError> {
+        caller.require_auth();
+        let stored_admin: Address = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Admin)
+            .ok_or(RemittanceError::Unauthorized)?;
+        if caller != stored_admin {
+            return Err(RemittanceError::Unauthorized);
+        }
+        rate_limit::set_exemption(&env, &address, exempt);
+        Ok(())
+    }
+
+    pub fn is_rate_limit_exempt(env: Env, address: Address) -> bool {
+        rate_limit::is_exempt(&env, &address)
     }
 
     // ── Upgradeable pattern ────────────────────────────────────────────

@@ -404,7 +404,7 @@ impl PaymentEscrowContract {
             &admin,
             fee_percentage,
             symbol_short!("na"),
-            EventData::AdminAction,
+            EventData::AdminAction(symbol_short!("fee_set")),
         );
 
         Ok(())
@@ -441,7 +441,7 @@ impl PaymentEscrowContract {
             &admin,
             fee_percentage,
             symbol_short!("na"),
-            EventData::AdminAction,
+            EventData::AdminAction(symbol_short!("proc_fee")),
         );
 
         Ok(())
@@ -474,7 +474,7 @@ impl PaymentEscrowContract {
             &admin,
             0,
             symbol_short!("na"),
-            EventData::AdminAction,
+            EventData::AdminAction(symbol_short!("fee_wal")),
         );
 
         Ok(())
@@ -508,7 +508,7 @@ impl PaymentEscrowContract {
             &admin,
             fee_percentage,
             symbol_short!("na"),
-            EventData::AdminAction,
+            EventData::AdminAction(symbol_short!("forex_f")),
         );
 
         Ok(())
@@ -538,7 +538,7 @@ impl PaymentEscrowContract {
             &admin,
             flat_fee,
             symbol_short!("na"),
-            EventData::AdminAction,
+            EventData::AdminAction(symbol_short!("comp_fee")),
         );
 
         Ok(())
@@ -572,7 +572,7 @@ impl PaymentEscrowContract {
             &admin,
             0,
             symbol_short!("na"),
-            EventData::AdminAction,
+            EventData::AdminAction(symbol_short!("fee_lim")),
         );
 
         Ok(())
@@ -615,7 +615,7 @@ impl PaymentEscrowContract {
             &actor,
             payload.amount,
             status,
-            EventData::AdminAction,
+            EventData::AdminAction(symbol_short!("notify")),
         );
     }
 
@@ -725,7 +725,7 @@ impl PaymentEscrowContract {
             &admin,
             0,
             symbol_short!("na"),
-            EventData::AdminAction,
+            EventData::AdminAction(symbol_short!("kyc_cfg")),
         );
 
         Ok(())
@@ -764,7 +764,7 @@ impl PaymentEscrowContract {
             &admin,
             0,
             symbol_short!("na"),
-            EventData::AddressAction,
+            EventData::AddressAction(symbol_short!("kyc_add"), account.clone()),
         );
 
         Ok(())
@@ -798,7 +798,7 @@ impl PaymentEscrowContract {
             &admin,
             0,
             symbol_short!("na"),
-            EventData::AddressAction,
+            EventData::AddressAction(symbol_short!("kyc_rem"), account.clone()),
         );
 
         Ok(())
@@ -824,7 +824,7 @@ impl PaymentEscrowContract {
             &admin,
             0,
             symbol_short!("na"),
-            EventData::AddressAction,
+            EventData::AddressAction(symbol_short!("kyc_iss"), issuer),
         );
 
         Ok(())
@@ -866,7 +866,7 @@ impl PaymentEscrowContract {
             &admin,
             0,
             symbol_short!("na"),
-            EventData::AdminAction,
+            EventData::AdminAction(symbol_short!("kyc_ovr")),
         );
 
         Ok(())
@@ -925,7 +925,7 @@ impl PaymentEscrowContract {
                         &account,
                         0,
                         symbol_short!("na"),
-                        EventData::AddressAction,
+                        EventData::AddressAction(symbol_short!("kyc_ok"), account.clone()),
                     );
                 }
                 Ok(valid)
@@ -1001,7 +1001,7 @@ impl PaymentEscrowContract {
                             &sender,
                             0,
                             symbol_short!("na"),
-                            EventData::PairAction,
+                            EventData::PairAction(symbol_short!("kyc_fail"), sender.clone(), recipient.clone()),
                         );
                         return Err(Error::KycFailed);
                     }
@@ -1015,7 +1015,7 @@ impl PaymentEscrowContract {
                         &sender,
                         0,
                         symbol_short!("na"),
-                        EventData::PairAction,
+                        EventData::PairAction(symbol_short!("kyc_pass"), sender.clone(), recipient.clone()),
                     );
                 }
                 Err(_) => {
@@ -1075,7 +1075,16 @@ impl PaymentEscrowContract {
             &escrow.sender,
             escrow.amount,
             symbol_short!("pending"),
-            EventData::EscrowCreated,
+            EventData::EscrowCreated(
+                counter,
+                escrow.sender.clone(),
+                escrow.recipient.clone(),
+                AssetRef {
+                    code: escrow.asset.code.clone(),
+                    issuer: escrow.asset.issuer.clone(),
+                },
+                escrow.amount,
+            ),
         );
 
         Self::notify_external(
@@ -1160,7 +1169,7 @@ impl PaymentEscrowContract {
             &caller,
             amount,
             deposit_status,
-            EventData::EscrowDeposited,
+            EventData::EscrowDeposited(escrow_id, amount, escrow.deposited_amount),
         );
 
         Self::notify_external(
@@ -1452,6 +1461,36 @@ impl PaymentEscrowContract {
             return Err(Error::InvalidStatus);
         }
 
+        if escrow.multi_party_enabled {
+            let config_opt: Option<MultiPartyConfig> = env
+                .storage()
+                .instance()
+                .get(&DataKey::EscrowApprovals(escrow_id));
+            match config_opt {
+                Some(config) => {
+                    let current_time = env.ledger().timestamp();
+                    if config.approval_timeout > 0 && current_time > config.approval_timeout {
+                        env.storage()
+                            .instance()
+                            .set(&DataKey::ReentrancyGuard, &false);
+                        return Err(Error::ApprovalExpired);
+                    }
+                    if config.approvals.len() < config.required_approvals {
+                        env.storage()
+                            .instance()
+                            .set(&DataKey::ReentrancyGuard, &false);
+                        return Err(Error::QuorumNotMet);
+                    }
+                }
+                None => {
+                    env.storage()
+                        .instance()
+                        .set(&DataKey::ReentrancyGuard, &false);
+                    return Err(Error::QuorumNotMet);
+                }
+            }
+        }
+
         let current_time = env.ledger().timestamp();
         if current_time > escrow.release_conditions.expiration_timestamp {
             escrow.status = EscrowStatus::Expired;
@@ -1518,6 +1557,21 @@ impl PaymentEscrowContract {
         env.storage()
             .instance()
             .set(&DataKey::Escrow(escrow_id), &escrow);
+
+        if escrow.multi_party_enabled {
+            if let Some(mut config) = env
+                .storage()
+                .instance()
+                .get::<_, MultiPartyConfig>(&DataKey::EscrowApprovals(escrow_id))
+            {
+                if escrow.released_amount >= escrow.deposited_amount {
+                    config.finalized = true;
+                    env.storage()
+                        .instance()
+                        .set(&DataKey::EscrowApprovals(escrow_id), &config);
+                }
+            }
+        }
 
         let partial_status = if escrow.released_amount >= escrow.deposited_amount {
             symbol_short!("released")
@@ -2075,6 +2129,36 @@ impl PaymentEscrowContract {
             return Err(Error::InvalidStatus);
         }
 
+        if escrow.multi_party_enabled {
+            let config_opt: Option<MultiPartyConfig> = env
+                .storage()
+                .instance()
+                .get(&DataKey::EscrowApprovals(escrow_id));
+            match config_opt {
+                Some(config) => {
+                    let now = env.ledger().timestamp();
+                    if config.approval_timeout > 0 && now > config.approval_timeout {
+                        env.storage()
+                            .instance()
+                            .set(&DataKey::ReentrancyGuard, &false);
+                        return Err(Error::ApprovalExpired);
+                    }
+                    if config.approvals.len() < config.required_approvals {
+                        env.storage()
+                            .instance()
+                            .set(&DataKey::ReentrancyGuard, &false);
+                        return Err(Error::QuorumNotMet);
+                    }
+                }
+                None => {
+                    env.storage()
+                        .instance()
+                        .set(&DataKey::ReentrancyGuard, &false);
+                    return Err(Error::QuorumNotMet);
+                }
+            }
+        }
+
         let available_for_refund = escrow
             .deposited_amount
             .checked_sub(escrow.released_amount)
@@ -2129,6 +2213,21 @@ impl PaymentEscrowContract {
         env.storage()
             .instance()
             .set(&DataKey::Escrow(escrow_id), &escrow);
+
+        if escrow.multi_party_enabled {
+            if let Some(mut config) = env
+                .storage()
+                .instance()
+                .get::<_, MultiPartyConfig>(&DataKey::EscrowApprovals(escrow_id))
+            {
+                if total_processed >= escrow.deposited_amount {
+                    config.finalized = true;
+                    env.storage()
+                        .instance()
+                        .set(&DataKey::EscrowApprovals(escrow_id), &config);
+                }
+            }
+        }
 
         let refund_status = if escrow.refunded_amount >= escrow.deposited_amount {
             symbol_short!("refunded")
@@ -2651,6 +2750,71 @@ impl PaymentEscrowContract {
 
     pub fn get_dispute(env: Env, escrow_id: u64) -> Option<Dispute> {
         env.storage().instance().get(&DataKey::Dispute(escrow_id))
+    }
+
+    // ── Rate Limit Configuration ─────────────────────────────────────
+
+    pub fn set_rate_limit_config(
+        env: Env,
+        caller: Address,
+        function_type: rate_limit::FunctionType,
+        config: rate_limit::RateLimitConfig,
+    ) -> Result<(), Error> {
+        caller.require_auth();
+        let stored_admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
+        if caller != stored_admin {
+            return Err(Error::UnauthorizedCaller);
+        }
+        rate_limit::set_config(&env, function_type, config);
+        Ok(())
+    }
+
+    pub fn get_rate_limit_config(
+        env: Env,
+        function_type: rate_limit::FunctionType,
+    ) -> Option<rate_limit::RateLimitConfig> {
+        rate_limit::get_config(&env, function_type)
+    }
+
+    pub fn set_global_rate_limit_config(
+        env: Env,
+        caller: Address,
+        function_type: rate_limit::FunctionType,
+        config: rate_limit::RateLimitConfig,
+    ) -> Result<(), Error> {
+        caller.require_auth();
+        let stored_admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
+        if caller != stored_admin {
+            return Err(Error::UnauthorizedCaller);
+        }
+        rate_limit::set_global_config(&env, function_type, config);
+        Ok(())
+    }
+
+    pub fn get_global_rate_limit_config(
+        env: Env,
+        function_type: rate_limit::FunctionType,
+    ) -> Option<rate_limit::RateLimitConfig> {
+        rate_limit::get_global_config(&env, function_type)
+    }
+
+    pub fn set_rate_limit_exemption(
+        env: Env,
+        caller: Address,
+        address: Address,
+        exempt: bool,
+    ) -> Result<(), Error> {
+        caller.require_auth();
+        let stored_admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
+        if caller != stored_admin {
+            return Err(Error::UnauthorizedCaller);
+        }
+        rate_limit::set_exemption(&env, &address, exempt);
+        Ok(())
+    }
+
+    pub fn is_rate_limit_exempt(env: Env, address: Address) -> bool {
+        rate_limit::is_exempt(&env, &address)
     }
 }
 

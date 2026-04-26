@@ -433,14 +433,71 @@
           "v0": {
             "topics": [
               {
+                "symbol": "gpayremit"
+              },
+              {
+                "symbol": "escrow"
+              },
+              {
                 "symbol": "fee_set"
+              },
+              {
+                "u64": 0
               }
             ],
             "data": {
-              "i128": {
-                "hi": 0,
-                "lo": 100
-              }
+              "map": [
+                {
+                  "key": {
+                    "symbol": "actor"
+                  },
+                  "val": {
+                    "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
+                  }
+                },
+                {
+                  "key": {
+                    "symbol": "amount"
+                  },
+                  "val": {
+                    "i128": {
+                      "hi": 0,
+                      "lo": 100
+                    }
+                  }
+                },
+                {
+                  "key": {
+                    "symbol": "data"
+                  },
+                  "val": {
+                    "vec": [
+                      {
+                        "symbol": "AdminAction"
+                      },
+                      {
+                        "symbol": "fee_set"
+                      }
+                    ]
+                  }
+                },
+                {
+                  "key": {
+                    "symbol": "status"
+                  },
+                  "val": {
+                    "symbol": "na"
+                  }
+                },
+                {
+                  "key": {
+                    "symbol": "timestamp"
+                  },
+                  "val": {
+                    "u64": 0
+                  }
+                }
+              ]
             }
           }
         }
@@ -519,21 +576,68 @@
           "v0": {
             "topics": [
               {
+                "symbol": "gpayremit"
+              },
+              {
+                "symbol": "escrow"
+              },
+              {
                 "symbol": "fee_lim"
+              },
+              {
+                "u64": 0
               }
             ],
             "data": {
-              "vec": [
+              "map": [
                 {
-                  "i128": {
-                    "hi": 0,
-                    "lo": 50
+                  "key": {
+                    "symbol": "actor"
+                  },
+                  "val": {
+                    "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
                   }
                 },
                 {
-                  "i128": {
-                    "hi": 0,
-                    "lo": 200
+                  "key": {
+                    "symbol": "amount"
+                  },
+                  "val": {
+                    "i128": {
+                      "hi": 0,
+                      "lo": 0
+                    }
+                  }
+                },
+                {
+                  "key": {
+                    "symbol": "data"
+                  },
+                  "val": {
+                    "vec": [
+                      {
+                        "symbol": "AdminAction"
+                      },
+                      {
+                        "symbol": "fee_lim"
+                      }
+                    ]
+                  }
+                },
+                {
+                  "key": {
+                    "symbol": "status"
+                  },
+                  "val": {
+                    "symbol": "na"
+                  }
+                },
+                {
+                  "key": {
+                    "symbol": "timestamp"
+                  },
+                  "val": {
+                    "u64": 0
                   }
                 }
               ]

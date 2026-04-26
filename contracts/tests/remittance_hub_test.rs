@@ -145,6 +145,7 @@ fn test_send_remittance_unauthorized() {
     );
     // Should return an error (either Unauthorized or other validation error)
     match result {
+        Err(Err(_)) => {},
         Err(Ok(RemittanceError::Unauthorized)) => {}
         Err(Ok(_)) => {} // Other errors are acceptable
         Ok(_) => {} // May succeed if contract allows
@@ -166,9 +167,10 @@ fn test_complete_remittance_unauthorized() {
     );
     
     // Try to complete as unauthorized user
-    let result = client.try_complete_remittance(&admin, &1);
+    let result = client.try_complete_remittance(&1, &admin);
     // Should either succeed or fail based on contract logic
     match result {
+        Err(Err(_)) => {},
         Err(Ok(RemittanceError::Unauthorized)) => {}
         Err(Ok(_)) => {} // Other errors are acceptable
         Ok(_) => {} // May succeed
@@ -200,9 +202,10 @@ fn test_cancel_invoice_unauthorized() {
     );
     
     // Try to cancel as non-owner (user2 is recipient, not sender)
-    let result = client.try_cancel_invoice(&user2, &invoice_id);
+    let result = client.try_cancel_invoice(&invoice_id, &user2);
     // Should fail if user2 is not authorized
     match result {
+        Err(Err(_)) => {},
         Err(Ok(RemittanceError::Unauthorized)) => {}
         Err(Ok(_)) => {} // Other errors are acceptable
         Ok(_) => {} // May succeed if contract allows
@@ -237,6 +240,7 @@ fn test_mark_invoice_paid_unauthorized() {
     let result = client.try_mark_invoice_paid(&invoice_id, &user2);
     // Should fail if not authorized
     match result {
+        Err(Err(_)) => {},
         Err(Ok(RemittanceError::Unauthorized)) => {}
         Err(Ok(_)) => {} // Other errors are acceptable
         Ok(_) => {} // May succeed

@@ -35,8 +35,8 @@ pub struct RateLimitEntry {
 #[derive(Clone)]
 #[contracttype]
 pub enum RateLimitKey {
-    Config,
-    GlobalConfig,
+    Config(FunctionType),
+    GlobalConfig(FunctionType),
     Exempt(Address),
     UserLimit(Address, FunctionType),
     GlobalCount(FunctionType),
@@ -55,7 +55,7 @@ pub fn check_rate_limit(
 ) -> bool {
     // Check per-user config
     let config: Option<RateLimitConfig> =
-        env.storage().instance().get(&RateLimitKey::Config);
+        env.storage().instance().get(&RateLimitKey::Config(function_type));
 
     let config = match config {
         Some(c) => c,
@@ -121,7 +121,7 @@ pub fn check_rate_limit(
 
     // --- Global limit check ---
     let global_config: Option<RateLimitConfig> =
-        env.storage().instance().get(&RateLimitKey::GlobalConfig);
+        env.storage().instance().get(&RateLimitKey::GlobalConfig(function_type));
 
     if let Some(gc) = global_config {
         if gc.enabled {
@@ -164,25 +164,27 @@ pub fn check_rate_limit(
 }
 
 /// Set per-user rate limit configuration.
-pub fn set_config(env: &Env, config: RateLimitConfig) {
-    env.storage().instance().set(&RateLimitKey::Config, &config);
+pub fn set_config(env: &Env, function_type: FunctionType, config: RateLimitConfig) {
+    env.storage().instance().set(&RateLimitKey::Config(function_type), &config);
+    env.events().publish((symbol_short!("rl_cfg"), function_type), config.enabled);
 }
 
 /// Get per-user rate limit configuration.
-pub fn get_config(env: &Env) -> Option<RateLimitConfig> {
-    env.storage().instance().get(&RateLimitKey::Config)
+pub fn get_config(env: &Env, function_type: FunctionType) -> Option<RateLimitConfig> {
+    env.storage().instance().get(&RateLimitKey::Config(function_type))
 }
 
 /// Set global (platform-wide) rate limit configuration.
-pub fn set_global_config(env: &Env, config: RateLimitConfig) {
+pub fn set_global_config(env: &Env, function_type: FunctionType, config: RateLimitConfig) {
     env.storage()
         .instance()
-        .set(&RateLimitKey::GlobalConfig, &config);
+        .set(&RateLimitKey::GlobalConfig(function_type), &config);
+    env.events().publish((symbol_short!("rl_gcfg"), function_type), config.enabled);
 }
 
 /// Get global rate limit configuration.
-pub fn get_global_config(env: &Env) -> Option<RateLimitConfig> {
-    env.storage().instance().get(&RateLimitKey::GlobalConfig)
+pub fn get_global_config(env: &Env, function_type: FunctionType) -> Option<RateLimitConfig> {
+    env.storage().instance().get(&RateLimitKey::GlobalConfig(function_type))
 }
 
 /// Set or remove rate limit exemption for an address.
@@ -190,6 +192,7 @@ pub fn set_exemption(env: &Env, address: &Address, exempt: bool) {
     env.storage()
         .instance()
         .set(&RateLimitKey::Exempt(address.clone()), &exempt);
+    env.events().publish((symbol_short!("rl_exmp"),), (address.clone(), exempt));
 }
 
 /// Check if an address is exempt from rate limiting.

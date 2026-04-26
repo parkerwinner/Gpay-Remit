@@ -10,19 +10,19 @@ pub struct AssetRef {
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[contracttype]
 pub enum EventData {
-    EscrowCreated,
-    EscrowDeposited,
-    EscrowApproved,
-    EscrowReleased,
-    EscrowRefunded,
-    InvoiceCreated,
-    InvoicePaid,
-    InvoiceUpdated,
-    InvoiceCancelled,
-    InvoiceOverdue,
-    AdminAction,
-    AddressAction,
-    PairAction,
+    EscrowCreated(u64, Address, Address, AssetRef, i128),
+    EscrowDeposited(u64, i128, i128),
+    EscrowApproved(u64),
+    EscrowReleased(u64, i128),
+    EscrowRefunded(u64, i128),
+    InvoiceCreated(u64, u64, Address, Address, AssetRef, i128),
+    InvoicePaid(u64, u64, i128),
+    InvoiceUpdated(u64, i128, i128),
+    InvoiceCancelled(u64),
+    InvoiceOverdue(u64),
+    AdminAction(Symbol),
+    AddressAction(Symbol, Address),
+    PairAction(Symbol, Address, Address),
 }
 
 #[cfg_attr(not(test), derive(Clone, Debug, PartialEq, Eq))]

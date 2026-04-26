@@ -148,5 +148,34 @@ fn bench_batch_release(c: &mut Criterion) {
     }
 }
 
-criterion_group!(benches, bench_send_remittance, bench_batch_create_escrows, bench_batch_deposit, bench_batch_release);
+fn bench_oracle_queries(c: &mut Criterion) {
+    c.bench_function("oracle_conversions", |b| {
+        b.iter_batched(|| {
+            let (env, client, _admin, _oracle, _token) = setup_env_with_token();
+            env.ledger().with_mut(|li| li.timestamp = 1000);
+            let from = String::from_str(&env, "USDC");
+            let to = String::from_str(&env, "EUR");
+            (from, to, client)
+        }, |(from, to, client)| {
+            let _ = client.convert_currency(black_box(&1000), black_box(&from), black_box(&to));
+        }, BatchSize::SmallInput)
+    });
+}
+
+fn bench_aml_checks(c: &mut Criterion) {
+    c.bench_function("aml_checks", |b| {
+        b.iter_batched(|| {
+            let (env, client, admin, oracle, _token) = setup_env_with_token();
+            let sender = Address::generate(&env);
+            let recipient = Address::generate(&env);
+            let _ = client.configure_aml(&admin, &oracle, &50);
+            env.ledger().with_mut(|li| li.timestamp = 1000);
+            (sender, recipient, client)
+        }, |(sender, recipient, client)| {
+            let _ = client.send_remittance(black_box(&sender), black_box(&recipient), black_box(&1000), black_box(&symbol_short!("USD")));
+        }, BatchSize::SmallInput)
+    });
+}
+
+criterion_group!(benches, bench_send_remittance, bench_batch_create_escrows, bench_batch_deposit, bench_batch_release, bench_oracle_queries, bench_aml_checks);
 criterion_main!(benches);
