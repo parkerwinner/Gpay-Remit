@@ -203,7 +203,7 @@ impl RemittanceHubContract {
             &admin,
             0,
             symbol_short!("na"),
-            EventData::AdminAction,
+            EventData::AdminAction(symbol_short!("hub_init")),
         );
 
         Ok(())
@@ -245,7 +245,7 @@ impl RemittanceHubContract {
             &caller,
             0,
             symbol_short!("na"),
-            EventData::PairAction,
+            EventData::PairAction(symbol_short!("orc_set"), primary_oracle, secondary_oracle),
         );
 
         Ok(())
@@ -352,7 +352,7 @@ impl RemittanceHubContract {
             &caller,
             0,
             symbol_short!("na"),
-            EventData::AdminAction,
+            EventData::AdminAction(symbol_short!("aml_cfg")),
         );
 
         Ok(())
@@ -390,7 +390,7 @@ impl RemittanceHubContract {
             &caller,
             risk_threshold as i128,
             symbol_short!("na"),
-            EventData::AdminAction,
+            EventData::AdminAction(symbol_short!("aml_thr")),
         );
 
         Ok(())
@@ -428,7 +428,7 @@ impl RemittanceHubContract {
             &caller,
             0,
             symbol_short!("na"),
-            EventData::AddressAction,
+            EventData::AddressAction(symbol_short!("aml_orc"), oracle_address),
         );
 
         Ok(())
@@ -481,7 +481,7 @@ impl RemittanceHubContract {
             &caller,
             0,
             symbol_short!("na"),
-            EventData::AdminAction,
+            EventData::AdminAction(symbol_short!("aml_clr")),
         );
 
         Ok(())
@@ -755,7 +755,17 @@ impl RemittanceHubContract {
             &invoice.sender,
             total_due,
             symbol_short!("unpaid"),
-            EventData::InvoiceCreated,
+            EventData::InvoiceCreated(
+                counter,
+                escrow_id,
+                invoice.sender.clone(),
+                invoice.recipient.clone(),
+                AssetRef {
+                    code: invoice.asset.code.clone(),
+                    issuer: invoice.asset.issuer.clone(),
+                },
+                invoice.amount,
+            ),
         );
 
         Ok(counter)
@@ -813,7 +823,7 @@ impl RemittanceHubContract {
             &caller,
             invoice.total_due,
             symbol_short!("paid"),
-            EventData::InvoicePaid,
+            EventData::InvoicePaid(invoice_id, invoice.escrow_id, invoice.total_due),
         );
 
         Self::track_metric(&env, MetricType::Success, 1);
@@ -852,7 +862,7 @@ impl RemittanceHubContract {
             &env.current_contract_address(),
             0,
             symbol_short!("overdue"),
-            EventData::InvoiceOverdue,
+            EventData::InvoiceOverdue(invoice_id),
         );
 
         Ok(())
@@ -893,7 +903,7 @@ impl RemittanceHubContract {
             &caller,
             0,
             symbol_short!("cancel"),
-            EventData::InvoiceCancelled,
+            EventData::InvoiceCancelled(invoice_id),
         );
 
         Ok(())
@@ -932,6 +942,7 @@ impl RemittanceHubContract {
             .checked_div(10000)
             .unwrap_or(0);
 
+        let old_amount = invoice.amount;
         invoice.amount = new_amount;
         invoice.fees = fees;
         invoice.total_due = new_amount.checked_add(fees).unwrap_or(new_amount);
@@ -948,7 +959,7 @@ impl RemittanceHubContract {
             &caller,
             invoice.total_due,
             symbol_short!("unpaid"),
-            EventData::InvoiceUpdated,
+            EventData::InvoiceUpdated(invoice_id, old_amount, invoice.total_due),
         );
 
         Ok(())
@@ -989,7 +1000,7 @@ impl RemittanceHubContract {
             &sender,
             ids.len() as i128,
             symbol_short!("na"),
-            EventData::AdminAction,
+            EventData::AdminAction(symbol_short!("batch_cre")),
         );
 
         Ok(ids)
@@ -1105,7 +1116,7 @@ impl RemittanceHubContract {
             &sender,
             total_amount,
             symbol_short!("na"),
-            EventData::AdminAction,
+            EventData::AdminAction(symbol_short!("batch_dep")),
         );
 
         Self::track_metric(&env, MetricType::Volume, total_amount);
@@ -1148,11 +1159,7 @@ impl RemittanceHubContract {
                 .persistent()
                 .set(&DataKey::Escrow(id), &escrow);
 
-            token_client.transfer(
-                &contract_address,
-                &escrow.recipient,
-                &escrow.amount,
-            );
+            token_client.transfer(&contract_address, &escrow.recipient, &escrow.amount);
         }
 
         events::emit(
@@ -1163,7 +1170,7 @@ impl RemittanceHubContract {
             &caller,
             escrow_ids.len() as i128,
             symbol_short!("na"),
-            EventData::AdminAction,
+            EventData::AdminAction(symbol_short!("batch_rel")),
         );
 
         Self::track_metric(&env, MetricType::Success, escrow_ids.len() as i128);
@@ -1185,12 +1192,17 @@ impl RemittanceHubContract {
         if caller != stored_admin {
             return Err(RemittanceError::Unauthorized);
         }
-        env.storage().persistent().set(&DataKey::MaxBatchSize, &limit);
+        env.storage()
+            .persistent()
+            .set(&DataKey::MaxBatchSize, &limit);
         Ok(())
     }
 
     pub fn get_max_batch_size(env: Env) -> u32 {
-        env.storage().persistent().get(&DataKey::MaxBatchSize).unwrap_or(10)
+        env.storage()
+            .persistent()
+            .get(&DataKey::MaxBatchSize)
+            .unwrap_or(10)
     }
 
     fn convert_with_oracle(env: &Env, amount: i128, asset_code: &String) -> i128 {
@@ -1389,8 +1401,6 @@ impl RemittanceHubContract {
         upgradeable::migrate(&env, &admin)
     }
 
-
-
     // ── Analytics ──────────────────────────────────────────────────
 
     pub fn get_metric(env: Env, metric_type: MetricType, timestamp: u64, is_weekly: bool) -> i128 {
@@ -1447,7 +1457,7 @@ impl RemittanceHubContract {
             &caller,
             0,
             symbol_short!("na"),
-            EventData::AdminAction,
+            EventData::AdminAction(symbol_short!("met_rst")),
         );
 
         Ok(())
@@ -1483,7 +1493,7 @@ impl RemittanceHubContract {
             &env.current_contract_address(),
             value,
             symbol_short!("na"),
-            EventData::AdminAction,
+            EventData::AdminAction(symbol_short!("met_upd")),
         );
     }
 }

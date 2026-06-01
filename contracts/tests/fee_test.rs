@@ -82,7 +82,7 @@ fn test_fee_transfer_to_fee_wallet() {
 
     // Check recipient received correct amount
     assert_eq!(token.balance(&recipient), expected_recipient_amount);
-    
+
     // Check fee wallet received the fee (admin gets fee if no fee wallet set, but we set one)
     // Note: Current implementation sends to admin, not fee_wallet
     assert_eq!(token.balance(&admin), expected_fee);
@@ -98,19 +98,19 @@ fn test_fee_calculation_matches_structure() {
     client.set_platform_fee(&admin, &250); // 2.5%
     client.set_forex_fee(&admin, &150); // 1.5%
     client.set_compliance_fee(&admin, &100); // Flat 100
-    
+
     let amount = 10000;
     let breakdown = client.get_fee_breakdown(&amount);
 
     // Platform fee: 10000 * 250 / 10000 = 250
     assert_eq!(breakdown.platform_fee, 250);
-    
+
     // Forex fee: 10000 * 150 / 10000 = 150
     assert_eq!(breakdown.forex_fee, 150);
-    
+
     // Compliance fee: flat 100
     assert_eq!(breakdown.compliance_fee, 100);
-    
+
     // Total: 250 + 150 + 100 = 500
     assert_eq!(breakdown.total_fee, 500);
 }
@@ -140,7 +140,7 @@ fn test_multiple_fee_types() {
     );
 
     client.deposit(&escrow_id, &sender, &amount, &token.address);
-    
+
     // Note: release_escrow currently only applies platform_fee, not full breakdown
     // Platform fee: 10000 * 2% = 200
     let expected_fee = 200;
@@ -150,10 +150,10 @@ fn test_multiple_fee_types() {
     // Recipient should receive amount minus platform fee
     let expected_recipient = amount - expected_fee;
     assert_eq!(token.balance(&recipient), expected_recipient);
-    
+
     // Admin should receive the platform fee
     assert_eq!(token.balance(&admin), expected_fee);
-    
+
     // Verify fee breakdown calculation includes all fees
     let breakdown = client.get_fee_breakdown(&amount);
     assert_eq!(breakdown.platform_fee, 200);
@@ -177,7 +177,7 @@ fn test_fee_limits_enforcement() {
     let small_amount = 1000;
     client.set_platform_fee(&admin, &10); // 0.1%
     let breakdown = client.get_fee_breakdown(&small_amount);
-    
+
     // 0.1% of 1000 = 1, but min is 100
     assert_eq!(breakdown.total_fee, min_fee);
 
@@ -185,7 +185,7 @@ fn test_fee_limits_enforcement() {
     let large_amount = 1000000;
     client.set_platform_fee(&admin, &500); // 5%
     let breakdown = client.get_fee_breakdown(&large_amount);
-    
+
     // 5% of 1000000 = 50000, but max is 1000
     assert_eq!(breakdown.total_fee, max_fee);
 }
@@ -293,7 +293,7 @@ fn test_zero_fee_configuration() {
 
     // Recipient should receive full amount
     assert_eq!(token.balance(&recipient), amount);
-    
+
     // Admin should receive no fees
     assert_eq!(token.balance(&admin), 0);
 }
@@ -305,7 +305,7 @@ fn test_fee_exceeds_amount() {
     let (client, admin, _sender, _recipient, _token, _asset) = setup_test(&env);
 
     let amount = 100;
-    
+
     // Set fees that would exceed the amount
     client.set_platform_fee(&admin, &5000); // 50%
     client.set_forex_fee(&admin, &5000); // 50%

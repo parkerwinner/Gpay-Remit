@@ -1,5 +1,5 @@
-use crate::kyc::{self, KycConfig, KycDataKey, KycRecord, KycStatus};
 use crate::events::{self, AssetRef, EventData};
+use crate::kyc::{self, KycConfig, KycDataKey, KycRecord, KycStatus};
 use crate::rate_limit::{self, FunctionType};
 use crate::upgradeable;
 
@@ -322,6 +322,11 @@ pub struct Escrow {
     pub released_amount: i128,
     pub refunded_amount: i128,
     pub asset: Asset,
+    pub assets: Vec<Asset>,
+    pub amounts: Map<Asset, i128>,
+    pub deposited_amounts: Map<Asset, i128>,
+    pub released_amounts: Map<Asset, i128>,
+    pub refunded_amounts: Map<Asset, i128>,
     pub release_conditions: ReleaseCondition,
     pub status: EscrowStatus,
     pub created_at: u64,
@@ -365,6 +370,56 @@ pub struct NotificationPayload {
     pub event_type: EventType,
     pub amount: i128,
     pub timestamp: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[contracttype]
+pub struct NotificationConfig {
+    pub webhook_urls: Vec<String>,
+    pub max_retries: u32,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[contracttype]
+pub struct NotificationDelivery {
+    pub escrow_id: u64,
+    pub event_type: EventType,
+    pub webhook_url: String,
+    pub delivered_at: u64,
+    pub attempts: u32,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[contracttype]
+pub struct RecurringConfig {
+    pub recipient: Address,
+    pub asset: Asset,
+    pub amount: i128,
+    pub interval: u64,
+    pub count: u32,
+    pub auto_release: bool,
+    pub expiration_window: u64,
+    pub memo: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[contracttype]
+pub struct RecurringEscrow {
+    pub recurring_id: u64,
+    pub sender: Address,
+    pub config: RecurringConfig,
+    pub next_run_at: u64,
+    pub processed_count: u32,
+    pub cancelled: bool,
+    pub created_at: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[contracttype]
+pub struct RecurringPayment {
+    pub escrow_id: u64,
+    pub processed_at: u64,
+    pub sequence: u32,
 }
 
 const MAX_HOOKS: u32 = 10;
@@ -414,6 +469,9 @@ impl PaymentEscrowContract {
 
         env.storage().instance().set(&DataKey::Admin, &admin);
         env.storage().instance().set(&DataKey::EscrowCounter, &0u64);
+        env.storage()
+            .instance()
+            .set(&DataKey::RecurringCounter, &0u64);
         env.storage()
             .instance()
             .set(&DataKey::SupportedAssets, &Vec::<Asset>::new(&env));
@@ -484,7 +542,7 @@ impl PaymentEscrowContract {
         env.storage()
             .instance()
             .get(&DataKey::PlatformFeePercentage)
-            .unwrap_or(0)
+            .unwrap_or(0i128)
     }
 
     pub fn set_processing_fee(env: Env, admin: Address, fee_percentage: i128) -> Result<(), Error> {
@@ -521,7 +579,7 @@ impl PaymentEscrowContract {
         env.storage()
             .instance()
             .get(&DataKey::ProcessingFeePercentage)
-            .unwrap_or(0)
+            .unwrap_or(0i128)
     }
 
     pub fn set_fee_wallet(env: Env, admin: Address, fee_wallet: Address) -> Result<(), Error> {
@@ -684,9 +742,81 @@ impl PaymentEscrowContract {
             payload.escrow_id,
             &actor,
             payload.amount,
-            status,
+            status.clone(),
             EventData::AdminAction(symbol_short!("notify")),
         );
+
+        let hooks: Vec<NotificationConfig> = env
+            .storage()
+            .instance()
+            .get(&DataKey::NotificationHooks(payload.escrow_id))
+            .unwrap_or(Vec::new(env));
+        let mut history: Vec<NotificationDelivery> = env
+            .storage()
+            .instance()
+            .get(&DataKey::NotificationHistory(payload.escrow_id))
+            .unwrap_or(Vec::new(env));
+        for config in hooks.iter() {
+            let retries = if config.max_retries == 0 {
+                DEFAULT_MAX_RETRIES
+            } else {
+                config.max_retries
+            };
+            for url in config.webhook_urls.iter() {
+                history.push_back(NotificationDelivery {
+                    escrow_id: payload.escrow_id,
+                    event_type: payload.event_type,
+                    webhook_url: url,
+                    delivered_at: payload.timestamp,
+                    attempts: retries,
+                });
+                events::emit(
+                    env,
+                    symbol_short!("escrow"),
+                    symbol_short!("hook"),
+                    payload.escrow_id,
+                    &actor,
+                    payload.amount,
+                    status.clone(),
+                    EventData::AdminAction(symbol_short!("hook")),
+                );
+            }
+        }
+        env.storage()
+            .instance()
+            .set(&DataKey::NotificationHistory(payload.escrow_id), &history);
+    }
+
+    fn is_supported_asset(env: &Env, asset: &Asset) -> bool {
+        let assets: Vec<Asset> = env
+            .storage()
+            .instance()
+            .get(&DataKey::SupportedAssets)
+            .unwrap_or(Vec::new(env));
+        for supported_asset in assets.iter() {
+            if supported_asset.code == asset.code && supported_asset.issuer == asset.issuer {
+                return true;
+            }
+        }
+        false
+    }
+
+    fn validate_notification_config(config: &NotificationConfig) -> Result<(), Error> {
+        if config.webhook_urls.len() == 0 || config.webhook_urls.len() > MAX_HOOKS {
+            return Err(Error::InvalidAsset);
+        }
+
+        for url in config.webhook_urls.iter() {
+            if url.len() < 8 || url.len() > 256 {
+                return Err(Error::InvalidAsset);
+            }
+        }
+
+        Ok(())
+    }
+
+    fn empty_asset_amount_map(env: &Env) -> Map<Asset, i128> {
+        Map::new(env)
     }
 
     fn calculate_fees(env: &Env, amount: i128) -> Result<FeeBreakdown, Error> {
@@ -694,22 +824,22 @@ impl PaymentEscrowContract {
             .storage()
             .instance()
             .get(&DataKey::PlatformFeePercentage)
-            .unwrap_or(0);
+            .unwrap_or(0i128);
         let forex_percentage = env
             .storage()
             .instance()
             .get(&DataKey::ForexFeePercentage)
-            .unwrap_or(0);
+            .unwrap_or(0i128);
         let compliance_flat = env
             .storage()
             .instance()
             .get(&DataKey::ComplianceFlatFee)
-            .unwrap_or(0);
+            .unwrap_or(0i128);
         let network_flat = env
             .storage()
             .instance()
             .get(&DataKey::NetworkFlatFee)
-            .unwrap_or(0);
+            .unwrap_or(0i128);
 
         let platform_fee = amount
             .checked_mul(platform_percentage)
@@ -731,7 +861,11 @@ impl PaymentEscrowContract {
             .checked_add(network_flat)
             .ok_or(Error::ArithmeticOverflow)?;
 
-        let min_fee = env.storage().instance().get(&DataKey::MinFee).unwrap_or(0);
+        let min_fee = env
+            .storage()
+            .instance()
+            .get(&DataKey::MinFee)
+            .unwrap_or(0i128);
         let max_fee = env
             .storage()
             .instance()
@@ -1027,20 +1161,7 @@ impl PaymentEscrowContract {
             return Err(Error::SameSenderRecipient);
         }
 
-        let assets: Vec<Asset> = env
-            .storage()
-            .instance()
-            .get(&DataKey::SupportedAssets)
-            .unwrap();
-        let mut asset_supported = false;
-        for supported_asset in assets.iter() {
-            if supported_asset.code == asset.code && supported_asset.issuer == asset.issuer {
-                asset_supported = true;
-                break;
-            }
-        }
-
-        if !asset_supported {
+        if !Self::is_supported_asset(&env, &asset) {
             return Err(Error::InvalidAsset);
         }
 
@@ -1071,7 +1192,11 @@ impl PaymentEscrowContract {
                             &sender,
                             0,
                             symbol_short!("na"),
-                            EventData::PairAction(symbol_short!("kyc_fail"), sender.clone(), recipient.clone()),
+                            EventData::PairAction(
+                                symbol_short!("kyc_fail"),
+                                sender.clone(),
+                                recipient.clone(),
+                            ),
                         );
                         return Err(Error::KycFailed);
                     }
@@ -1085,7 +1210,11 @@ impl PaymentEscrowContract {
                         &sender,
                         0,
                         symbol_short!("na"),
-                        EventData::PairAction(symbol_short!("kyc_pass"), sender.clone(), recipient.clone()),
+                        EventData::PairAction(
+                            symbol_short!("kyc_pass"),
+                            sender.clone(),
+                            recipient.clone(),
+                        ),
                     );
                 }
                 Err(_) => {
@@ -1098,8 +1227,19 @@ impl PaymentEscrowContract {
             .storage()
             .instance()
             .get(&DataKey::EscrowCounter)
-            .unwrap_or(0);
+            .unwrap_or(0u64);
         counter = counter.checked_add(1).ok_or(Error::CounterOverflow)?;
+
+        let mut escrow_assets = Vec::new(&env);
+        escrow_assets.push_back(asset.clone());
+        let mut amounts = Self::empty_asset_amount_map(&env);
+        amounts.set(asset.clone(), amount);
+        let mut deposited_amounts = Self::empty_asset_amount_map(&env);
+        deposited_amounts.set(asset.clone(), 0);
+        let mut released_amounts = Self::empty_asset_amount_map(&env);
+        released_amounts.set(asset.clone(), 0);
+        let mut refunded_amounts = Self::empty_asset_amount_map(&env);
+        refunded_amounts.set(asset.clone(), 0);
 
         let escrow = Escrow {
             sender: sender.clone(),
@@ -1109,6 +1249,11 @@ impl PaymentEscrowContract {
             released_amount: 0,
             refunded_amount: 0,
             asset,
+            assets: escrow_assets,
+            amounts,
+            deposited_amounts,
+            released_amounts,
+            refunded_amounts,
             release_conditions: ReleaseCondition {
                 expiration_timestamp,
                 recipient_approval: false,
@@ -1171,6 +1316,132 @@ impl PaymentEscrowContract {
         Ok(counter)
     }
 
+    pub fn create_multi_asset_escrow(
+        env: Env,
+        sender: Address,
+        recipient: Address,
+        assets: Vec<Asset>,
+        amounts: Map<Asset, i128>,
+        expiration_timestamp: u64,
+        memo: String,
+    ) -> Result<u64, Error> {
+        if upgradeable::is_paused(&env) {
+            return Err(Error::ContractPaused);
+        }
+        sender.require_auth();
+        Self::enforce_rate_limit(&env, &sender, FunctionType::Deposit)?;
+
+        if sender == recipient {
+            return Err(Error::SameSenderRecipient);
+        }
+        if assets.len() == 0 {
+            return Err(Error::InvalidAsset);
+        }
+
+        let mut total_amount = 0i128;
+        let mut deposited_amounts = Self::empty_asset_amount_map(&env);
+        let mut released_amounts = Self::empty_asset_amount_map(&env);
+        let mut refunded_amounts = Self::empty_asset_amount_map(&env);
+
+        for asset in assets.iter() {
+            if !Self::is_supported_asset(&env, &asset) {
+                return Err(Error::InvalidAsset);
+            }
+            let amount = amounts.get(asset.clone()).ok_or(Error::InvalidAmount)?;
+            if amount <= 0 {
+                return Err(Error::InvalidAmount);
+            }
+            total_amount = total_amount
+                .checked_add(amount)
+                .ok_or(Error::ArithmeticOverflow)?;
+            deposited_amounts.set(asset.clone(), 0);
+            released_amounts.set(asset.clone(), 0);
+            refunded_amounts.set(asset.clone(), 0);
+        }
+
+        let mut counter: u64 = env
+            .storage()
+            .instance()
+            .get(&DataKey::EscrowCounter)
+            .unwrap_or(0u64);
+        counter = counter.checked_add(1).ok_or(Error::CounterOverflow)?;
+
+        let primary_asset = assets.get(0).unwrap();
+        let primary_amount = amounts.get(primary_asset.clone()).unwrap();
+        let escrow = Escrow {
+            sender: sender.clone(),
+            recipient,
+            amount: total_amount,
+            deposited_amount: 0,
+            released_amount: 0,
+            refunded_amount: 0,
+            asset: primary_asset,
+            assets,
+            amounts,
+            deposited_amounts,
+            released_amounts,
+            refunded_amounts,
+            release_conditions: ReleaseCondition {
+                expiration_timestamp,
+                recipient_approval: false,
+                oracle_confirmation: false,
+                conditions: Vec::new(&env),
+                operator: ConditionOperator::And,
+                min_approvals: 1,
+                current_approvals: 0,
+            },
+            status: EscrowStatus::Pending,
+            created_at: env.ledger().timestamp(),
+            last_deposit_at: 0,
+            release_timestamp: 0,
+            refund_timestamp: 0,
+            escrow_id: counter,
+            memo,
+            allow_partial_release: false,
+            multi_party_enabled: false,
+            kyc_compliant: false,
+        };
+
+        env.storage()
+            .instance()
+            .set(&DataKey::Escrow(counter), &escrow);
+        env.storage()
+            .instance()
+            .set(&DataKey::EscrowCounter, &counter);
+
+        events::emit(
+            &env,
+            symbol_short!("escrow"),
+            symbol_short!("created"),
+            counter,
+            &escrow.sender,
+            primary_amount,
+            symbol_short!("pending"),
+            EventData::EscrowCreated(
+                counter,
+                escrow.sender.clone(),
+                escrow.recipient.clone(),
+                AssetRef {
+                    code: escrow.asset.code.clone(),
+                    issuer: escrow.asset.issuer.clone(),
+                },
+                primary_amount,
+            ),
+        );
+
+        Self::notify_external(
+            &env,
+            NotificationPayload {
+                escrow_id: counter,
+                event_type: EventType::Created,
+                amount: total_amount,
+                timestamp: env.ledger().timestamp(),
+            },
+        );
+
+        Ok(counter)
+    }
+
     pub fn deposit(
         env: Env,
         escrow_id: u64,
@@ -1217,6 +1488,9 @@ impl PaymentEscrowContract {
         token_client.transfer(&caller, &contract_address, &amount);
 
         escrow.deposited_amount = new_deposited;
+        escrow
+            .deposited_amounts
+            .set(escrow.asset.clone(), new_deposited);
         escrow.last_deposit_at = env.ledger().timestamp();
 
         if escrow.deposited_amount == escrow.amount {
@@ -1256,8 +1530,494 @@ impl PaymentEscrowContract {
         Ok(())
     }
 
+    pub fn deposit_asset(
+        env: Env,
+        escrow_id: u64,
+        caller: Address,
+        asset: Asset,
+        amount: i128,
+        token_address: Address,
+    ) -> Result<(), Error> {
+        if upgradeable::is_paused(&env) {
+            return Err(Error::ContractPaused);
+        }
+        caller.require_auth();
+        Self::enforce_rate_limit(&env, &caller, FunctionType::Deposit)?;
+
+        if amount <= 0 {
+            return Err(Error::InvalidAmount);
+        }
+
+        let mut escrow: Escrow = env
+            .storage()
+            .instance()
+            .get(&DataKey::Escrow(escrow_id))
+            .ok_or(Error::EscrowNotFound)?;
+
+        if caller != escrow.sender {
+            return Err(Error::WrongSender);
+        }
+        if escrow.status != EscrowStatus::Pending && escrow.status != EscrowStatus::Funded {
+            return Err(Error::EscrowNotPending);
+        }
+
+        let required_amount = escrow
+            .amounts
+            .get(asset.clone())
+            .ok_or(Error::InvalidAsset)?;
+        let current_deposited = escrow.deposited_amounts.get(asset.clone()).unwrap_or(0i128);
+        let new_asset_deposit = current_deposited
+            .checked_add(amount)
+            .ok_or(Error::DepositOverflow)?;
+        if new_asset_deposit > required_amount {
+            return Err(Error::InsufficientAmount);
+        }
+
+        let token_client = token::Client::new(&env, &token_address);
+        let contract_address = env.current_contract_address();
+        token_client.transfer(&caller, &contract_address, &amount);
+
+        escrow
+            .deposited_amounts
+            .set(asset.clone(), new_asset_deposit);
+        escrow.deposited_amount = escrow
+            .deposited_amount
+            .checked_add(amount)
+            .ok_or(Error::DepositOverflow)?;
+        escrow.last_deposit_at = env.ledger().timestamp();
+
+        let mut fully_funded = true;
+        for required_asset in escrow.assets.iter() {
+            let required_asset: Asset = required_asset;
+            let required: i128 = escrow.amounts.get(required_asset.clone()).unwrap_or(0i128);
+            let deposited: i128 = escrow
+                .deposited_amounts
+                .get(required_asset.clone())
+                .unwrap_or(0i128);
+            if deposited < required {
+                fully_funded = false;
+                break;
+            }
+        }
+        if fully_funded {
+            escrow.status = EscrowStatus::Funded;
+        }
+
+        env.storage()
+            .instance()
+            .set(&DataKey::Escrow(escrow_id), &escrow);
+
+        events::emit(
+            &env,
+            symbol_short!("escrow"),
+            symbol_short!("deposit"),
+            escrow_id,
+            &caller,
+            amount,
+            if fully_funded {
+                symbol_short!("funded")
+            } else {
+                symbol_short!("pending")
+            },
+            EventData::EscrowDeposited(escrow_id, amount, escrow.deposited_amount),
+        );
+
+        Self::notify_external(
+            &env,
+            NotificationPayload {
+                escrow_id,
+                event_type: EventType::Deposit,
+                amount,
+                timestamp: env.ledger().timestamp(),
+            },
+        );
+
+        Ok(())
+    }
+
     pub fn get_escrow(env: Env, escrow_id: u64) -> Option<Escrow> {
         env.storage().instance().get(&DataKey::Escrow(escrow_id))
+    }
+
+    pub fn query_escrows_by_sender(
+        env: Env,
+        sender: Address,
+        limit: u32,
+        offset: u32,
+    ) -> Vec<Escrow> {
+        let mut results = Vec::new(&env);
+        let counter: u64 = env
+            .storage()
+            .instance()
+            .get(&DataKey::EscrowCounter)
+            .unwrap_or(0u64);
+        let mut skipped = 0u32;
+        for id in 1..=counter {
+            if let Some(escrow) = env
+                .storage()
+                .instance()
+                .get::<_, Escrow>(&DataKey::Escrow(id))
+            {
+                if escrow.sender == sender {
+                    if skipped < offset {
+                        skipped += 1;
+                    } else if results.len() < limit {
+                        results.push_back(escrow);
+                    }
+                }
+            }
+        }
+        results
+    }
+
+    pub fn query_escrows_by_recipient(
+        env: Env,
+        recipient: Address,
+        limit: u32,
+        offset: u32,
+    ) -> Vec<Escrow> {
+        let mut results = Vec::new(&env);
+        let counter: u64 = env
+            .storage()
+            .instance()
+            .get(&DataKey::EscrowCounter)
+            .unwrap_or(0u64);
+        let mut skipped = 0u32;
+        for id in 1..=counter {
+            if let Some(escrow) = env
+                .storage()
+                .instance()
+                .get::<_, Escrow>(&DataKey::Escrow(id))
+            {
+                if escrow.recipient == recipient {
+                    if skipped < offset {
+                        skipped += 1;
+                    } else if results.len() < limit {
+                        results.push_back(escrow);
+                    }
+                }
+            }
+        }
+        results
+    }
+
+    pub fn query_escrows_by_status(
+        env: Env,
+        status: EscrowStatus,
+        limit: u32,
+        offset: u32,
+    ) -> Vec<Escrow> {
+        let mut results = Vec::new(&env);
+        let counter: u64 = env
+            .storage()
+            .instance()
+            .get(&DataKey::EscrowCounter)
+            .unwrap_or(0u64);
+        let mut skipped = 0u32;
+        for id in 1..=counter {
+            if let Some(escrow) = env
+                .storage()
+                .instance()
+                .get::<_, Escrow>(&DataKey::Escrow(id))
+            {
+                if escrow.status == status {
+                    if skipped < offset {
+                        skipped += 1;
+                    } else if results.len() < limit {
+                        results.push_back(escrow);
+                    }
+                }
+            }
+        }
+        results
+    }
+
+    pub fn query_escrows_by_date_range(
+        env: Env,
+        start: u64,
+        end: u64,
+        limit: u32,
+        offset: u32,
+    ) -> Vec<Escrow> {
+        let mut results = Vec::new(&env);
+        let counter: u64 = env
+            .storage()
+            .instance()
+            .get(&DataKey::EscrowCounter)
+            .unwrap_or(0u64);
+        let mut skipped = 0u32;
+        for id in 1..=counter {
+            if let Some(escrow) = env
+                .storage()
+                .instance()
+                .get::<_, Escrow>(&DataKey::Escrow(id))
+            {
+                if escrow.created_at >= start && escrow.created_at <= end {
+                    if skipped < offset {
+                        skipped += 1;
+                    } else if results.len() < limit {
+                        results.push_back(escrow);
+                    }
+                }
+            }
+        }
+        results
+    }
+
+    pub fn query_escrows_by_amount_range(
+        env: Env,
+        min_amount: i128,
+        max_amount: i128,
+        limit: u32,
+        offset: u32,
+    ) -> Vec<Escrow> {
+        let mut results = Vec::new(&env);
+        let counter: u64 = env
+            .storage()
+            .instance()
+            .get(&DataKey::EscrowCounter)
+            .unwrap_or(0u64);
+        let mut skipped = 0u32;
+        for id in 1..=counter {
+            if let Some(escrow) = env
+                .storage()
+                .instance()
+                .get::<_, Escrow>(&DataKey::Escrow(id))
+            {
+                if escrow.amount >= min_amount && escrow.amount <= max_amount {
+                    if skipped < offset {
+                        skipped += 1;
+                    } else if results.len() < limit {
+                        results.push_back(escrow);
+                    }
+                }
+            }
+        }
+        results
+    }
+
+    pub fn register_notification_hook(
+        env: Env,
+        escrow_id: u64,
+        caller: Address,
+        config: NotificationConfig,
+    ) -> Result<(), Error> {
+        caller.require_auth();
+        Self::validate_notification_config(&config)?;
+
+        let escrow: Escrow = env
+            .storage()
+            .instance()
+            .get(&DataKey::Escrow(escrow_id))
+            .ok_or(Error::EscrowNotFound)?;
+        let admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
+        if caller != escrow.sender && caller != escrow.recipient && caller != admin {
+            return Err(Error::UnauthorizedCaller);
+        }
+
+        let mut hooks: Vec<NotificationConfig> = env
+            .storage()
+            .instance()
+            .get(&DataKey::NotificationHooks(escrow_id))
+            .unwrap_or(Vec::new(&env));
+        if hooks.len() >= MAX_HOOKS {
+            return Err(Error::InvalidStatus);
+        }
+        hooks.push_back(config);
+        env.storage()
+            .instance()
+            .set(&DataKey::NotificationHooks(escrow_id), &hooks);
+
+        events::emit(
+            &env,
+            symbol_short!("escrow"),
+            symbol_short!("hook_reg"),
+            escrow_id,
+            &caller,
+            hooks.len() as i128,
+            symbol_short!("active"),
+            EventData::AdminAction(symbol_short!("hook_reg")),
+        );
+
+        Ok(())
+    }
+
+    pub fn get_notification_hooks(env: Env, escrow_id: u64) -> Vec<NotificationConfig> {
+        env.storage()
+            .instance()
+            .get(&DataKey::NotificationHooks(escrow_id))
+            .unwrap_or(Vec::new(&env))
+    }
+
+    pub fn get_notification_history(env: Env, escrow_id: u64) -> Vec<NotificationDelivery> {
+        env.storage()
+            .instance()
+            .get(&DataKey::NotificationHistory(escrow_id))
+            .unwrap_or(Vec::new(&env))
+    }
+
+    pub fn create_recurring_escrow(
+        env: Env,
+        sender: Address,
+        config: RecurringConfig,
+    ) -> Result<u64, Error> {
+        sender.require_auth();
+        if config.interval == 0 || config.count == 0 || config.amount <= 0 {
+            return Err(Error::InvalidAmount);
+        }
+        if sender == config.recipient {
+            return Err(Error::SameSenderRecipient);
+        }
+        if !Self::is_supported_asset(&env, &config.asset) {
+            return Err(Error::InvalidAsset);
+        }
+
+        let mut counter: u64 = env
+            .storage()
+            .instance()
+            .get(&DataKey::RecurringCounter)
+            .unwrap_or(0u64);
+        counter = counter.checked_add(1).ok_or(Error::CounterOverflow)?;
+
+        let recurring = RecurringEscrow {
+            recurring_id: counter,
+            sender: sender.clone(),
+            config,
+            next_run_at: env.ledger().timestamp(),
+            processed_count: 0,
+            cancelled: false,
+            created_at: env.ledger().timestamp(),
+        };
+
+        env.storage()
+            .instance()
+            .set(&DataKey::Recurring(counter), &recurring);
+        env.storage()
+            .instance()
+            .set(&DataKey::RecurringCounter, &counter);
+        env.storage().instance().set(
+            &DataKey::RecurringHistory(counter),
+            &Vec::<RecurringPayment>::new(&env),
+        );
+
+        Ok(counter)
+    }
+
+    pub fn process_recurring_payment(env: Env, recurring_id: u64) -> Result<u64, Error> {
+        let mut recurring: RecurringEscrow = env
+            .storage()
+            .instance()
+            .get(&DataKey::Recurring(recurring_id))
+            .ok_or(Error::EscrowNotFound)?;
+        if recurring.cancelled {
+            return Err(Error::InvalidStatus);
+        }
+        if recurring.processed_count >= recurring.config.count {
+            return Err(Error::InvalidStatus);
+        }
+        let now = env.ledger().timestamp();
+        if now < recurring.next_run_at {
+            return Err(Error::NotExpired);
+        }
+
+        let escrow_id = Self::create_escrow(
+            env.clone(),
+            recurring.sender.clone(),
+            recurring.config.recipient.clone(),
+            recurring.config.amount,
+            recurring.config.asset.clone(),
+            now.checked_add(recurring.config.expiration_window)
+                .ok_or(Error::ArithmeticOverflow)?,
+            recurring.config.memo.clone(),
+        )?;
+
+        if recurring.config.auto_release {
+            let mut escrow: Escrow = env
+                .storage()
+                .instance()
+                .get(&DataKey::Escrow(escrow_id))
+                .ok_or(Error::EscrowNotFound)?;
+            escrow.allow_partial_release = false;
+            env.storage()
+                .instance()
+                .set(&DataKey::Escrow(escrow_id), &escrow);
+        }
+
+        recurring.processed_count = recurring
+            .processed_count
+            .checked_add(1)
+            .ok_or(Error::ArithmeticOverflow)?;
+        recurring.next_run_at = now
+            .checked_add(recurring.config.interval)
+            .ok_or(Error::ArithmeticOverflow)?;
+        if recurring.processed_count >= recurring.config.count {
+            recurring.cancelled = true;
+        }
+        env.storage()
+            .instance()
+            .set(&DataKey::Recurring(recurring_id), &recurring);
+
+        let mut history: Vec<RecurringPayment> = env
+            .storage()
+            .instance()
+            .get(&DataKey::RecurringHistory(recurring_id))
+            .unwrap_or(Vec::new(&env));
+        history.push_back(RecurringPayment {
+            escrow_id,
+            processed_at: now,
+            sequence: recurring.processed_count,
+        });
+        env.storage()
+            .instance()
+            .set(&DataKey::RecurringHistory(recurring_id), &history);
+
+        events::emit(
+            &env,
+            symbol_short!("escrow"),
+            symbol_short!("rec_pay"),
+            escrow_id,
+            &recurring.sender,
+            recurring.config.amount,
+            symbol_short!("created"),
+            EventData::AdminAction(symbol_short!("rec_pay")),
+        );
+
+        Ok(escrow_id)
+    }
+
+    pub fn cancel_recurring_escrow(
+        env: Env,
+        recurring_id: u64,
+        caller: Address,
+    ) -> Result<(), Error> {
+        caller.require_auth();
+        let mut recurring: RecurringEscrow = env
+            .storage()
+            .instance()
+            .get(&DataKey::Recurring(recurring_id))
+            .ok_or(Error::EscrowNotFound)?;
+        let admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
+        if caller != recurring.sender && caller != admin {
+            return Err(Error::UnauthorizedCaller);
+        }
+        recurring.cancelled = true;
+        env.storage()
+            .instance()
+            .set(&DataKey::Recurring(recurring_id), &recurring);
+        Ok(())
+    }
+
+    pub fn get_recurring_escrow(env: Env, recurring_id: u64) -> Option<RecurringEscrow> {
+        env.storage()
+            .instance()
+            .get(&DataKey::Recurring(recurring_id))
+    }
+
+    pub fn get_recurring_history(env: Env, recurring_id: u64) -> Vec<RecurringPayment> {
+        env.storage()
+            .instance()
+            .get(&DataKey::RecurringHistory(recurring_id))
+            .unwrap_or(Vec::new(&env))
     }
 
     pub fn approve_escrow(env: Env, escrow_id: u64, approver: Address) -> Result<(), Error> {
@@ -1286,7 +2046,7 @@ impl PaymentEscrowContract {
             &approver,
             escrow.amount,
             symbol_short!("approved"),
-            EventData::EscrowApproved,
+            EventData::EscrowApproved(escrow_id),
         );
 
         Self::notify_external(
@@ -1442,6 +2202,16 @@ impl PaymentEscrowContract {
             .released_amount
             .checked_add(available_amount)
             .ok_or(Error::ArithmeticOverflow)?;
+        let current_asset_released = escrow
+            .released_amounts
+            .get(escrow.asset.clone())
+            .unwrap_or(0i128);
+        escrow.released_amounts.set(
+            escrow.asset.clone(),
+            current_asset_released
+                .checked_add(available_amount)
+                .ok_or(Error::ArithmeticOverflow)?,
+        );
         escrow.status = EscrowStatus::Released;
         escrow.release_timestamp = current_time;
 
@@ -1470,12 +2240,136 @@ impl PaymentEscrowContract {
             &caller,
             recipient_amount,
             symbol_short!("released"),
-            EventData::EscrowReleased,
+            EventData::EscrowReleased(escrow_id, recipient_amount),
+        );
+
+        Self::notify_external(
+            &env,
+            NotificationPayload {
+                escrow_id,
+                event_type: EventType::Released,
+                amount: recipient_amount,
+                timestamp: env.ledger().timestamp(),
+            },
         );
 
         env.storage()
             .instance()
             .set(&DataKey::ReentrancyGuard, &false);
+
+        Ok(())
+    }
+
+    pub fn release_asset(
+        env: Env,
+        escrow_id: u64,
+        caller: Address,
+        asset: Asset,
+        token_address: Address,
+    ) -> Result<(), Error> {
+        caller.require_auth();
+        Self::enforce_rate_limit(&env, &caller, FunctionType::Release)?;
+
+        let mut escrow: Escrow = env
+            .storage()
+            .instance()
+            .get(&DataKey::Escrow(escrow_id))
+            .ok_or(Error::EscrowNotFound)?;
+
+        if escrow.status != EscrowStatus::Approved && escrow.status != EscrowStatus::Funded {
+            return Err(Error::NotApproved);
+        }
+
+        let current_time = env.ledger().timestamp();
+        if current_time > escrow.release_conditions.expiration_timestamp {
+            escrow.status = EscrowStatus::Expired;
+            env.storage()
+                .instance()
+                .set(&DataKey::Escrow(escrow_id), &escrow);
+            return Err(Error::Expired);
+        }
+
+        let stored_admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
+        if caller != escrow.recipient && caller != stored_admin && caller != escrow.sender {
+            return Err(Error::UnauthorizedCaller);
+        }
+
+        let deposited = escrow.deposited_amounts.get(asset.clone()).unwrap_or(0i128);
+        let released = escrow.released_amounts.get(asset.clone()).unwrap_or(0i128);
+        let available_amount = deposited
+            .checked_sub(released)
+            .ok_or(Error::ArithmeticOverflow)?;
+        if available_amount <= 0 {
+            return Err(Error::InsufficientFunds);
+        }
+
+        let fee_breakdown = Self::calculate_fees(&env, available_amount)?;
+        let recipient_amount = available_amount
+            .checked_sub(fee_breakdown.total_fee)
+            .ok_or(Error::ArithmeticOverflow)?;
+
+        let token_client = token::Client::new(&env, &token_address);
+        let contract_address = env.current_contract_address();
+        token_client.transfer(&contract_address, &escrow.recipient, &recipient_amount);
+        if fee_breakdown.total_fee > 0 {
+            token_client.transfer(&contract_address, &stored_admin, &fee_breakdown.total_fee);
+        }
+
+        escrow.released_amounts.set(asset.clone(), deposited);
+        escrow.released_amount = escrow
+            .released_amount
+            .checked_add(available_amount)
+            .ok_or(Error::ArithmeticOverflow)?;
+
+        let mut all_released = true;
+        for escrow_asset in escrow.assets.iter() {
+            let escrow_asset: Asset = escrow_asset;
+            let asset_deposited: i128 = escrow
+                .deposited_amounts
+                .get(escrow_asset.clone())
+                .unwrap_or(0i128);
+            let asset_released: i128 = escrow
+                .released_amounts
+                .get(escrow_asset.clone())
+                .unwrap_or(0i128);
+            if asset_deposited > asset_released {
+                all_released = false;
+                break;
+            }
+        }
+        if all_released {
+            escrow.status = EscrowStatus::Released;
+            escrow.release_timestamp = current_time;
+        }
+
+        env.storage()
+            .instance()
+            .set(&DataKey::Escrow(escrow_id), &escrow);
+
+        events::emit(
+            &env,
+            symbol_short!("escrow"),
+            symbol_short!("rel_ast"),
+            escrow_id,
+            &caller,
+            recipient_amount,
+            if all_released {
+                symbol_short!("released")
+            } else {
+                symbol_short!("funded")
+            },
+            EventData::EscrowReleased(escrow_id, recipient_amount),
+        );
+
+        Self::notify_external(
+            &env,
+            NotificationPayload {
+                escrow_id,
+                event_type: EventType::Released,
+                amount: recipient_amount,
+                timestamp: env.ledger().timestamp(),
+            },
+        );
 
         Ok(())
     }
@@ -1657,7 +2551,7 @@ impl PaymentEscrowContract {
             &caller,
             recipient_amount,
             partial_status,
-            EventData::EscrowReleased,
+            EventData::EscrowReleased(escrow_id, recipient_amount),
         );
 
         env.storage()
@@ -2100,6 +2994,16 @@ impl PaymentEscrowContract {
             .refunded_amount
             .checked_add(available_for_refund)
             .ok_or(Error::ArithmeticOverflow)?;
+        let current_asset_refunded = escrow
+            .refunded_amounts
+            .get(escrow.asset.clone())
+            .unwrap_or(0i128);
+        escrow.refunded_amounts.set(
+            escrow.asset.clone(),
+            current_asset_refunded
+                .checked_add(available_for_refund)
+                .ok_or(Error::ArithmeticOverflow)?,
+        );
         escrow.status = EscrowStatus::Refunded;
         escrow.refund_timestamp = current_time;
 
@@ -2128,12 +3032,160 @@ impl PaymentEscrowContract {
             &caller,
             refund_amount,
             symbol_short!("refunded"),
-            EventData::EscrowRefunded,
+            EventData::EscrowRefunded(escrow_id, refund_amount),
+        );
+
+        Self::notify_external(
+            &env,
+            NotificationPayload {
+                escrow_id,
+                event_type: EventType::Refunded,
+                amount: refund_amount,
+                timestamp: env.ledger().timestamp(),
+            },
         );
 
         env.storage()
             .instance()
             .set(&DataKey::ReentrancyGuard, &false);
+
+        Ok(())
+    }
+
+    pub fn refund_asset(
+        env: Env,
+        escrow_id: u64,
+        caller: Address,
+        asset: Asset,
+        token_address: Address,
+        reason: RefundReason,
+    ) -> Result<(), Error> {
+        if upgradeable::is_paused(&env) {
+            return Err(Error::ContractPaused);
+        }
+        caller.require_auth();
+        Self::enforce_rate_limit(&env, &caller, FunctionType::Refund)?;
+
+        let mut escrow: Escrow = env
+            .storage()
+            .instance()
+            .get(&DataKey::Escrow(escrow_id))
+            .ok_or(Error::EscrowNotFound)?;
+
+        let stored_admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
+        if caller != escrow.sender && caller != stored_admin {
+            return Err(Error::UnauthorizedRefund);
+        }
+        if escrow.status == EscrowStatus::Released {
+            return Err(Error::AlreadyReleased);
+        }
+        if escrow.status != EscrowStatus::Pending
+            && escrow.status != EscrowStatus::Funded
+            && escrow.status != EscrowStatus::Approved
+        {
+            return Err(Error::InvalidStatus);
+        }
+
+        let current_time = env.ledger().timestamp();
+        if reason == RefundReason::Expiration
+            && current_time <= escrow.release_conditions.expiration_timestamp
+        {
+            return Err(Error::NotExpired);
+        }
+
+        let deposited = escrow.deposited_amounts.get(asset.clone()).unwrap_or(0i128);
+        let released = escrow.released_amounts.get(asset.clone()).unwrap_or(0i128);
+        let refunded = escrow.refunded_amounts.get(asset.clone()).unwrap_or(0i128);
+        let available_for_refund = deposited
+            .checked_sub(released)
+            .ok_or(Error::ArithmeticOverflow)?
+            .checked_sub(refunded)
+            .ok_or(Error::ArithmeticOverflow)?;
+        if available_for_refund <= 0 {
+            return Err(Error::NoFundsAvailable);
+        }
+
+        let processing_fee_percentage = Self::get_processing_fee(env.clone());
+        let processing_fee = available_for_refund
+            .checked_mul(processing_fee_percentage)
+            .ok_or(Error::ArithmeticOverflow)?
+            .checked_div(10000)
+            .ok_or(Error::ArithmeticOverflow)?;
+        let refund_amount = available_for_refund
+            .checked_sub(processing_fee)
+            .ok_or(Error::ArithmeticOverflow)?;
+
+        let token_client = token::Client::new(&env, &token_address);
+        let contract_address = env.current_contract_address();
+        token_client.transfer(&contract_address, &escrow.sender, &refund_amount);
+        if processing_fee > 0 {
+            token_client.transfer(&contract_address, &stored_admin, &processing_fee);
+        }
+
+        escrow.refunded_amounts.set(
+            asset.clone(),
+            refunded
+                .checked_add(available_for_refund)
+                .ok_or(Error::ArithmeticOverflow)?,
+        );
+        escrow.refunded_amount = escrow
+            .refunded_amount
+            .checked_add(available_for_refund)
+            .ok_or(Error::ArithmeticOverflow)?;
+
+        let mut fully_processed = true;
+        for escrow_asset in escrow.assets.iter() {
+            let escrow_asset: Asset = escrow_asset;
+            let asset_deposited: i128 = escrow
+                .deposited_amounts
+                .get(escrow_asset.clone())
+                .unwrap_or(0i128);
+            let asset_released: i128 = escrow
+                .released_amounts
+                .get(escrow_asset.clone())
+                .unwrap_or(0i128);
+            let asset_refunded: i128 = escrow
+                .refunded_amounts
+                .get(escrow_asset.clone())
+                .unwrap_or(0i128);
+            if asset_released + asset_refunded < asset_deposited {
+                fully_processed = false;
+                break;
+            }
+        }
+        if fully_processed {
+            escrow.status = EscrowStatus::Refunded;
+            escrow.refund_timestamp = current_time;
+        }
+
+        env.storage()
+            .instance()
+            .set(&DataKey::Escrow(escrow_id), &escrow);
+
+        events::emit(
+            &env,
+            symbol_short!("escrow"),
+            symbol_short!("ref_ast"),
+            escrow_id,
+            &caller,
+            refund_amount,
+            if fully_processed {
+                symbol_short!("refunded")
+            } else {
+                symbol_short!("funded")
+            },
+            EventData::EscrowRefunded(escrow_id, refund_amount),
+        );
+
+        Self::notify_external(
+            &env,
+            NotificationPayload {
+                escrow_id,
+                event_type: EventType::Refunded,
+                amount: refund_amount,
+                timestamp: env.ledger().timestamp(),
+            },
+        );
 
         Ok(())
     }
@@ -2313,7 +3365,7 @@ impl PaymentEscrowContract {
             &caller,
             net_refund,
             refund_status,
-            EventData::EscrowRefunded,
+            EventData::EscrowRefunded(escrow_id, net_refund),
         );
 
         env.storage()
