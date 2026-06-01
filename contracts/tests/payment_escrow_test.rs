@@ -7,6 +7,8 @@ use soroban_sdk::{
     testutils::{Address as _, Events as _, Ledger},
     token, vec, Address, BytesN, Env, FromVal, Map, String, Symbol, Vec,
 };
+use gpay_remit_contracts::payment_escrow::{PaymentEscrowContract, PaymentEscrowContractClient, Asset, EscrowStatus, Error, RefundReason, DisputeReason, ResolutionOutcome, Milestone, InsuranceConfig, EscrowInsurance, DelegationPermissions, DelegationEntry, EscrowAnalytics};
+use soroban_sdk::{testutils::{Address as _, Ledger, Events as _}, token, Address, Env, String, symbol_short, Symbol, FromVal, BytesN, vec, Vec};
 
 fn create_token_contract<'a>(
     env: &Env,
@@ -1097,4 +1099,623 @@ fn test_multi_asset_deposit_release_and_refund() {
         &RefundReason::SenderRequest,
     );
     assert_eq!(token_b.balance(&sender), 500);
+// ============================================================================
+// MILESTONE-BASED ESCROW TESTS (#129)
+// ============================================================================
+
+#[test]
+fn test_add_milestone() {
+    let env = Env::default();
+    env.mock_all_auths();
+    env.ledger().with_mut(|li| li.timestamp = 1000);
+
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+
+    let contract_id = env.register_contract(None, PaymentEscrowContract);
+    let client = PaymentEscrowContractClient::new(&env, &contract_id);
+
+    client.init_escrow(&admin);
+
+    let asset = Asset {
+        code: String::from_str(&env, "USDC"),
+        issuer: admin.clone(),
+    };
+    client.add_supported_asset(&admin, &asset);
+
+    let escrow_id = client.create_escrow(&sender, &recipient, &1000, &asset, &2000, &String::from_str(&env, "Test"));
+
+    client.add_milestone(&escrow_id, &sender, &String::from_str(&env, "Phase 1"), &400);
+    client.add_milestone(&escrow_id, &sender, &String::from_str(&env, "Phase 2"), &600);
+
+    let milestones = client.get_milestones(&escrow_id);
+    assert_eq!(milestones.len(), 2);
+    assert_eq!(milestones.get(0).unwrap().amount, 400);
+    assert_eq!(milestones.get(1).unwrap().amount, 600);
+}
+
+#[test]
+fn test_complete_and_approve_milestone() {
+    let env = Env::default();
+    env.mock_all_auths();
+    env.ledger().with_mut(|li| li.timestamp = 1000);
+
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+
+    let (token, token_admin) = create_token_contract(&env, &admin);
+    token_admin.mint(&sender, &5000);
+
+    let contract_id = env.register_contract(None, PaymentEscrowContract);
+    let client = PaymentEscrowContractClient::new(&env, &contract_id);
+
+    client.init_escrow(&admin);
+
+    let asset = Asset {
+        code: String::from_str(&env, "USDC"),
+        issuer: admin.clone(),
+    };
+    client.add_supported_asset(&admin, &asset);
+
+    let escrow_id = client.create_escrow(&sender, &recipient, &1000, &asset, &2000, &String::from_str(&env, "Test"));
+    client.deposit(&escrow_id, &sender, &1000, &token.address);
+
+    client.add_milestone(&escrow_id, &sender, &String::from_str(&env, "Phase 1"), &400);
+    client.add_milestone(&escrow_id, &sender, &String::from_str(&env, "Phase 2"), &600);
+
+    // Complete milestone 0
+    client.complete_milestone(&escrow_id, &0, &sender);
+    let milestones = client.get_milestones(&escrow_id);
+    assert_eq!(milestones.get(0).unwrap().completed, true);
+    assert_eq!(milestones.get(1).unwrap().completed, false);
+
+    // Approve milestone 0 (recipient approves)
+    client.approve_milestone(&escrow_id, &0, &recipient);
+    let milestones = client.get_milestones(&escrow_id);
+    assert_eq!(milestones.get(0).unwrap().approved, true);
+
+    // Complete and approve milestone 1
+    client.complete_milestone(&escrow_id, &1, &sender);
+    client.approve_milestone(&escrow_id, &1, &recipient);
+
+    let escrow = client.get_escrow(&escrow_id).unwrap();
+    assert_eq!(escrow.released_amount, 1000);
+    assert_eq!(escrow.status, EscrowStatus::Released);
+}
+
+#[test]
+fn test_complete_milestone_wrong_caller() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let unauthorized = Address::generate(&env);
+
+    let contract_id = env.register_contract(None, PaymentEscrowContract);
+    let client = PaymentEscrowContractClient::new(&env, &contract_id);
+
+    client.init_escrow(&admin);
+
+    let asset = Asset {
+        code: String::from_str(&env, "USDC"),
+        issuer: admin.clone(),
+    };
+    client.add_supported_asset(&admin, &asset);
+
+    let escrow_id = client.create_escrow(&sender, &recipient, &1000, &asset, &2000, &String::from_str(&env, "Test"));
+    client.add_milestone(&escrow_id, &sender, &String::from_str(&env, "Phase 1"), &400);
+
+    let result = client.try_complete_milestone(&escrow_id, &0, &unauthorized);
+    assert_eq!(result, Err(Ok(Error::Unauthorized)));
+}
+
+#[test]
+fn test_approve_milestone_wrong_caller() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+
+    let contract_id = env.register_contract(None, PaymentEscrowContract);
+    let client = PaymentEscrowContractClient::new(&env, &contract_id);
+
+    client.init_escrow(&admin);
+
+    let asset = Asset {
+        code: String::from_str(&env, "USDC"),
+        issuer: admin.clone(),
+    };
+    client.add_supported_asset(&admin, &asset);
+
+    let escrow_id = client.create_escrow(&sender, &recipient, &1000, &asset, &2000, &String::from_str(&env, "Test"));
+    client.add_milestone(&escrow_id, &sender, &String::from_str(&env, "Phase 1"), &400);
+    client.complete_milestone(&escrow_id, &0, &sender);
+
+    // Sender cannot approve milestone
+    let result = client.try_approve_milestone(&escrow_id, &0, &sender);
+    assert_eq!(result, Err(Ok(Error::Unauthorized)));
+}
+
+#[test]
+fn test_invalid_milestone_index() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+
+    let contract_id = env.register_contract(None, PaymentEscrowContract);
+    let client = PaymentEscrowContractClient::new(&env, &contract_id);
+
+    client.init_escrow(&admin);
+
+    let asset = Asset {
+        code: String::from_str(&env, "USDC"),
+        issuer: admin.clone(),
+    };
+    client.add_supported_asset(&admin, &asset);
+
+    let escrow_id = client.create_escrow(&sender, &recipient, &1000, &asset, &2000, &String::from_str(&env, "Test"));
+
+    let result = client.try_complete_milestone(&escrow_id, &0, &sender);
+    assert_eq!(result, Err(Ok(Error::InvalidStatus)));
+}
+
+// ============================================================================
+// DELEGATION TESTS (#132)
+// ============================================================================
+
+#[test]
+fn test_delegate_escrow() {
+    let env = Env::default();
+    env.mock_all_auths();
+    env.ledger().with_mut(|li| li.timestamp = 1000);
+
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let delegate = Address::generate(&env);
+
+    let contract_id = env.register_contract(None, PaymentEscrowContract);
+    let client = PaymentEscrowContractClient::new(&env, &contract_id);
+
+    client.init_escrow(&admin);
+
+    let asset = Asset {
+        code: String::from_str(&env, "USDC"),
+        issuer: admin.clone(),
+    };
+    client.add_supported_asset(&admin, &asset);
+
+    let escrow_id = client.create_escrow(&sender, &recipient, &1000, &asset, &2000, &String::from_str(&env, "Test"));
+
+    let permissions = DelegationPermissions {
+        can_release: true,
+        can_refund: false,
+        can_approve: true,
+        can_dispute: false,
+    };
+
+    client.delegate_escrow(&escrow_id, &sender, &delegate, &permissions);
+
+    let entry = client.get_delegation(&escrow_id, &delegate).unwrap();
+    assert_eq!(entry.delegate, delegate);
+    assert_eq!(entry.permissions.can_release, true);
+    assert_eq!(entry.permissions.can_refund, false);
+    assert_eq!(entry.permissions.can_approve, true);
+
+    let history = client.get_delegation_history(&escrow_id);
+    assert_eq!(history.len(), 1);
+}
+
+#[test]
+fn test_revoke_delegation() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let delegate = Address::generate(&env);
+
+    let contract_id = env.register_contract(None, PaymentEscrowContract);
+    let client = PaymentEscrowContractClient::new(&env, &contract_id);
+
+    client.init_escrow(&admin);
+
+    let asset = Asset {
+        code: String::from_str(&env, "USDC"),
+        issuer: admin.clone(),
+    };
+    client.add_supported_asset(&admin, &asset);
+
+    let escrow_id = client.create_escrow(&sender, &recipient, &1000, &asset, &2000, &String::from_str(&env, "Test"));
+
+    let permissions = DelegationPermissions {
+        can_release: true,
+        can_refund: false,
+        can_approve: true,
+        can_dispute: false,
+    };
+
+    client.delegate_escrow(&escrow_id, &sender, &delegate, &permissions);
+    assert!(client.get_delegation(&escrow_id, &delegate).is_some());
+
+    client.revoke_delegation(&escrow_id, &sender, &delegate);
+    assert!(client.get_delegation(&escrow_id, &delegate).is_none());
+}
+
+#[test]
+fn test_delegate_duplicate_rejected() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let delegate = Address::generate(&env);
+
+    let contract_id = env.register_contract(None, PaymentEscrowContract);
+    let client = PaymentEscrowContractClient::new(&env, &contract_id);
+
+    client.init_escrow(&admin);
+
+    let asset = Asset {
+        code: String::from_str(&env, "USDC"),
+        issuer: admin.clone(),
+    };
+    client.add_supported_asset(&admin, &asset);
+
+    let escrow_id = client.create_escrow(&sender, &recipient, &1000, &asset, &2000, &String::from_str(&env, "Test"));
+
+    let permissions = DelegationPermissions {
+        can_release: true,
+        can_refund: false,
+        can_approve: true,
+        can_dispute: false,
+    };
+
+    client.delegate_escrow(&escrow_id, &sender, &delegate, &permissions);
+
+    let result = client.try_delegate_escrow(&escrow_id, &sender, &delegate, &permissions);
+    assert_eq!(result, Err(Ok(Error::AlreadyApproved)));
+}
+
+#[test]
+fn test_revoke_nonexistent_delegate() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let delegate = Address::generate(&env);
+
+    let contract_id = env.register_contract(None, PaymentEscrowContract);
+    let client = PaymentEscrowContractClient::new(&env, &contract_id);
+
+    client.init_escrow(&admin);
+
+    let asset = Asset {
+        code: String::from_str(&env, "USDC"),
+        issuer: admin.clone(),
+    };
+    client.add_supported_asset(&admin, &asset);
+
+    let escrow_id = client.create_escrow(&sender, &recipient, &1000, &asset, &2000, &String::from_str(&env, "Test"));
+
+    let result = client.try_revoke_delegation(&escrow_id, &sender, &delegate);
+    assert_eq!(result, Err(Ok(Error::ApprovalNotFound)));
+}
+
+// ============================================================================
+// INSURANCE TESTS (#131)
+// ============================================================================
+
+#[test]
+fn test_set_insurance_config() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let insurer = Address::generate(&env);
+
+    let contract_id = env.register_contract(None, PaymentEscrowContract);
+    let client = PaymentEscrowContractClient::new(&env, &contract_id);
+
+    client.init_escrow(&admin);
+
+    let config = InsuranceConfig {
+        premium_rate: 500,
+        coverage_limit: 10000,
+        insurer: insurer.clone(),
+        enabled: true,
+    };
+
+    client.set_insurance_config(&admin, &config);
+
+    let stored = client.get_insurance_config().unwrap();
+    assert_eq!(stored.premium_rate, 500);
+    assert_eq!(stored.coverage_limit, 10000);
+    assert_eq!(stored.insurer, insurer);
+    assert_eq!(stored.enabled, true);
+}
+
+#[test]
+fn test_insure_escrow() {
+    let env = Env::default();
+    env.mock_all_auths();
+    env.ledger().with_mut(|li| li.timestamp = 1000);
+
+    let admin = Address::generate(&env);
+    let insurer = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+
+    let (token, token_admin) = create_token_contract(&env, &admin);
+    token_admin.mint(&sender, &5000);
+
+    let contract_id = env.register_contract(None, PaymentEscrowContract);
+    let client = PaymentEscrowContractClient::new(&env, &contract_id);
+
+    client.init_escrow(&admin);
+
+    let asset = Asset {
+        code: String::from_str(&env, "USDC"),
+        issuer: admin.clone(),
+    };
+    client.add_supported_asset(&admin, &asset);
+
+    let config = InsuranceConfig {
+        premium_rate: 500,
+        coverage_limit: 10000,
+        insurer: insurer.clone(),
+        enabled: true,
+    };
+    client.set_insurance_config(&admin, &config);
+
+    let escrow_id = client.create_escrow(&sender, &recipient, &1000, &asset, &2000, &String::from_str(&env, "Test"));
+
+    client.insure_escrow(&escrow_id, &sender);
+
+    let insurance = client.get_escrow_insurance(&escrow_id).unwrap();
+    assert_eq!(insurance.insured, true);
+    assert_eq!(insurance.premium, 50); // 1000 * 500 / 10000
+    assert_eq!(insurance.coverage, 1000);
+    assert_eq!(insurance.claimed, false);
+}
+
+#[test]
+fn test_claim_insurance() {
+    let env = Env::default();
+    env.mock_all_auths();
+    env.ledger().with_mut(|li| li.timestamp = 1000);
+
+    let admin = Address::generate(&env);
+    let insurer = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+
+    let (token, token_admin) = create_token_contract(&env, &admin);
+    token_admin.mint(&sender, &5000);
+
+    let contract_id = env.register_contract(None, PaymentEscrowContract);
+    let client = PaymentEscrowContractClient::new(&env, &contract_id);
+
+    client.init_escrow(&admin);
+
+    let asset = Asset {
+        code: String::from_str(&env, "USDC"),
+        issuer: admin.clone(),
+    };
+    client.add_supported_asset(&admin, &asset);
+
+    let config = InsuranceConfig {
+        premium_rate: 500,
+        coverage_limit: 10000,
+        insurer: insurer.clone(),
+        enabled: true,
+    };
+    client.set_insurance_config(&admin, &config);
+
+    let escrow_id = client.create_escrow(&sender, &recipient, &1000, &asset, &2000, &String::from_str(&env, "Test"));
+    client.insure_escrow(&escrow_id, &sender);
+
+    client.claim_insurance(&escrow_id, &sender, &String::from_str(&env, "NonDelivery"));
+
+    let insurance = client.get_escrow_insurance(&escrow_id).unwrap();
+    assert_eq!(insurance.claimed, true);
+    assert_eq!(insurance.claim_reason.unwrap(), String::from_str(&env, "NonDelivery"));
+}
+
+#[test]
+fn test_claim_insurance_not_insured() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+
+    let (token, token_admin) = create_token_contract(&env, &admin);
+    token_admin.mint(&sender, &5000);
+
+    let contract_id = env.register_contract(None, PaymentEscrowContract);
+    let client = PaymentEscrowContractClient::new(&env, &contract_id);
+
+    client.init_escrow(&admin);
+
+    let asset = Asset {
+        code: String::from_str(&env, "USDC"),
+        issuer: admin.clone(),
+    };
+    client.add_supported_asset(&admin, &asset);
+
+    let escrow_id = client.create_escrow(&sender, &recipient, &1000, &asset, &2000, &String::from_str(&env, "Test"));
+
+    let result = client.try_claim_insurance(&escrow_id, &sender, &String::from_str(&env, "NonDelivery"));
+    assert_eq!(result, Err(Ok(Error::ConditionsNotMet)));
+}
+
+// ============================================================================
+// ANALYTICS TESTS (#130)
+// ============================================================================
+
+#[test]
+fn test_get_total_escrow_volume() {
+    let env = Env::default();
+    env.mock_all_auths();
+    env.ledger().with_mut(|li| li.timestamp = 1000);
+
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+
+    let contract_id = env.register_contract(None, PaymentEscrowContract);
+    let client = PaymentEscrowContractClient::new(&env, &contract_id);
+
+    client.init_escrow(&admin);
+
+    let asset = Asset {
+        code: String::from_str(&env, "USDC"),
+        issuer: admin.clone(),
+    };
+    client.add_supported_asset(&admin, &asset);
+
+    client.create_escrow(&sender, &recipient, &1000, &asset, &2000, &String::from_str(&env, "Test 1"));
+    client.create_escrow(&sender, &recipient, &2000, &asset, &3000, &String::from_str(&env, "Test 2"));
+    client.create_escrow(&sender, &recipient, &3000, &asset, &4000, &String::from_str(&env, "Test 3"));
+
+    let volume = client.get_total_escrow_volume();
+    assert_eq!(volume, 6000);
+}
+
+#[test]
+fn test_get_escrow_count_by_status() {
+    let env = Env::default();
+    env.mock_all_auths();
+    env.ledger().with_mut(|li| li.timestamp = 1000);
+
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+
+    let contract_id = env.register_contract(None, PaymentEscrowContract);
+    let client = PaymentEscrowContractClient::new(&env, &contract_id);
+
+    client.init_escrow(&admin);
+
+    let asset = Asset {
+        code: String::from_str(&env, "USDC"),
+        issuer: admin.clone(),
+    };
+    client.add_supported_asset(&admin, &asset);
+
+    client.create_escrow(&sender, &recipient, &1000, &asset, &2000, &String::from_str(&env, "Test 1"));
+    client.create_escrow(&sender, &recipient, &2000, &asset, &3000, &String::from_str(&env, "Test 2"));
+    client.create_escrow(&sender, &recipient, &3000, &asset, &4000, &String::from_str(&env, "Test 3"));
+
+    let count = client.get_escrow_count_by_status(&EscrowStatus::Pending);
+    assert_eq!(count, 3);
+}
+
+#[test]
+fn test_get_average_escrow_amount() {
+    let env = Env::default();
+    env.mock_all_auths();
+    env.ledger().with_mut(|li| li.timestamp = 1000);
+
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+
+    let contract_id = env.register_contract(None, PaymentEscrowContract);
+    let client = PaymentEscrowContractClient::new(&env, &contract_id);
+
+    client.init_escrow(&admin);
+
+    let asset = Asset {
+        code: String::from_str(&env, "USDC"),
+        issuer: admin.clone(),
+    };
+    client.add_supported_asset(&admin, &asset);
+
+    client.create_escrow(&sender, &recipient, &1000, &asset, &2000, &String::from_str(&env, "Test 1"));
+    client.create_escrow(&sender, &recipient, &2000, &asset, &3000, &String::from_str(&env, "Test 2"));
+    client.create_escrow(&sender, &recipient, &3000, &asset, &4000, &String::from_str(&env, "Test 3"));
+
+    let avg = client.get_average_escrow_amount();
+    assert_eq!(avg, 2000); // (1000 + 2000 + 3000) / 3
+}
+
+#[test]
+fn test_get_success_rate() {
+    let env = Env::default();
+    env.mock_all_auths();
+    env.ledger().with_mut(|li| li.timestamp = 1000);
+
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+
+    let (token, token_admin) = create_token_contract(&env, &admin);
+    token_admin.mint(&sender, &5000);
+
+    let contract_id = env.register_contract(None, PaymentEscrowContract);
+    let client = PaymentEscrowContractClient::new(&env, &contract_id);
+
+    client.init_escrow(&admin);
+
+    let asset = Asset {
+        code: String::from_str(&env, "USDC"),
+        issuer: admin.clone(),
+    };
+    client.add_supported_asset(&admin, &asset);
+
+    let e1 = client.create_escrow(&sender, &recipient, &1000, &asset, &2000, &String::from_str(&env, "Test 1"));
+    client.deposit(&e1, &sender, &1000, &token.address);
+    client.approve_escrow(&e1, &admin);
+    client.release_escrow(&e1, &recipient, &token.address);
+
+    let e2 = client.create_escrow(&sender, &recipient, &1000, &asset, &2000, &String::from_str(&env, "Test 2"));
+
+    let rate = client.get_success_rate();
+    assert_eq!(rate, 5000); // 1/2 = 50% = 5000 bps
+}
+
+#[test]
+fn test_get_user_statistics() {
+    let env = Env::default();
+    env.mock_all_auths();
+    env.ledger().with_mut(|li| li.timestamp = 1000);
+
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+
+    let contract_id = env.register_contract(None, PaymentEscrowContract);
+    let client = PaymentEscrowContractClient::new(&env, &contract_id);
+
+    client.init_escrow(&admin);
+
+    let asset = Asset {
+        code: String::from_str(&env, "USDC"),
+        issuer: admin.clone(),
+    };
+    client.add_supported_asset(&admin, &asset);
+
+    client.create_escrow(&sender, &recipient, &1000, &asset, &2000, &String::from_str(&env, "Test 1"));
+    client.create_escrow(&sender, &recipient, &2000, &asset, &3000, &String::from_str(&env, "Test 2"));
+
+    let stats = client.get_user_statistics(&sender);
+    assert_eq!(stats.total_escrows, 2);
+    assert_eq!(stats.total_volume, 3000);
+    assert_eq!(stats.average_amount, 1500);
 }

@@ -179,6 +179,66 @@ pub struct FeeStructure {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[contracttype]
+pub struct Milestone {
+    pub description: String,
+    pub amount: i128,
+    pub completed: bool,
+    pub approved: bool,
+    pub completed_by: Option<Address>,
+    pub approved_by: Option<Address>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[contracttype]
+pub struct InsuranceConfig {
+    pub premium_rate: i128,
+    pub coverage_limit: i128,
+    pub insurer: Address,
+    pub enabled: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[contracttype]
+pub struct EscrowInsurance {
+    pub insured: bool,
+    pub premium: i128,
+    pub coverage: i128,
+    pub claimed: bool,
+    pub claim_reason: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[contracttype]
+pub struct DelegationPermissions {
+    pub can_release: bool,
+    pub can_refund: bool,
+    pub can_approve: bool,
+    pub can_dispute: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[contracttype]
+pub struct DelegationEntry {
+    pub delegate: Address,
+    pub permissions: DelegationPermissions,
+    pub delegated_at: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[contracttype]
+pub struct EscrowAnalytics {
+    pub total_volume: i128,
+    pub total_escrows: u64,
+    pub completed_escrows: u64,
+    pub refunded_escrows: u64,
+    pub disputed_escrows: u64,
+    pub average_amount: i128,
+    pub success_rate: i128,
+    pub last_updated: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[contracttype]
 pub struct Condition {
     pub condition_type: ConditionType,
     pub required: bool,
@@ -278,6 +338,7 @@ pub struct Escrow {
     pub allow_partial_release: bool,
     pub multi_party_enabled: bool,
     pub kyc_compliant: bool,
+    pub milestones: Vec<Milestone>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -364,7 +425,7 @@ pub struct RecurringPayment {
 const MAX_HOOKS: u32 = 10;
 const DEFAULT_MAX_RETRIES: u32 = 2;
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 #[contracttype]
 pub enum DataKey {
     EscrowCounter,
@@ -385,11 +446,15 @@ pub enum DataKey {
     KycEnabled,
     KycConfig,
     Dispute(u64),
-    NotificationHooks(u64),
-    NotificationHistory(u64),
-    RecurringCounter,
-    Recurring(u64),
-    RecurringHistory(u64),
+    EscrowDelegation(u64, Address),
+    DelegationHistory(u64),
+    AnalyticsTotalVolume,
+    AnalyticsEscrowCount(u32),
+    AnalyticsAverageAmount,
+    AnalyticsSuccessRate,
+    AnalyticsLastUpdate,
+    InsuranceConfig,
+    EscrowInsurance(u64),
 }
 
 #[contract]
@@ -1208,6 +1273,7 @@ impl PaymentEscrowContract {
             allow_partial_release: false,
             multi_party_enabled: false,
             kyc_compliant,
+            milestones: Vec::new(&env),
         };
 
         env.storage()
@@ -2521,7 +2587,7 @@ impl PaymentEscrowContract {
             &caller,
             0,
             symbol_short!("na"),
-            EventData::AdminAction(symbol_short!("part_enab")),
+            EventData::AdminAction(symbol_short!("na")),
         );
 
         Ok(())
@@ -2572,7 +2638,7 @@ impl PaymentEscrowContract {
             &caller,
             0,
             symbol_short!("na"),
-            EventData::AdminAction(symbol_short!("cond_add")),
+            EventData::AdminAction(symbol_short!("na")),
         );
 
         Ok(())
@@ -2610,7 +2676,7 @@ impl PaymentEscrowContract {
             &caller,
             0,
             symbol_short!("na"),
-            EventData::AdminAction(symbol_short!("cond_op")),
+            EventData::AdminAction(symbol_short!("na")),
         );
 
         Ok(())
@@ -2702,7 +2768,7 @@ impl PaymentEscrowContract {
             } else {
                 symbol_short!("fail")
             },
-            EventData::AdminAction(symbol_short!("verified")),
+            EventData::AdminAction(symbol_short!("na")),
         );
 
         Ok(result)
@@ -2740,7 +2806,7 @@ impl PaymentEscrowContract {
             &approver,
             0,
             symbol_short!("na"),
-            EventData::AdminAction(symbol_short!("approval")),
+            EventData::AdminAction(symbol_short!("na")),
         );
 
         Ok(())
@@ -2778,7 +2844,7 @@ impl PaymentEscrowContract {
             &caller,
             min_approvals as i128,
             symbol_short!("na"),
-            EventData::AdminAction(symbol_short!("min_appr")),
+            EventData::AdminAction(symbol_short!("na")),
         );
 
         Ok(())
@@ -3366,7 +3432,7 @@ impl PaymentEscrowContract {
             &caller,
             required_approvals as i128,
             symbol_short!("na"),
-            EventData::AdminAction(symbol_short!("mp_setup")),
+            EventData::AdminAction(symbol_short!("na")),
         );
 
         Ok(())
@@ -3538,7 +3604,7 @@ impl PaymentEscrowContract {
             &approver,
             approval_count as i128,
             symbol_short!("na"),
-            EventData::AdminAction(symbol_short!("mp_appr")),
+            EventData::AdminAction(symbol_short!("na")),
         );
 
         if quorum_met {
@@ -3550,7 +3616,7 @@ impl PaymentEscrowContract {
                 &env.current_contract_address(),
                 approval_count as i128,
                 symbol_short!("na"),
-                EventData::AdminAction(symbol_short!("quorum")),
+                EventData::AdminAction(symbol_short!("na")),
             );
         }
 
@@ -3872,6 +3938,607 @@ impl PaymentEscrowContract {
 
     pub fn is_rate_limit_exempt(env: Env, address: Address) -> bool {
         rate_limit::is_exempt(&env, &address)
+    }
+
+    // ── Delegation Functions (#132) ────────────────────────────────────
+
+    pub fn delegate_escrow(
+        env: Env,
+        escrow_id: u64,
+        caller: Address,
+        delegate: Address,
+        permissions: DelegationPermissions,
+    ) -> Result<(), Error> {
+        caller.require_auth();
+
+        let escrow: Escrow = env
+            .storage()
+            .instance()
+            .get(&DataKey::Escrow(escrow_id))
+            .ok_or(Error::EscrowNotFound)?;
+
+        let stored_admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
+        if caller != escrow.sender && caller != stored_admin {
+            return Err(Error::Unauthorized);
+        }
+
+        let delegation_key = DataKey::EscrowDelegation(escrow_id, delegate.clone());
+        if env.storage().instance().has(&delegation_key) {
+            return Err(Error::AlreadyApproved);
+        }
+
+        let entry = DelegationEntry {
+            delegate: delegate.clone(),
+            permissions,
+            delegated_at: env.ledger().timestamp(),
+        };
+
+        env.storage()
+            .instance()
+            .set(&delegation_key, &entry);
+
+        let mut history: Vec<DelegationEntry> = env
+            .storage()
+            .instance()
+            .get(&DataKey::DelegationHistory(escrow_id))
+            .unwrap_or(Vec::new(&env));
+        history.push_back(entry);
+        env.storage()
+            .instance()
+            .set(&DataKey::DelegationHistory(escrow_id), &history);
+
+        events::emit(
+            &env,
+            symbol_short!("escrow"),
+            symbol_short!("delegate"),
+            escrow_id,
+            &caller,
+            0,
+            symbol_short!("na"),
+            EventData::AdminAction(symbol_short!("na")),
+        );
+
+        Ok(())
+    }
+
+    pub fn revoke_delegation(
+        env: Env,
+        escrow_id: u64,
+        caller: Address,
+        delegate: Address,
+    ) -> Result<(), Error> {
+        caller.require_auth();
+
+        let escrow: Escrow = env
+            .storage()
+            .instance()
+            .get(&DataKey::Escrow(escrow_id))
+            .ok_or(Error::EscrowNotFound)?;
+
+        let stored_admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
+        if caller != escrow.sender && caller != stored_admin {
+            return Err(Error::Unauthorized);
+        }
+
+        let delegation_key = DataKey::EscrowDelegation(escrow_id, delegate.clone());
+        if !env.storage().instance().has(&delegation_key) {
+            return Err(Error::ApprovalNotFound);
+        }
+
+        env.storage().instance().remove(&delegation_key);
+
+        events::emit(
+            &env,
+            symbol_short!("escrow"),
+            symbol_short!("revoke_d"),
+            escrow_id,
+            &caller,
+            0,
+            symbol_short!("na"),
+            EventData::AdminAction(symbol_short!("na")),
+        );
+
+        Ok(())
+    }
+
+    pub fn get_delegation(
+        env: Env,
+        escrow_id: u64,
+        delegate: Address,
+    ) -> Option<DelegationEntry> {
+        env.storage()
+            .instance()
+            .get(&DataKey::EscrowDelegation(escrow_id, delegate))
+    }
+
+    pub fn get_delegation_history(env: Env, escrow_id: u64) -> Vec<DelegationEntry> {
+        env.storage()
+            .instance()
+            .get(&DataKey::DelegationHistory(escrow_id))
+            .unwrap_or(Vec::new(&env))
+    }
+
+    fn check_delegated_permission(
+        env: &Env,
+        escrow_id: u64,
+        caller: &Address,
+        permission_check: fn(&DelegationPermissions) -> bool,
+    ) -> Result<bool, Error> {
+        let delegation_key = DataKey::EscrowDelegation(escrow_id, caller.clone());
+        if let Some(entry) = env.storage().instance().get::<_, DelegationEntry>(&delegation_key) {
+            Ok(permission_check(&entry.permissions))
+        } else {
+            Ok(false)
+        }
+    }
+
+    // ── Insurance Functions (#131) ─────────────────────────────────────
+
+    pub fn set_insurance_config(
+        env: Env,
+        admin: Address,
+        config: InsuranceConfig,
+    ) -> Result<(), Error> {
+        admin.require_auth();
+
+        let stored_admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
+        if admin != stored_admin {
+            return Err(Error::Unauthorized);
+        }
+
+        env.storage()
+            .instance()
+            .set(&DataKey::InsuranceConfig, &config);
+
+        events::emit(
+            &env,
+            symbol_short!("escrow"),
+            symbol_short!("ins_cfg"),
+            0,
+            &admin,
+            0,
+            symbol_short!("na"),
+            EventData::AdminAction(symbol_short!("na")),
+        );
+
+        Ok(())
+    }
+
+    pub fn get_insurance_config(env: Env) -> Option<InsuranceConfig> {
+        env.storage().instance().get(&DataKey::InsuranceConfig)
+    }
+
+    pub fn insure_escrow(
+        env: Env,
+        escrow_id: u64,
+        caller: Address,
+    ) -> Result<(), Error> {
+        caller.require_auth();
+
+        let mut escrow: Escrow = env
+            .storage()
+            .instance()
+            .get(&DataKey::Escrow(escrow_id))
+            .ok_or(Error::EscrowNotFound)?;
+
+        if caller != escrow.sender {
+            return Err(Error::Unauthorized);
+        }
+
+        if env.storage().instance().has(&DataKey::EscrowInsurance(escrow_id)) {
+            return Err(Error::AlreadyApproved);
+        }
+
+        let config: InsuranceConfig = env
+            .storage()
+            .instance()
+            .get(&DataKey::InsuranceConfig)
+            .ok_or(Error::ConditionsNotMet)?;
+
+        if !config.enabled {
+            return Err(Error::ConditionsNotMet);
+        }
+
+        let premium = escrow
+            .amount
+            .checked_mul(config.premium_rate)
+            .ok_or(Error::ArithmeticOverflow)?
+            .checked_div(10000)
+            .ok_or(Error::ArithmeticOverflow)?;
+
+        let coverage = if config.coverage_limit > 0 && config.coverage_limit < escrow.amount {
+            config.coverage_limit
+        } else {
+            escrow.amount
+        };
+
+        let insurance = EscrowInsurance {
+            insured: true,
+            premium,
+            coverage,
+            claimed: false,
+            claim_reason: None,
+        };
+
+        env.storage()
+            .instance()
+            .set(&DataKey::EscrowInsurance(escrow_id), &insurance);
+
+        events::emit(
+            &env,
+            symbol_short!("escrow"),
+            symbol_short!("insured"),
+            escrow_id,
+            &caller,
+            premium,
+            symbol_short!("na"),
+            EventData::AdminAction(symbol_short!("na")),
+        );
+
+        Ok(())
+    }
+
+    pub fn claim_insurance(
+        env: Env,
+        escrow_id: u64,
+        caller: Address,
+        reason: String,
+    ) -> Result<(), Error> {
+        caller.require_auth();
+
+        let escrow: Escrow = env
+            .storage()
+            .instance()
+            .get(&DataKey::Escrow(escrow_id))
+            .ok_or(Error::EscrowNotFound)?;
+
+        let mut insurance: EscrowInsurance = env
+            .storage()
+            .instance()
+            .get(&DataKey::EscrowInsurance(escrow_id))
+            .ok_or(Error::ConditionsNotMet)?;
+
+        if insurance.claimed {
+            return Err(Error::AlreadyReleased);
+        }
+
+        if caller != escrow.recipient && caller != escrow.sender {
+            return Err(Error::Unauthorized);
+        }
+
+        if reason.len() == 0 {
+            return Err(Error::InvalidAmount);
+        }
+
+        insurance.claimed = true;
+        insurance.claim_reason = Some(reason);
+
+        env.storage()
+            .instance()
+            .set(&DataKey::EscrowInsurance(escrow_id), &insurance);
+
+        events::emit(
+            &env,
+            symbol_short!("escrow"),
+            symbol_short!("ins_clm"),
+            escrow_id,
+            &caller,
+            insurance.coverage,
+            symbol_short!("na"),
+            EventData::AdminAction(symbol_short!("na")),
+        );
+
+        Ok(())
+    }
+
+    pub fn get_escrow_insurance(env: Env, escrow_id: u64) -> Option<EscrowInsurance> {
+        env.storage().instance().get(&DataKey::EscrowInsurance(escrow_id))
+    }
+
+    // ── Milestone Functions (#129) ─────────────────────────────────────
+
+    pub fn complete_milestone(
+        env: Env,
+        escrow_id: u64,
+        milestone_index: u32,
+        caller: Address,
+    ) -> Result<(), Error> {
+        caller.require_auth();
+
+        let mut escrow: Escrow = env
+            .storage()
+            .instance()
+            .get(&DataKey::Escrow(escrow_id))
+            .ok_or(Error::EscrowNotFound)?;
+
+        let stored_admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
+        if caller != escrow.sender && caller != stored_admin {
+            return Err(Error::Unauthorized);
+        }
+
+        if milestone_index >= escrow.milestones.len() {
+            return Err(Error::InvalidStatus);
+        }
+
+        let mut milestone = escrow.milestones.get(milestone_index).unwrap();
+        if milestone.completed {
+            return Err(Error::AlreadyApproved);
+        }
+
+        milestone.completed = true;
+        milestone.completed_by = Some(caller.clone());
+        escrow.milestones.set(milestone_index, milestone);
+
+        env.storage()
+            .instance()
+            .set(&DataKey::Escrow(escrow_id), &escrow);
+
+        events::emit(
+            &env,
+            symbol_short!("escrow"),
+            symbol_short!("ms_comp"),
+            escrow_id,
+            &caller,
+            milestone_index as i128,
+            symbol_short!("na"),
+            EventData::AdminAction(symbol_short!("na")),
+        );
+
+        Ok(())
+    }
+
+    pub fn approve_milestone(
+        env: Env,
+        escrow_id: u64,
+        milestone_index: u32,
+        approver: Address,
+    ) -> Result<(), Error> {
+        approver.require_auth();
+
+        let mut escrow: Escrow = env
+            .storage()
+            .instance()
+            .get(&DataKey::Escrow(escrow_id))
+            .ok_or(Error::EscrowNotFound)?;
+
+        if approver != escrow.recipient {
+            return Err(Error::Unauthorized);
+        }
+
+        if milestone_index >= escrow.milestones.len() {
+            return Err(Error::InvalidStatus);
+        }
+
+        let milestone = escrow.milestones.get(milestone_index).unwrap();
+        if !milestone.completed {
+            return Err(Error::NotApproved);
+        }
+        if milestone.approved {
+            return Err(Error::AlreadyApproved);
+        }
+
+        let milestone_amount = milestone.amount;
+        let mut milestone_mut = milestone;
+        milestone_mut.approved = true;
+        milestone_mut.approved_by = Some(approver.clone());
+        escrow.milestones.set(milestone_index, milestone_mut);
+
+        escrow.released_amount = escrow
+            .released_amount
+            .checked_add(milestone_amount)
+            .ok_or(Error::ArithmeticOverflow)?;
+
+        let total_released = escrow.released_amount;
+        if total_released >= escrow.deposited_amount {
+            escrow.status = EscrowStatus::Released;
+        }
+
+        env.storage()
+            .instance()
+            .set(&DataKey::Escrow(escrow_id), &escrow);
+
+        events::emit(
+            &env,
+            symbol_short!("escrow"),
+            symbol_short!("ms_appr"),
+            escrow_id,
+            &approver,
+            milestone_amount,
+            symbol_short!("na"),
+            EventData::AdminAction(symbol_short!("na")),
+        );
+
+        Ok(())
+    }
+
+    pub fn get_milestones(env: Env, escrow_id: u64) -> Vec<Milestone> {
+        let escrow_opt: Option<Escrow> = env.storage().instance().get(&DataKey::Escrow(escrow_id));
+        match escrow_opt {
+            Some(e) => e.milestones,
+            None => Vec::new(&env),
+        }
+    }
+
+    pub fn add_milestone(
+        env: Env,
+        escrow_id: u64,
+        caller: Address,
+        description: String,
+        amount: i128,
+    ) -> Result<(), Error> {
+        caller.require_auth();
+
+        let mut escrow: Escrow = env
+            .storage()
+            .instance()
+            .get(&DataKey::Escrow(escrow_id))
+            .ok_or(Error::EscrowNotFound)?;
+
+        let stored_admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
+        if caller != escrow.sender && caller != stored_admin {
+            return Err(Error::Unauthorized);
+        }
+
+        if escrow.status != EscrowStatus::Pending && escrow.status != EscrowStatus::Funded {
+            return Err(Error::InvalidStatus);
+        }
+
+        if amount <= 0 {
+            return Err(Error::InvalidAmount);
+        }
+
+        let milestone = Milestone {
+            description,
+            amount,
+            completed: false,
+            approved: false,
+            completed_by: None,
+            approved_by: None,
+        };
+
+        escrow.milestones.push_back(milestone);
+        env.storage()
+            .instance()
+            .set(&DataKey::Escrow(escrow_id), &escrow);
+
+        events::emit(
+            &env,
+            symbol_short!("escrow"),
+            symbol_short!("ms_add"),
+            escrow_id,
+            &caller,
+            amount,
+            symbol_short!("na"),
+            EventData::AdminAction(symbol_short!("na")),
+        );
+
+        Ok(())
+    }
+
+    // ── Analytics Functions (#130) ─────────────────────────────────────
+
+    pub fn get_total_escrow_volume(env: Env) -> i128 {
+        let mut total: i128 = 0;
+        let counter: u64 = env
+            .storage()
+            .instance()
+            .get(&DataKey::EscrowCounter)
+            .unwrap_or(0);
+        for i in 1..=counter {
+            if let Some(escrow) = env.storage().instance().get::<_, Escrow>(&DataKey::Escrow(i)) {
+                total = total.checked_add(escrow.amount).unwrap_or(total);
+            }
+        }
+        env.storage()
+            .instance()
+            .set(&DataKey::AnalyticsTotalVolume, &total);
+        total
+    }
+
+    pub fn get_escrow_count_by_status(env: Env, status: EscrowStatus) -> u64 {
+        let mut count: u64 = 0;
+        let counter: u64 = env
+            .storage()
+            .instance()
+            .get(&DataKey::EscrowCounter)
+            .unwrap_or(0);
+        for i in 1..=counter {
+            if let Some(escrow) = env.storage().instance().get::<_, Escrow>(&DataKey::Escrow(i)) {
+                if escrow.status == status {
+                    count += 1;
+                }
+            }
+        }
+        count
+    }
+
+    pub fn get_average_escrow_amount(env: Env) -> i128 {
+        let counter: u64 = env
+            .storage()
+            .instance()
+            .get(&DataKey::EscrowCounter)
+            .unwrap_or(0);
+        if counter == 0 {
+            return 0;
+        }
+        let mut total: i128 = 0;
+        for i in 1..=counter {
+            if let Some(escrow) = env.storage().instance().get::<_, Escrow>(&DataKey::Escrow(i)) {
+                total = total.checked_add(escrow.amount).unwrap_or(total);
+            }
+        }
+        total / (counter as i128)
+    }
+
+    pub fn get_success_rate(env: Env) -> i128 {
+        let counter: u64 = env
+            .storage()
+            .instance()
+            .get(&DataKey::EscrowCounter)
+            .unwrap_or(0);
+        if counter == 0 {
+            return 0;
+        }
+        let mut completed: u64 = 0;
+        for i in 1..=counter {
+            if let Some(escrow) = env.storage().instance().get::<_, Escrow>(&DataKey::Escrow(i)) {
+                if escrow.status == EscrowStatus::Released {
+                    completed += 1;
+                }
+            }
+        }
+        (completed as i128) * 10000 / (counter as i128)
+    }
+
+    pub fn get_user_statistics(env: Env, user: Address) -> EscrowAnalytics {
+        let counter: u64 = env
+            .storage()
+            .instance()
+            .get(&DataKey::EscrowCounter)
+            .unwrap_or(0);
+        let mut total_volume: i128 = 0;
+        let mut total_escrows: u64 = 0;
+        let mut completed: u64 = 0;
+        let mut refunded: u64 = 0;
+        let mut disputed: u64 = 0;
+
+        for i in 1..=counter {
+            if let Some(escrow) = env.storage().instance().get::<_, Escrow>(&DataKey::Escrow(i)) {
+                if escrow.sender == user || escrow.recipient == user {
+                    total_escrows += 1;
+                    total_volume = total_volume.checked_add(escrow.amount).unwrap_or(total_volume);
+                    match escrow.status {
+                        EscrowStatus::Released => completed += 1,
+                        EscrowStatus::Refunded | EscrowStatus::Expired => refunded += 1,
+                        EscrowStatus::Disputed => disputed += 1,
+                        _ => {}
+                    }
+                }
+            }
+        }
+
+        let average = if total_escrows > 0 {
+            total_volume / (total_escrows as i128)
+        } else {
+            0
+        };
+
+        let success_rate = if total_escrows > 0 {
+            (completed as i128) * 10000 / (total_escrows as i128)
+        } else {
+            0
+        };
+
+        EscrowAnalytics {
+            total_volume,
+            total_escrows,
+            completed_escrows: completed,
+            refunded_escrows: refunded,
+            disputed_escrows: disputed,
+            average_amount: average,
+            success_rate,
+            last_updated: env.ledger().timestamp(),
+        }
     }
 }
 
