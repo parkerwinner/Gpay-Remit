@@ -1,15 +1,12 @@
 // Pause mechanism tests
-// 
+//
 // The contract uses upgradeable::is_paused() to check if operations should be blocked.
 // These tests verify that pause checks are in place for critical operations.
 
 use gpay_remit_contracts::payment_escrow::{
     Asset, Error, PaymentEscrowContract, PaymentEscrowContractClient, RefundReason,
 };
-use soroban_sdk::{
-    testutils::{Address as _},
-    token, Address, Env, String,
-};
+use soroban_sdk::{testutils::Address as _, token, Address, Env, String};
 
 fn create_token_contract<'a>(
     env: &Env,
@@ -70,7 +67,7 @@ fn test_create_escrow_has_pause_check() {
     );
 
     assert_eq!(escrow_id, 1);
-    
+
     // Note: The contract checks upgradeable::is_paused() and returns Error::ContractPaused
     // To test the pause functionality, pause/unpause methods would need to be exposed
 }
@@ -249,6 +246,6 @@ fn test_pause_mechanism_exists() {
     //
     // To fully test pause functionality, pause/unpause methods would need to be
     // exposed as contract methods (currently they are helper functions).
-    
+
     assert!(true); // Documentation test
 }

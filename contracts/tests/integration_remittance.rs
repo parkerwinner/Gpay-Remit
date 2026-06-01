@@ -8,7 +8,7 @@
 #[cfg(feature = "integration")]
 mod integration_remittance {
     use gpay_remit_contracts::payment_escrow::{
-        Asset, EscrowStatus, Error, PaymentEscrowContract, PaymentEscrowContractClient,
+        Asset, Error, EscrowStatus, PaymentEscrowContract, PaymentEscrowContractClient,
     };
     use soroban_sdk::{
         testutils::{Address as _, Ledger},
@@ -126,7 +126,12 @@ mod integration_remittance {
         env.ledger().with_mut(|li| li.timestamp = expiration + 1);
 
         let pre_balance = token.balance(&sender);
-        client.refund_escrow(&escrow_id, &sender, &token.address, &gpay_remit_contracts::payment_escrow::RefundReason::Expiration);
+        client.refund_escrow(
+            &escrow_id,
+            &sender,
+            &token.address,
+            &gpay_remit_contracts::payment_escrow::RefundReason::Expiration,
+        );
 
         let post = client.get_escrow(&escrow_id).unwrap();
         assert_eq!(post.status, EscrowStatus::Refunded);
@@ -261,7 +266,12 @@ mod integration_remittance {
 
         client.deposit(&escrow_id, &sender, &amount, &token.address);
 
-        let result = client.try_refund_escrow(&escrow_id, &sender, &token.address, &gpay_remit_contracts::payment_escrow::RefundReason::Expiration);
+        let result = client.try_refund_escrow(
+            &escrow_id,
+            &sender,
+            &token.address,
+            &gpay_remit_contracts::payment_escrow::RefundReason::Expiration,
+        );
         assert_eq!(result, Err(Ok(Error::NotExpired)));
     }
 

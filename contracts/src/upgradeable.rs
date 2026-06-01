@@ -1,4 +1,4 @@
-use soroban_sdk::{contracttype, contracterror, BytesN, Env, Address, symbol_short};
+use soroban_sdk::{contracterror, contracttype, symbol_short, Address, BytesN, Env};
 
 // ---------------------------------------------------------------------------
 // Errors
@@ -71,9 +71,7 @@ pub fn pause(env: &Env, admin: &Address) -> Result<(), UpgradeError> {
     if is_paused(env) {
         return Err(UpgradeError::AlreadyPaused);
     }
-    env.storage()
-        .instance()
-        .set(&UpgradeDataKey::Paused, &true);
+    env.storage().instance().set(&UpgradeDataKey::Paused, &true);
     env.events().publish((symbol_short!("paused"),), true);
     Ok(())
 }
@@ -103,17 +101,11 @@ pub fn unpause(env: &Env, admin: &Address) -> Result<(), UpgradeError> {
 /// for all **future** invocations while preserving the contract address and
 /// all stored data — this is the Soroban-native equivalent of a proxy /
 /// delegatecall pattern.
-pub fn upgrade(
-    env: &Env,
-    admin: &Address,
-    new_wasm_hash: BytesN<32>,
-) -> Result<(), UpgradeError> {
+pub fn upgrade(env: &Env, admin: &Address, new_wasm_hash: BytesN<32>) -> Result<(), UpgradeError> {
     admin.require_auth();
 
     // Pause during upgrade
-    env.storage()
-        .instance()
-        .set(&UpgradeDataKey::Paused, &true);
+    env.storage().instance().set(&UpgradeDataKey::Paused, &true);
 
     // Bump version
     let current = get_version(env);
@@ -129,8 +121,7 @@ pub fn upgrade(
     );
 
     // Replace the contract code (takes effect from the next invocation)
-    env.deployer()
-        .update_current_contract_wasm(new_wasm_hash);
+    env.deployer().update_current_contract_wasm(new_wasm_hash);
 
     Ok(())
 }
@@ -149,8 +140,7 @@ pub fn migrate(env: &Env, admin: &Address) -> Result<u32, UpgradeError> {
         .set(&UpgradeDataKey::Paused, &false);
 
     let version = get_version(env);
-    env.events()
-        .publish((symbol_short!("migrated"),), version);
+    env.events().publish((symbol_short!("migrated"),), version);
 
     Ok(version)
 }
