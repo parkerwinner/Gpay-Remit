@@ -87,14 +87,13 @@ func main() {
 			auditHandler := handlers.NewAuditLogHandler(db)
 			protected.GET("/audit/logs", middleware.RequireRole("admin"), auditHandler.List)
 
-<<<<<<< HEAD
 			exportHandler := handlers.NewExportHandler(db)
 			protected.GET("/transactions/export", exportHandler.ExportTransactions)
 
 			// Admin rate limit management endpoints
 			protected.POST("/admin/rate-limit/reset", middleware.RequireRole("admin"), middleware.AdminResetRateLimit(cfg))
 			protected.GET("/admin/rate-limit/view", middleware.RequireRole("admin"), middleware.AdminViewRateLimits(cfg))
-=======
+
 			// Webhook endpoints
 			webhookHandler := handlers.NewWebhookHandler(db)
 			protected.POST("/webhooks", webhookHandler.CreateWebhook)
@@ -104,21 +103,8 @@ func main() {
 			protected.DELETE("/webhooks/:id", webhookHandler.DeleteWebhook)
 			protected.GET("/webhooks/:id/deliveries", webhookHandler.GetWebhookDeliveries)
 			protected.POST("/webhooks/deliveries/:delivery_id/retry", webhookHandler.RetryWebhookDelivery)
->>>>>>> feature/backend-webhook-system
 		}
-	}
-
-	port := cfg.Port
-	if port == "" {
-		port = "8080"
-	}
-
-	var shuttingDown atomic.Bool
-	router.Use(func(c *gin.Context) {
-		if shuttingDown.Load() {
-			c.AbortWithStatusJSON(http.StatusServiceUnavailable, gin.H{
-				"error": "server is shutting down",
-			})
+	}	})
 			return
 		}
 		c.Next()
