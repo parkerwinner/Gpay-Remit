@@ -87,12 +87,24 @@ func main() {
 			auditHandler := handlers.NewAuditLogHandler(db)
 			protected.GET("/audit/logs", middleware.RequireRole("admin"), auditHandler.List)
 
+<<<<<<< HEAD
 			exportHandler := handlers.NewExportHandler(db)
 			protected.GET("/transactions/export", exportHandler.ExportTransactions)
 
 			// Admin rate limit management endpoints
 			protected.POST("/admin/rate-limit/reset", middleware.RequireRole("admin"), middleware.AdminResetRateLimit(cfg))
 			protected.GET("/admin/rate-limit/view", middleware.RequireRole("admin"), middleware.AdminViewRateLimits(cfg))
+=======
+			// Webhook endpoints
+			webhookHandler := handlers.NewWebhookHandler(db)
+			protected.POST("/webhooks", webhookHandler.CreateWebhook)
+			protected.GET("/webhooks", webhookHandler.ListWebhooks)
+			protected.GET("/webhooks/:id", webhookHandler.GetWebhook)
+			protected.PUT("/webhooks/:id", webhookHandler.UpdateWebhook)
+			protected.DELETE("/webhooks/:id", webhookHandler.DeleteWebhook)
+			protected.GET("/webhooks/:id/deliveries", webhookHandler.GetWebhookDeliveries)
+			protected.POST("/webhooks/deliveries/:delivery_id/retry", webhookHandler.RetryWebhookDelivery)
+>>>>>>> feature/backend-webhook-system
 		}
 	}
 
