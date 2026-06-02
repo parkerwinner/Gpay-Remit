@@ -48,6 +48,217 @@ fn setup_test<'a>(
     (client, admin, sender, recipient, token, asset)
 }
 
+// ── extend_escrow tests ───────────────────────────────────────────────────
+
+#[test]
+fn test_extend_escrow_by_sender() {
+    let env = Env::default();
+    let (client, _admin, sender, _recipient, (_, token_admin), asset) = setup_test(&env);
+
+    let amount = 1000;
+    let expiration = 2000u64;
+
+    env.ledger().with_mut(|li| li.timestamp = 1000);
+    token_admin.mint(&sender, &amount);
+
+    let escrow_id = client.create_escrow(
+        &sender,
+        &_recipient,
+        &amount,
+        &asset,
+        &expiration,
+        &String::from_str(&env, "Test"),
+    );
+
+    // Sender extends expiration
+    let new_expiration = 3000u64;
+    let result = client.try_extend_escrow(&escrow_id, &sender, &new_expiration);
+    assert!(result.is_ok());
+
+    let escrow = client.get_escrow(&escrow_id).unwrap();
+    assert_eq!(escrow.release_conditions.expiration_timestamp, new_expiration);
+}
+
+#[test]
+fn test_extend_escrow_by_recipient() {
+    let env = Env::default();
+    let (client, _admin, sender, recipient, (_, token_admin), asset) = setup_test(&env);
+
+    let amount = 1000;
+    let expiration = 2000u64;
+
+    env.ledger().with_mut(|li| li.timestamp = 1000);
+    token_admin.mint(&sender, &amount);
+
+    let escrow_id = client.create_escrow(
+        &sender,
+        &recipient,
+        &amount,
+        &asset,
+        &expiration,
+        &String::from_str(&env, "Test"),
+    );
+
+    // Recipient extends expiration
+    let new_expiration = 3000u64;
+    let result = client.try_extend_escrow(&escrow_id, &recipient, &new_expiration);
+    assert!(result.is_ok());
+
+    let escrow = client.get_escrow(&escrow_id).unwrap();
+    assert_eq!(escrow.release_conditions.expiration_timestamp, new_expiration);
+}
+
+#[test]
+fn test_extend_escrow_unauthorized() {
+    let env = Env::default();
+    let (client, _admin, sender, recipient, (_, token_admin), asset) = setup_test(&env);
+
+    let amount = 1000;
+    let expiration = 2000u64;
+
+    env.ledger().with_mut(|li| li.timestamp = 1000);
+    token_admin.mint(&sender, &amount);
+
+    let escrow_id = client.create_escrow(
+        &sender,
+        &recipient,
+        &amount,
+        &asset,
+        &expiration,
+        &String::from_str(&env, "Test"),
+    );
+
+    let stranger = Address::generate(&env);
+    let result = client.try_extend_escrow(&escrow_id, &stranger, &3000u64);
+    assert_eq!(result, Err(Ok(Error::Unauthorized)));
+}
+
+#[test]
+fn test_extend_escrow_after_expiration_fails() {
+    let env = Env::default();
+    let (client, _admin, sender, recipient, (_, token_admin), asset) = setup_test(&env);
+
+    let amount = 1000;
+    let expiration = 2000u64;
+
+    env.ledger().with_mut(|li| li.timestamp = 1000);
+    token_admin.mint(&sender, &amount);
+
+    let escrow_id = client.create_escrow(
+        &sender,
+        &recipient,
+        &amount,
+        &asset,
+        &expiration,
+        &String::from_str(&env, "Test"),
+    );
+
+    // Advance past expiration
+    env.ledger().with_mut(|li| li.timestamp = expiration + 1);
+
+    let result = client.try_extend_escrow(&escrow_id, &sender, &(expiration + 5000));
+    assert_eq!(result, Err(Ok(Error::Expired)));
+}
+
+#[test]
+fn test_extend_escrow_new_expiration_in_past_fails() {
+    let env = Env::default();
+    let (client, _admin, sender, recipient, (_, token_admin), asset) = setup_test(&env);
+
+    let amount = 1000;
+    let expiration = 2000u64;
+
+    env.ledger().with_mut(|li| li.timestamp = 1500);
+    token_admin.mint(&sender, &amount);
+
+    let escrow_id = client.create_escrow(
+        &sender,
+        &recipient,
+        &amount,
+        &asset,
+        &expiration,
+        &String::from_str(&env, "Test"),
+    );
+
+    // New expiration is in the past relative to current time (1500)
+    let result = client.try_extend_escrow(&escrow_id, &sender, &1000u64);
+    assert_eq!(result, Err(Ok(Error::InvalidAmount)));
+}
+
+#[test]
+fn test_extend_escrow_new_expiration_at_current_time_fails() {
+    let env = Env::default();
+    let (client, _admin, sender, recipient, (_, token_admin), asset) = setup_test(&env);
+
+    let amount = 1000;
+    let expiration = 2000u64;
+
+    env.ledger().with_mut(|li| li.timestamp = 1500);
+    token_admin.mint(&sender, &amount);
+
+    let escrow_id = client.create_escrow(
+        &sender,
+        &recipient,
+        &amount,
+        &asset,
+        &expiration,
+        &String::from_str(&env, "Test"),
+    );
+
+    // new_expiration == current_time should be rejected (must be strictly in future)
+    let result = client.try_extend_escrow(&escrow_id, &sender, &1500u64);
+    assert_eq!(result, Err(Ok(Error::InvalidAmount)));
+}
+
+#[test]
+fn test_extend_escrow_allows_release_in_extended_window() {
+    let env = Env::default();
+    let (client, _admin, sender, recipient, (token, token_admin), asset) = setup_test(&env);
+
+    let amount = 1000;
+    let expiration = 2000u64;
+
+    env.ledger().with_mut(|li| li.timestamp = 1000);
+    token_admin.mint(&sender, &amount);
+
+    let escrow_id = client.create_escrow(
+        &sender,
+        &recipient,
+        &amount,
+        &asset,
+        &expiration,
+        &String::from_str(&env, "Test"),
+    );
+
+    client.deposit(&escrow_id, &sender, &amount, &token.address);
+
+    // Extend before original expiration
+    env.ledger().with_mut(|li| li.timestamp = 1800);
+    client.extend_escrow(&escrow_id, &sender, &3000u64);
+
+    // Advance past original expiration but within new window
+    env.ledger().with_mut(|li| li.timestamp = 2500);
+
+    let result = client.try_release_escrow(&escrow_id, &recipient, &token.address);
+    assert!(result.is_ok());
+
+    let escrow = client.get_escrow(&escrow_id).unwrap();
+    assert_eq!(escrow.status, EscrowStatus::Released);
+}
+
+#[test]
+fn test_extend_escrow_not_found() {
+    let env = Env::default();
+    let (client, _admin, sender, _recipient, _token, _asset) = setup_test(&env);
+
+    env.ledger().with_mut(|li| li.timestamp = 1000);
+
+    let result = client.try_extend_escrow(&999u64, &sender, &5000u64);
+    assert_eq!(result, Err(Ok(Error::EscrowNotFound)));
+}
+
+// ── expiration boundary tests ─────────────────────────────────────────────
+
 // Test expiration at exact timestamp boundary
 #[test]
 fn test_expiration_at_exact_boundary() {

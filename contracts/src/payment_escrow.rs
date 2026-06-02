@@ -2229,6 +2229,52 @@ impl PaymentEscrowContract {
 
         Ok(())
     }
+    pub fn extend_escrow(
+        env: Env,
+        escrow_id: u64,
+        caller: Address,
+        new_expiration: u64,
+    ) -> Result<(), Error> {
+        caller.require_auth();
+
+        let mut escrow: Escrow = env
+            .storage()
+            .instance()
+            .get(&DataKey::Escrow(escrow_id))
+            .ok_or(Error::EscrowNotFound)?;
+
+        if caller != escrow.sender && caller != escrow.recipient {
+            return Err(Error::Unauthorized);
+        }
+
+        let current_time = env.ledger().timestamp();
+        if current_time > escrow.release_conditions.expiration_timestamp {
+            return Err(Error::Expired);
+        }
+
+        if new_expiration <= current_time {
+            return Err(Error::InvalidAmount);
+        }
+
+        escrow.release_conditions.expiration_timestamp = new_expiration;
+        env.storage()
+            .instance()
+            .set(&DataKey::Escrow(escrow_id), &escrow);
+
+        events::emit(
+            &env,
+            symbol_short!("escrow"),
+            symbol_short!("extended"),
+            escrow_id,
+            &caller,
+            new_expiration as i128,
+            symbol_short!("active"),
+            EventData::EscrowExtended(escrow_id, new_expiration),
+        );
+
+        Ok(())
+    }
+
     pub fn release_escrow(
         env: Env,
         escrow_id: u64,
