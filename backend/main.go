@@ -89,6 +89,10 @@ func main() {
 
 			exportHandler := handlers.NewExportHandler(db)
 			protected.GET("/transactions/export", exportHandler.ExportTransactions)
+
+			// Admin rate limit management endpoints
+			protected.POST("/admin/rate-limit/reset", middleware.RequireRole("admin"), middleware.AdminResetRateLimit(cfg))
+			protected.GET("/admin/rate-limit/view", middleware.RequireRole("admin"), middleware.AdminViewRateLimits(cfg))
 		}
 	}
 
