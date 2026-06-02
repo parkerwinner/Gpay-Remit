@@ -15,6 +15,7 @@ pub enum EventData {
     EscrowApproved(u64),
     EscrowReleased(u64, i128),
     EscrowRefunded(u64, i128),
+    EscrowExtended(u64, u64),
     InvoiceCreated(u64, u64, Address, Address, AssetRef, i128),
     InvoicePaid(u64, u64, i128),
     InvoiceUpdated(u64, i128, i128),
