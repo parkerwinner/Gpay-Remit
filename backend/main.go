@@ -85,6 +85,16 @@ func main() {
 
 			auditHandler := handlers.NewAuditLogHandler(db)
 			protected.GET("/audit/logs", middleware.RequireRole("admin"), auditHandler.List)
+
+			// Webhook endpoints
+			webhookHandler := handlers.NewWebhookHandler(db)
+			protected.POST("/webhooks", webhookHandler.CreateWebhook)
+			protected.GET("/webhooks", webhookHandler.ListWebhooks)
+			protected.GET("/webhooks/:id", webhookHandler.GetWebhook)
+			protected.PUT("/webhooks/:id", webhookHandler.UpdateWebhook)
+			protected.DELETE("/webhooks/:id", webhookHandler.DeleteWebhook)
+			protected.GET("/webhooks/:id/deliveries", webhookHandler.GetWebhookDeliveries)
+			protected.POST("/webhooks/deliveries/:delivery_id/retry", webhookHandler.RetryWebhookDelivery)
 		}
 	}
 
