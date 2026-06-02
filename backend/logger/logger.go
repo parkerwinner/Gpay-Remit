@@ -56,3 +56,51 @@ func parseLevel(s string) logrus.Level {
 func WithFields(fields logrus.Fields) *logrus.Entry {
 	return Log.WithFields(fields)
 }
+
+// WithCorrelation returns a log entry pre-populated with correlation identifiers.
+// Use this whenever you want to tie a log line to a specific request or user.
+func WithCorrelation(correlationID, requestID string, userID interface{}) *logrus.Entry {
+	return Log.WithFields(logrus.Fields{
+		"correlation_id": correlationID,
+		"request_id":     requestID,
+		"user_id":        userID,
+	})
+}
+
+// sensitiveKeys is the set of JSON body keys whose values are replaced with
+// "[REDACTED]" before the body is written to the log.
+var sensitiveKeys = map[string]struct{}{
+	"password":              {},
+	"password_confirmation": {},
+	"current_password":      {},
+	"new_password":          {},
+	"token":                 {},
+	"access_token":          {},
+	"refresh_token":         {},
+	"secret":                {},
+	"api_key":               {},
+	"private_key":           {},
+	"card_number":           {},
+	"cvv":                   {},
+	"pin":                   {},
+}
+
+// SanitizeBody walks a decoded JSON body (map[string]interface{}) and replaces
+// the values of any sensitive keys with the string "[REDACTED]".
+// Non-map values are returned unchanged.
+func SanitizeBody(body interface{}) interface{} {
+	m, ok := body.(map[string]interface{})
+	if !ok {
+		return body
+	}
+	out := make(map[string]interface{}, len(m))
+	for k, v := range m {
+		if _, sensitive := sensitiveKeys[strings.ToLower(k)]; sensitive {
+			out[k] = "[REDACTED]"
+		} else {
+			// Recurse into nested objects.
+			out[k] = SanitizeBody(v)
+		}
+	}
+	return out
+}
