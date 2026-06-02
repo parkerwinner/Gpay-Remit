@@ -38,6 +38,14 @@ type Config struct {
 	DBMaxIdleConns    int
 	DBMaxOpenConns    int
 	DBConnMaxLifetime time.Duration
+
+	// Email configuration
+	SMTPHost     string
+	SMTPPort     string
+	SMTPUser     string
+	SMTPPassword string
+	SMTPFrom     string
+	EmailEnabled bool
 }
 
 func LoadConfig() (*Config, error) {
@@ -64,6 +72,13 @@ func LoadConfig() (*Config, error) {
 		DBMaxIdleConns:    getEnvAsInt("DB_MAX_IDLE_CONNS", 10),
 		DBMaxOpenConns:    getEnvAsInt("DB_MAX_OPEN_CONNS", 100),
 		DBConnMaxLifetime: time.Duration(getEnvAsInt("DB_CONN_MAX_LIFETIME_MIN", 60)) * time.Minute,
+
+		SMTPHost:     getEnvOrDefault("SMTP_HOST", "smtp.gmail.com"),
+		SMTPPort:     getEnvOrDefault("SMTP_PORT", "465"),
+		SMTPUser:     os.Getenv("SMTP_USER"),
+		SMTPPassword: os.Getenv("SMTP_PASSWORD"),
+		SMTPFrom:     getEnvOrDefault("SMTP_FROM", os.Getenv("SMTP_USER")),
+		EmailEnabled: getEnvOrDefault("EMAIL_ENABLED", "false") == "true",
 	}, nil
 }
 

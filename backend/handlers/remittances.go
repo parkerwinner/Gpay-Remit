@@ -21,6 +21,7 @@ type RemittanceHandler struct {
 	config        *config.Config
 	stellarClient utils.StellarClientInterface
 	fees          *services.FeeService
+	emailService  *services.EmailService
 }
 
 func NewRemittanceHandler(db *gorm.DB, cfg *config.Config) *RemittanceHandler {
@@ -29,6 +30,7 @@ func NewRemittanceHandler(db *gorm.DB, cfg *config.Config) *RemittanceHandler {
 		config:        cfg,
 		stellarClient: utils.NewStellarClient(cfg.HorizonURL, cfg.NetworkPassphrase),
 		fees:          services.NewFeeService(cfg),
+		emailService:  services.NewEmailService(cfg.SMTPHost, cfg.SMTPPort, cfg.SMTPUser, cfg.SMTPPassword, cfg.SMTPFrom, cfg.EmailEnabled),
 	}
 }
 
@@ -246,6 +248,12 @@ func (h *RemittanceHandler) CompleteRemittance(c *gin.Context) {
 	if err := h.db.Save(&payment).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update payment"})
 		return
+	}
+
+	// Send email notification to sender
+	var sender models.User
+	if err := h.db.First(&sender, payment.SenderID).Error; err == nil {
+		go h.emailService.SendPaymentCompletedEmail(&sender, &payment)
 	}
 
 	middleware.SetAuditNew(c, payment)
