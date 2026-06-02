@@ -16,6 +16,7 @@ import (
 	"github.com/yourusername/gpay-remit/handlers"
 	"github.com/yourusername/gpay-remit/logger"
 	"github.com/yourusername/gpay-remit/middleware"
+	"github.com/yourusername/gpay-remit/services"
 	"github.com/yourusername/gpay-remit/workers"
 )
 
@@ -85,6 +86,9 @@ func main() {
 
 			auditHandler := handlers.NewAuditLogHandler(db)
 			protected.GET("/audit/logs", middleware.RequireRole("admin"), auditHandler.List)
+
+			exportHandler := handlers.NewExportHandler(db)
+			protected.GET("/transactions/export", exportHandler.ExportTransactions)
 		}
 	}
 

@@ -6,6 +6,7 @@ require (
 	github.com/gin-gonic/gin v1.9.1
 	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/joho/godotenv v1.5.1
+	github.com/jung-kurt/gofpdf v1.16.2
 	github.com/sirupsen/logrus v1.9.3
 	github.com/stellar/go v0.0.0-20251210100531-aab2ea4aca88
 	github.com/stretchr/testify v1.10.0
