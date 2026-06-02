@@ -106,6 +106,8 @@ pub enum Error {
     ContractPaused = 46,
     /// Rate limit exceeded for this caller/function.
     RateLimitExceeded = 47,
+    /// Escrow is non-compliant with registered rules.
+    NonCompliant = 48,
 }
 
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -118,6 +120,7 @@ pub enum EscrowStatus {
     Refunded,
     Expired,
     Disputed,
+    Cancelled,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -145,6 +148,36 @@ pub enum ConditionType {
 pub enum ConditionOperator {
     And,
     Or,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[contracttype]
+pub enum ComplianceRuleType {
+    AmountThreshold,
+    Jurisdiction,
+    RegulatoryRequirement,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[contracttype]
+pub enum ComplianceAction {
+    Flag,
+    Block,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[contracttype]
+pub struct ComplianceRule {
+    pub rule_type: ComplianceRuleType,
+    pub threshold: i128,
+    pub action: ComplianceAction,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[contracttype]
+pub struct CancellationConfig {
+    pub penalty_percentage: i128,
+    pub recipient_compensation: i128,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -333,6 +366,7 @@ pub struct Escrow {
     pub allow_partial_release: bool,
     pub multi_party_enabled: bool,
     pub kyc_compliant: bool,
+    pub compliant: bool,
     pub milestones: Vec<Milestone>,
 }
 
@@ -400,6 +434,10 @@ pub enum DataKey {
     AnalyticsLastUpdate,
     InsuranceConfig,
     EscrowInsurance(u64),
+    ComplianceRules,
+    EscrowComplianceOverride(u64),
+    UserJurisdiction(Address),
+    EscrowCancellationConfig(u64),
 }
 
 #[contract]
@@ -801,6 +839,85 @@ impl PaymentEscrowContract {
         Ok(())
     }
 
+    pub fn register_compliance_rule(env: Env, admin: Address, rule: ComplianceRule) -> Result<(), Error> {
+        admin.require_auth();
+        let stored_admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
+        if admin != stored_admin {
+            return Err(Error::Unauthorized);
+        }
+
+        let mut rules: Vec<ComplianceRule> = env
+            .storage()
+            .instance()
+            .get(&DataKey::ComplianceRules)
+            .unwrap_or_else(|| Vec::new(&env));
+        rules.push_back(rule);
+        env.storage().instance().set(&DataKey::ComplianceRules, &rules);
+        Ok(())
+    }
+
+    pub fn set_user_jurisdiction(env: Env, admin: Address, user: Address, country: i128) -> Result<(), Error> {
+        admin.require_auth();
+        let stored_admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
+        if admin != stored_admin {
+            return Err(Error::Unauthorized);
+        }
+
+        env.storage().instance().set(&DataKey::UserJurisdiction(user), &country);
+        Ok(())
+    }
+
+    pub fn check_compliance(env: Env, escrow: Escrow) -> bool {
+        let override_exists: bool = env.storage().instance().get(&DataKey::EscrowComplianceOverride(escrow.escrow_id)).unwrap_or(false);
+        if override_exists {
+            return true;
+        }
+
+        let rules_opt: Option<Vec<ComplianceRule>> = env.storage().instance().get(&DataKey::ComplianceRules);
+        let rules = match rules_opt {
+            Some(r) => r,
+            None => return true,
+        };
+
+        for rule in rules.iter() {
+            let rule_passed = match rule.rule_type {
+                ComplianceRuleType::AmountThreshold => {
+                    escrow.amount < rule.threshold
+                }
+                ComplianceRuleType::Jurisdiction => {
+                    let sender_country: i128 = env.storage().instance().get(&DataKey::UserJurisdiction(escrow.sender.clone())).unwrap_or(0);
+                    let recipient_country: i128 = env.storage().instance().get(&DataKey::UserJurisdiction(escrow.recipient.clone())).unwrap_or(0);
+                    sender_country != rule.threshold && recipient_country != rule.threshold
+                }
+                ComplianceRuleType::RegulatoryRequirement => {
+                    if escrow.amount >= rule.threshold {
+                        escrow.kyc_compliant
+                    } else {
+                        true
+                    }
+                }
+            };
+            if !rule_passed {
+                return false;
+            }
+        }
+        true
+    }
+
+    pub fn admin_override_compliance(env: Env, admin: Address, escrow_id: u64) -> Result<(), Error> {
+        admin.require_auth();
+        let stored_admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
+        if admin != stored_admin {
+            return Err(Error::Unauthorized);
+        }
+
+        let mut escrow: Escrow = env.storage().instance().get(&DataKey::Escrow(escrow_id)).ok_or(Error::EscrowNotFound)?;
+        escrow.compliant = true;
+        env.storage().instance().set(&DataKey::Escrow(escrow_id), &escrow);
+        env.storage().instance().set(&DataKey::EscrowComplianceOverride(escrow_id), &true);
+        Ok(())
+    }
+
     pub fn add_to_whitelist(
         env: Env,
         admin: Address,
@@ -1101,7 +1218,7 @@ impl PaymentEscrowContract {
             .unwrap_or(0);
         counter = counter.checked_add(1).ok_or(Error::CounterOverflow)?;
 
-        let escrow = Escrow {
+        let mut escrow = Escrow {
             sender: sender.clone(),
             recipient,
             amount,
@@ -1128,8 +1245,44 @@ impl PaymentEscrowContract {
             allow_partial_release: false,
             multi_party_enabled: false,
             kyc_compliant,
+            compliant: true,
             milestones: Vec::new(&env),
         };
+
+        // Auto-check compliance on creation
+        let rules_opt: Option<Vec<ComplianceRule>> = env.storage().instance().get(&DataKey::ComplianceRules);
+        if let Some(rules) = rules_opt {
+            for rule in rules.iter() {
+                let rule_passed = match rule.rule_type {
+                    ComplianceRuleType::AmountThreshold => {
+                        escrow.amount < rule.threshold
+                    }
+                    ComplianceRuleType::Jurisdiction => {
+                        let sender_country: i128 = env.storage().instance().get(&DataKey::UserJurisdiction(escrow.sender.clone())).unwrap_or(0);
+                        let recipient_country: i128 = env.storage().instance().get(&DataKey::UserJurisdiction(escrow.recipient.clone())).unwrap_or(0);
+                        sender_country != rule.threshold && recipient_country != rule.threshold
+                    }
+                    ComplianceRuleType::RegulatoryRequirement => {
+                        if escrow.amount >= rule.threshold {
+                            escrow.kyc_compliant
+                        } else {
+                            true
+                        }
+                    }
+                };
+
+                if !rule_passed {
+                    match rule.action {
+                        ComplianceAction::Block => {
+                            return Err(Error::NonCompliant);
+                        }
+                        ComplianceAction::Flag => {
+                            escrow.compliant = false;
+                        }
+                    }
+                }
+            }
+        }
 
         env.storage()
             .instance()
@@ -1193,6 +1346,10 @@ impl PaymentEscrowContract {
             .instance()
             .get(&DataKey::Escrow(escrow_id))
             .ok_or(Error::EscrowNotFound)?;
+
+        if !escrow.compliant {
+            return Err(Error::NonCompliant);
+        }
 
         if caller != escrow.sender {
             return Err(Error::WrongSender);
@@ -1269,6 +1426,10 @@ impl PaymentEscrowContract {
             .get(&DataKey::Escrow(escrow_id))
             .ok_or(Error::EscrowNotFound)?;
 
+        if !escrow.compliant {
+            return Err(Error::NonCompliant);
+        }
+
         if escrow.status != EscrowStatus::Funded {
             return Err(Error::InvalidStatus);
         }
@@ -1286,7 +1447,7 @@ impl PaymentEscrowContract {
             &approver,
             escrow.amount,
             symbol_short!("approved"),
-            EventData::EscrowApproved,
+            EventData::EscrowApproved(escrow_id),
         );
 
         Self::notify_external(
@@ -1327,6 +1488,13 @@ impl PaymentEscrowContract {
             .instance()
             .get(&DataKey::Escrow(escrow_id))
             .ok_or(Error::EscrowNotFound)?;
+
+        if !escrow.compliant {
+            env.storage()
+                .instance()
+                .set(&DataKey::ReentrancyGuard, &false);
+            return Err(Error::NonCompliant);
+        }
 
         if escrow.status != EscrowStatus::Approved && escrow.status != EscrowStatus::Funded {
             env.storage()
@@ -1470,7 +1638,7 @@ impl PaymentEscrowContract {
             &caller,
             recipient_amount,
             symbol_short!("released"),
-            EventData::EscrowReleased,
+            EventData::EscrowReleased(escrow_id, recipient_amount),
         );
 
         env.storage()
@@ -1657,7 +1825,7 @@ impl PaymentEscrowContract {
             &caller,
             recipient_amount,
             partial_status,
-            EventData::EscrowReleased,
+            EventData::EscrowReleased(escrow_id, recipient_amount),
         );
 
         env.storage()
@@ -2128,7 +2296,7 @@ impl PaymentEscrowContract {
             &caller,
             refund_amount,
             symbol_short!("refunded"),
-            EventData::EscrowRefunded,
+            EventData::EscrowRefunded(escrow_id, refund_amount),
         );
 
         env.storage()
@@ -2313,7 +2481,7 @@ impl PaymentEscrowContract {
             &caller,
             net_refund,
             refund_status,
-            EventData::EscrowRefunded,
+            EventData::EscrowRefunded(escrow_id, net_refund),
         );
 
         env.storage()
@@ -2321,6 +2489,173 @@ impl PaymentEscrowContract {
             .set(&DataKey::ReentrancyGuard, &false);
 
         Ok(())
+    }
+
+    pub fn set_cancellation_config(
+        env: Env,
+        escrow_id: u64,
+        caller: Address,
+        config: CancellationConfig,
+    ) -> Result<(), Error> {
+        caller.require_auth();
+
+        let escrow: Escrow = env
+            .storage()
+            .instance()
+            .get(&DataKey::Escrow(escrow_id))
+            .ok_or(Error::EscrowNotFound)?;
+
+        if caller != escrow.sender {
+            return Err(Error::Unauthorized);
+        }
+
+        if config.penalty_percentage < 0 || config.penalty_percentage > 10000 {
+            return Err(Error::InvalidFeePercentage);
+        }
+
+        if config.recipient_compensation < 0 || config.recipient_compensation > 10000 {
+            return Err(Error::InvalidFeePercentage);
+        }
+
+        env.storage()
+            .instance()
+            .set(&DataKey::EscrowCancellationConfig(escrow_id), &config);
+
+        Ok(())
+    }
+
+    pub fn cancel_escrow(
+        env: Env,
+        escrow_id: u64,
+        caller: Address,
+        token_address: Address,
+        reason: String,
+    ) -> Result<(), Error> {
+        caller.require_auth();
+
+        let guard: bool = env
+            .storage()
+            .instance()
+            .get(&DataKey::ReentrancyGuard)
+            .unwrap_or(false);
+        if guard {
+            return Err(Error::UnauthorizedCaller);
+        }
+        env.storage()
+            .instance()
+            .set(&DataKey::ReentrancyGuard, &true);
+
+        let mut escrow: Escrow = env
+            .storage()
+            .instance()
+            .get(&DataKey::Escrow(escrow_id))
+            .ok_or({
+                env.storage()
+                    .instance()
+                    .set(&DataKey::ReentrancyGuard, &false);
+                Error::EscrowNotFound
+            })?;
+
+        let stored_admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
+        if caller != escrow.sender && caller != stored_admin {
+            env.storage()
+                .instance()
+                .set(&DataKey::ReentrancyGuard, &false);
+            return Err(Error::Unauthorized);
+        }
+
+        match escrow.status {
+            EscrowStatus::Released
+            | EscrowStatus::Refunded
+            | EscrowStatus::Expired
+            | EscrowStatus::Cancelled => {
+                env.storage()
+                    .instance()
+                    .set(&DataKey::ReentrancyGuard, &false);
+                return Err(Error::InvalidStatus);
+            }
+            _ => {}
+        }
+
+        let deposited = escrow.deposited_amount;
+
+        if deposited > 0 {
+            let config_opt: Option<CancellationConfig> = env
+                .storage()
+                .instance()
+                .get(&DataKey::EscrowCancellationConfig(escrow_id));
+
+            let token_client = token::Client::new(&env, &token_address);
+            let contract_address = env.current_contract_address();
+
+            if let Some(config) = config_opt {
+                let penalty = deposited
+                    .checked_mul(config.penalty_percentage)
+                    .ok_or(Error::ArithmeticOverflow)?
+                    .checked_div(10000)
+                    .ok_or(Error::ArithmeticOverflow)?;
+
+                let recipient_comp = deposited
+                    .checked_mul(config.recipient_compensation)
+                    .ok_or(Error::ArithmeticOverflow)?
+                    .checked_div(10000)
+                    .ok_or(Error::ArithmeticOverflow)?;
+
+                let sender_refund = deposited
+                    .checked_sub(penalty)
+                    .ok_or(Error::ArithmeticOverflow)?
+                    .checked_sub(recipient_comp)
+                    .ok_or(Error::ArithmeticOverflow)?;
+
+                if recipient_comp > 0 {
+                    token_client.transfer(&contract_address, &escrow.recipient, &recipient_comp);
+                }
+
+                if penalty > 0 {
+                    let fee_wallet_opt: Option<Address> =
+                        env.storage().instance().get(&DataKey::FeeWallet);
+                    let penalty_dest = fee_wallet_opt.unwrap_or(escrow.sender.clone());
+                    token_client.transfer(&contract_address, &penalty_dest, &penalty);
+                }
+
+                if sender_refund > 0 {
+                    token_client.transfer(&contract_address, &escrow.sender, &sender_refund);
+                }
+            } else {
+                token_client.transfer(&contract_address, &escrow.sender, &deposited);
+            }
+        }
+
+        // Silence unused variable warning for reason
+        let _ = reason;
+
+        escrow.status = EscrowStatus::Cancelled;
+        env.storage()
+            .instance()
+            .set(&DataKey::Escrow(escrow_id), &escrow);
+
+        events::emit(
+            &env,
+            symbol_short!("escrow"),
+            symbol_short!("cancel"),
+            escrow_id,
+            &caller,
+            deposited,
+            symbol_short!("cancel"),
+            EventData::AdminAction(symbol_short!("cancel")),
+        );
+
+        env.storage()
+            .instance()
+            .set(&DataKey::ReentrancyGuard, &false);
+
+        Ok(())
+    }
+
+    pub fn get_cancellation_config(env: Env, escrow_id: u64) -> Option<CancellationConfig> {
+        env.storage()
+            .instance()
+            .get(&DataKey::EscrowCancellationConfig(escrow_id))
     }
 
     pub fn setup_multi_party_approval(
