@@ -85,6 +85,10 @@ func main() {
 
 			auditHandler := handlers.NewAuditLogHandler(db)
 			protected.GET("/audit/logs", middleware.RequireRole("admin"), auditHandler.List)
+
+			// Admin rate limit management endpoints
+			protected.POST("/admin/rate-limit/reset", middleware.RequireRole("admin"), middleware.AdminResetRateLimit(cfg))
+			protected.GET("/admin/rate-limit/view", middleware.RequireRole("admin"), middleware.AdminViewRateLimits(cfg))
 		}
 	}
 
