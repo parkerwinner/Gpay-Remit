@@ -1,3 +1,12 @@
+use gpay_remit_contracts::payment_escrow::{
+    Asset, DisputeReason, Error, EscrowStatus, NotificationConfig, PaymentEscrowContract,
+    PaymentEscrowContractClient, RecurringConfig, RefundReason, ResolutionOutcome,
+};
+use soroban_sdk::{
+    symbol_short,
+    testutils::{Address as _, Events as _, Ledger},
+    token, vec, Address, BytesN, Env, FromVal, Map, String, Symbol, Vec,
+};
 use gpay_remit_contracts::payment_escrow::{PaymentEscrowContract, PaymentEscrowContractClient, Asset, EscrowStatus, Error, RefundReason, DisputeReason, ResolutionOutcome, Milestone, InsuranceConfig, EscrowInsurance, DelegationPermissions, DelegationEntry, EscrowAnalytics};
 use soroban_sdk::{testutils::{Address as _, Ledger, Events as _}, token, Address, Env, String, symbol_short, Symbol, FromVal, BytesN, vec, Vec};
 
@@ -12,7 +21,16 @@ fn create_token_contract<'a>(
     )
 }
 
-fn setup_test<'a>(env: &Env) -> (PaymentEscrowContractClient<'a>, Address, Address, Address, (token::Client<'a>, token::StellarAssetClient<'a>), Asset) {
+fn setup_test<'a>(
+    env: &Env,
+) -> (
+    PaymentEscrowContractClient<'a>,
+    Address,
+    Address,
+    Address,
+    (token::Client<'a>, token::StellarAssetClient<'a>),
+    Asset,
+) {
     env.mock_all_auths();
     let contract_id = env.register_contract(None, PaymentEscrowContract);
     let client = PaymentEscrowContractClient::new(env, &contract_id);
@@ -66,8 +84,15 @@ fn test_deposit_success() {
     let amount = 1000;
     token_admin.mint(&sender, &amount);
 
-    let escrow_id = client.create_escrow(&sender, &recipient, &amount, &asset, &2000, &String::from_str(&env, ""));
-    
+    let escrow_id = client.create_escrow(
+        &sender,
+        &recipient,
+        &amount,
+        &asset,
+        &2000,
+        &String::from_str(&env, ""),
+    );
+
     client.deposit(&escrow_id, &sender, &amount, &token.address);
 
     let escrow = client.get_escrow(&escrow_id).unwrap();
@@ -84,7 +109,14 @@ fn test_partial_deposit_success() {
     let amount = 1000;
     token_admin.mint(&sender, &amount);
 
-    let escrow_id = client.create_escrow(&sender, &recipient, &amount, &asset, &2000, &String::from_str(&env, ""));
+    let escrow_id = client.create_escrow(
+        &sender,
+        &recipient,
+        &amount,
+        &asset,
+        &2000,
+        &String::from_str(&env, ""),
+    );
 
     client.deposit(&escrow_id, &sender, &400, &token.address);
     let mut escrow = client.get_escrow(&escrow_id).unwrap();
@@ -102,7 +134,14 @@ fn test_create_escrow_zero_amount() {
     let env = Env::default();
     let (client, _admin, sender, recipient, _token, asset) = setup_test(&env);
 
-    let result = client.try_create_escrow(&sender, &recipient, &0, &asset, &2000, &String::from_str(&env, ""));
+    let result = client.try_create_escrow(
+        &sender,
+        &recipient,
+        &0,
+        &asset,
+        &2000,
+        &String::from_str(&env, ""),
+    );
     assert_eq!(result, Err(Ok(Error::InvalidAmount)));
 }
 
@@ -111,7 +150,14 @@ fn test_create_escrow_same_sender_recipient() {
     let env = Env::default();
     let (client, _admin, sender, _recipient, _token, asset) = setup_test(&env);
 
-    let result = client.try_create_escrow(&sender, &sender, &1000, &asset, &2000, &String::from_str(&env, ""));
+    let result = client.try_create_escrow(
+        &sender,
+        &sender,
+        &1000,
+        &asset,
+        &2000,
+        &String::from_str(&env, ""),
+    );
     assert_eq!(result, Err(Ok(Error::SameSenderRecipient)));
 }
 
@@ -125,7 +171,14 @@ fn test_create_escrow_unsupported_asset() {
         issuer: Address::generate(&env),
     };
 
-    let result = client.try_create_escrow(&sender, &recipient, &1000, &unsupported_asset, &2000, &String::from_str(&env, ""));
+    let result = client.try_create_escrow(
+        &sender,
+        &recipient,
+        &1000,
+        &unsupported_asset,
+        &2000,
+        &String::from_str(&env, ""),
+    );
     assert_eq!(result, Err(Ok(Error::InvalidAsset)));
 }
 
@@ -138,7 +191,14 @@ fn test_deposit_wrong_sender() {
     let wrong_sender = Address::generate(&env);
     token_admin.mint(&wrong_sender, &amount);
 
-    let escrow_id = client.create_escrow(&sender, &recipient, &amount, &asset, &2000, &String::from_str(&env, ""));
+    let escrow_id = client.create_escrow(
+        &sender,
+        &recipient,
+        &amount,
+        &asset,
+        &2000,
+        &String::from_str(&env, ""),
+    );
 
     let result = client.try_deposit(&escrow_id, &wrong_sender, &amount, &token.address);
     assert_eq!(result, Err(Ok(Error::WrongSender)));
@@ -152,7 +212,14 @@ fn test_deposit_overflow() {
     let amount = 1000;
     token_admin.mint(&sender, &2000);
 
-    let escrow_id = client.create_escrow(&sender, &recipient, &amount, &asset, &2000, &String::from_str(&env, ""));
+    let escrow_id = client.create_escrow(
+        &sender,
+        &recipient,
+        &amount,
+        &asset,
+        &2000,
+        &String::from_str(&env, ""),
+    );
 
     let result = client.try_deposit(&escrow_id, &sender, &1500, &token.address);
     assert_eq!(result, Err(Ok(Error::InsufficientAmount)));
@@ -187,18 +254,32 @@ fn test_events_emitted() {
     let amount = 1000;
     token_admin.mint(&sender, &amount);
 
-    let escrow_id = client.create_escrow(&sender, &recipient, &amount, &asset, &2000, &String::from_str(&env, ""));
-    
+    let escrow_id = client.create_escrow(
+        &sender,
+        &recipient,
+        &amount,
+        &asset,
+        &2000,
+        &String::from_str(&env, ""),
+    );
+
     // Check 'created' event
     let events = env.events().all();
-    let created_event = events.into_iter().find(|e| {
-        let topics = &e.1;
-        topics.len() > 0 && Symbol::from_val(&env, &topics.get(0).unwrap()) == Symbol::new(&env, "created")
-    }).unwrap();
-    
+    let created_event = events
+        .into_iter()
+        .find(|e| {
+            let topics = &e.1;
+            topics.len() > 0
+                && Symbol::from_val(&env, &topics.get(0).unwrap()) == Symbol::new(&env, "created")
+        })
+        .unwrap();
+
     assert_eq!(created_event.0, client.address);
     let topics = created_event.1;
-    assert_eq!(Symbol::from_val(&env, &topics.get(0).unwrap()), Symbol::new(&env, "created"));
+    assert_eq!(
+        Symbol::from_val(&env, &topics.get(0).unwrap()),
+        Symbol::new(&env, "created")
+    );
     assert_eq!(u64::from_val(&env, &topics.get(1).unwrap()), escrow_id);
     assert_eq!(Address::from_val(&env, &created_event.2), sender);
 
@@ -206,13 +287,20 @@ fn test_events_emitted() {
 
     // Check 'deposit' event
     let events = env.events().all();
-    let deposit_event = events.into_iter().find(|e| {
-        let topics = &e.1;
-        topics.len() > 0 && Symbol::from_val(&env, &topics.get(0).unwrap()) == Symbol::new(&env, "deposit")
-    }).unwrap();
-    
+    let deposit_event = events
+        .into_iter()
+        .find(|e| {
+            let topics = &e.1;
+            topics.len() > 0
+                && Symbol::from_val(&env, &topics.get(0).unwrap()) == Symbol::new(&env, "deposit")
+        })
+        .unwrap();
+
     let topics = deposit_event.1;
-    assert_eq!(Symbol::from_val(&env, &topics.get(0).unwrap()), Symbol::new(&env, "deposit"));
+    assert_eq!(
+        Symbol::from_val(&env, &topics.get(0).unwrap()),
+        Symbol::new(&env, "deposit")
+    );
     assert_eq!(u64::from_val(&env, &topics.get(1).unwrap()), escrow_id);
 }
 
@@ -229,7 +317,7 @@ fn test_set_platform_fee_non_admin() {
     let non_admin = sender; // Use sender as non-admin
     let result = client.try_set_platform_fee(&non_admin, &500);
     assert_eq!(result, Err(Ok(Error::UnauthorizedCaller)));
-    
+
     // Verify admin can still set the fee
     client.set_platform_fee(&admin, &500);
     assert_eq!(client.get_platform_fee(), 500);
@@ -244,7 +332,7 @@ fn test_set_processing_fee_non_admin() {
     let non_admin = recipient;
     let result = client.try_set_processing_fee(&non_admin, &300);
     assert_eq!(result, Err(Ok(Error::UnauthorizedCaller)));
-    
+
     // Verify admin can still set the fee
     client.set_processing_fee(&admin, &300);
     assert_eq!(client.get_processing_fee(), 300);
@@ -260,7 +348,7 @@ fn test_set_fee_wallet_non_admin() {
     let new_wallet = Address::generate(&env);
     let result = client.try_set_fee_wallet(&non_admin, &new_wallet);
     assert_eq!(result, Err(Ok(Error::UnauthorizedCaller)));
-    
+
     // Verify admin can set the fee wallet
     client.set_fee_wallet(&admin, &new_wallet);
     assert_eq!(client.get_fee_wallet(), Some(new_wallet));
@@ -275,7 +363,7 @@ fn test_set_forex_fee_non_admin() {
     let non_admin = recipient;
     let result = client.try_set_forex_fee(&non_admin, &200);
     assert_eq!(result, Err(Ok(Error::UnauthorizedCaller)));
-    
+
     // Verify admin can set the fee
     client.set_forex_fee(&admin, &200);
 }
@@ -289,7 +377,7 @@ fn test_set_compliance_fee_non_admin() {
     let non_admin = sender;
     let result = client.try_set_compliance_fee(&non_admin, &100);
     assert_eq!(result, Err(Ok(Error::UnauthorizedCaller)));
-    
+
     // Verify admin can set the fee
     client.set_compliance_fee(&admin, &100);
 }
@@ -303,7 +391,7 @@ fn test_set_fee_limits_non_admin() {
     let non_admin = recipient;
     let result = client.try_set_fee_limits(&non_admin, &50, &1000);
     assert_eq!(result, Err(Ok(Error::Unauthorized)));
-    
+
     // Verify admin can set the limits
     client.set_fee_limits(&admin, &50, &1000);
 }
@@ -333,7 +421,7 @@ fn test_configure_kyc_non_admin() {
     let oracle = Address::generate(&env);
     let result = client.try_configure_kyc(&non_admin, &oracle, &true, &5000);
     assert_eq!(result, Err(Ok(Error::UnauthorizedCaller)));
-    
+
     // Verify admin can configure KYC
     client.configure_kyc(&admin, &oracle, &true, &5000);
 }
@@ -348,7 +436,7 @@ fn test_add_to_whitelist_non_admin() {
     let account = Address::generate(&env);
     let result = client.try_add_to_whitelist(&non_admin, &account, &2000);
     assert_eq!(result, Err(Ok(Error::UnauthorizedCaller)));
-    
+
     // Verify admin can add to whitelist
     client.add_to_whitelist(&admin, &account, &2000);
 }
@@ -362,7 +450,7 @@ fn test_remove_from_whitelist_non_admin() {
     // First add to whitelist as admin
     let account = Address::generate(&env);
     client.add_to_whitelist(&admin, &account, &2000);
-    
+
     // Try to remove as non-admin
     let non_admin = sender;
     let result = client.try_remove_from_whitelist(&non_admin, &account);
@@ -379,7 +467,7 @@ fn test_add_trusted_issuer_non_admin() {
     let issuer = Address::generate(&env);
     let result = client.try_add_trusted_issuer(&non_admin, &issuer);
     assert_eq!(result, Err(Ok(Error::UnauthorizedCaller)));
-    
+
     // Verify admin can add trusted issuer
     client.add_trusted_issuer(&admin, &issuer);
 }
@@ -393,14 +481,21 @@ fn test_admin_override_kyc_non_admin() {
     // Create and fund escrow
     let amount = 1000;
     token_admin.mint(&sender, &amount);
-    let escrow_id = client.create_escrow(&sender, &recipient, &amount, &asset, &2000, &String::from_str(&env, ""));
+    let escrow_id = client.create_escrow(
+        &sender,
+        &recipient,
+        &amount,
+        &asset,
+        &2000,
+        &String::from_str(&env, ""),
+    );
     client.deposit(&escrow_id, &sender, &amount, &token.address);
-    
+
     // Try to override KYC as non-admin
     let non_admin = sender;
     let result = client.try_admin_override_kyc(&non_admin, &escrow_id);
     assert_eq!(result, Err(Ok(Error::UnauthorizedCaller)));
-    
+
     // Verify admin can override KYC
     client.admin_override_kyc(&admin, &escrow_id);
 }
@@ -413,18 +508,25 @@ fn test_release_escrow_non_recipient() {
 
     let amount = 1000;
     token_admin.mint(&sender, &amount);
-    let escrow_id = client.create_escrow(&sender, &recipient, &amount, &asset, &2000, &String::from_str(&env, ""));
+    let escrow_id = client.create_escrow(
+        &sender,
+        &recipient,
+        &amount,
+        &asset,
+        &2000,
+        &String::from_str(&env, ""),
+    );
     client.deposit(&escrow_id, &sender, &amount, &token.address);
-    
+
     // Try to release as non-recipient (sender)
     let result = client.try_release_escrow(&escrow_id, &sender, &token.address);
     assert_eq!(result, Err(Ok(Error::UnauthorizedCaller)));
-    
+
     // Try to release as random third party
     let third_party = Address::generate(&env);
     let result2 = client.try_release_escrow(&escrow_id, &third_party, &token.address);
     assert_eq!(result2, Err(Ok(Error::UnauthorizedCaller)));
-    
+
     // Verify recipient can release
     client.release_escrow(&escrow_id, &recipient, &token.address);
 }
@@ -437,20 +539,42 @@ fn test_refund_escrow_non_sender() {
 
     let amount = 1000;
     token_admin.mint(&sender, &amount);
-    let escrow_id = client.create_escrow(&sender, &recipient, &amount, &asset, &2000, &String::from_str(&env, ""));
+    let escrow_id = client.create_escrow(
+        &sender,
+        &recipient,
+        &amount,
+        &asset,
+        &2000,
+        &String::from_str(&env, ""),
+    );
     client.deposit(&escrow_id, &sender, &amount, &token.address);
-    
+
     // Try to refund as non-sender (recipient)
-    let result = client.try_refund_escrow(&escrow_id, &recipient, &token.address, &RefundReason::SenderRequest);
+    let result = client.try_refund_escrow(
+        &escrow_id,
+        &recipient,
+        &token.address,
+        &RefundReason::SenderRequest,
+    );
     assert_eq!(result, Err(Ok(Error::UnauthorizedRefund)));
-    
+
     // Try to refund as random third party
     let third_party = Address::generate(&env);
-    let result2 = client.try_refund_escrow(&escrow_id, &third_party, &token.address, &RefundReason::SenderRequest);
+    let result2 = client.try_refund_escrow(
+        &escrow_id,
+        &third_party,
+        &token.address,
+        &RefundReason::SenderRequest,
+    );
     assert_eq!(result2, Err(Ok(Error::UnauthorizedRefund)));
-    
+
     // Verify sender can refund
-    client.refund_escrow(&escrow_id, &sender, &token.address, &RefundReason::SenderRequest);
+    client.refund_escrow(
+        &escrow_id,
+        &sender,
+        &token.address,
+        &RefundReason::SenderRequest,
+    );
 }
 
 // Test non-admin cannot resolve dispute
@@ -461,20 +585,34 @@ fn test_resolve_dispute_non_admin() {
 
     let amount = 1000;
     token_admin.mint(&sender, &amount);
-    let escrow_id = client.create_escrow(&sender, &recipient, &amount, &asset, &2000, &String::from_str(&env, ""));
+    let escrow_id = client.create_escrow(
+        &sender,
+        &recipient,
+        &amount,
+        &asset,
+        &2000,
+        &String::from_str(&env, ""),
+    );
     client.deposit(&escrow_id, &sender, &amount, &token.address);
-    
+
     // Create a dispute first (as sender)
-    client.raise_dispute(&escrow_id, &sender, &DisputeReason::NonDelivery, &BytesN::from_array(&env, &[0u8; 32]));
-    
+    client.raise_dispute(
+        &escrow_id,
+        &sender,
+        &DisputeReason::NonDelivery,
+        &BytesN::from_array(&env, &[0u8; 32]),
+    );
+
     // Try to resolve as non-admin
-    let result = client.try_resolve_dispute(&escrow_id, &sender, &ResolutionOutcome::FavorRecipient);
+    let result =
+        client.try_resolve_dispute(&escrow_id, &sender, &ResolutionOutcome::FavorRecipient);
     assert_eq!(result, Err(Ok(Error::UnauthorizedCaller)));
-    
+
     // Try to resolve as recipient
-    let result2 = client.try_resolve_dispute(&escrow_id, &recipient, &ResolutionOutcome::FavorRecipient);
+    let result2 =
+        client.try_resolve_dispute(&escrow_id, &recipient, &ResolutionOutcome::FavorRecipient);
     assert_eq!(result2, Err(Ok(Error::UnauthorizedCaller)));
-    
+
     // Verify admin can resolve
     client.resolve_dispute(&escrow_id, &admin, &ResolutionOutcome::FavorRecipient);
 }
@@ -487,27 +625,34 @@ fn test_multi_party_approval_whitelist_enforcement() {
 
     let amount = 1000;
     token_admin.mint(&sender, &amount);
-    
+
     // Create escrow first
-    let escrow_id = client.create_escrow(&sender, &recipient, &amount, &asset, &2000, &String::from_str(&env, ""));
-    
+    let escrow_id = client.create_escrow(
+        &sender,
+        &recipient,
+        &amount,
+        &asset,
+        &2000,
+        &String::from_str(&env, ""),
+    );
+
     // Setup multi-party approval
     let mut approvers = Vec::new(&env);
     approvers.push_back(sender.clone());
     approvers.push_back(recipient.clone());
-    
+
     client.setup_multi_party_approval(&escrow_id, &admin, &approvers, &2, &5000);
-    
+
     client.deposit(&escrow_id, &sender, &amount, &token.address);
-    
+
     // Try to approve from non-whitelisted address
     let non_whitelisted = Address::generate(&env);
     let result = client.try_multi_party_approve(&escrow_id, &non_whitelisted);
     assert_eq!(result, Err(Ok(Error::ApproverNotWhitelisted)));
-    
+
     // Add to whitelist as admin
     client.add_to_whitelist(&admin, &non_whitelisted, &2000);
-    
+
     // Now approval should work
     client.multi_party_approve(&escrow_id, &non_whitelisted);
 }
@@ -524,13 +669,20 @@ fn test_create_escrow_amount_overflow() {
 
     // Try to create escrow with maximum i128 value
     let max_amount = i128::MAX;
-    let result = client.try_create_escrow(&sender, &recipient, &max_amount, &asset, &2000, &String::from_str(&env, ""));
+    let result = client.try_create_escrow(
+        &sender,
+        &recipient,
+        &max_amount,
+        &asset,
+        &2000,
+        &String::from_str(&env, ""),
+    );
     // Should either succeed with checked math or fail with overflow
     // The contract uses checked arithmetic, so this should handle it
     match result {
-        Err(Err(_)) => {},
+        Err(Err(_)) => {}
         Err(Ok(Error::ArithmeticOverflow)) => {} // Expected
-        Ok(_) => {} // Also acceptable if it handles large numbers
+        Ok(_) => {}                              // Also acceptable if it handles large numbers
         _ => panic!("Unexpected result: {:?}", result),
     }
 }
@@ -543,18 +695,25 @@ fn test_fee_calculation_overflow() {
 
     // Set a high platform fee
     client.set_platform_fee(&admin, &10000); // 100%
-    
+
     let amount = i128::MAX / 10000; // Large amount
     token_admin.mint(&sender, &(amount * 2));
-    
-    let escrow_id = client.create_escrow(&sender, &recipient, &amount, &asset, &2000, &String::from_str(&env, ""));
+
+    let escrow_id = client.create_escrow(
+        &sender,
+        &recipient,
+        &amount,
+        &asset,
+        &2000,
+        &String::from_str(&env, ""),
+    );
     client.deposit(&escrow_id, &sender, &amount, &token.address);
-    
+
     // Try to release - should handle overflow in fee calculation
     let result = client.try_release_escrow(&escrow_id, &recipient, &token.address);
     // Should either succeed or return ArithmeticOverflow
     match result {
-        Err(Err(_)) => {},
+        Err(Err(_)) => {}
         Err(Ok(Error::ArithmeticOverflow)) | Ok(_) => {}
         Err(Ok(_)) => {
             // Other errors are also acceptable (e.g., InsufficientAmount)
@@ -571,9 +730,16 @@ fn test_deposit_amount_overflow() {
 
     let escrow_amount = 1000;
     token_admin.mint(&sender, &i128::MAX);
-    
-    let escrow_id = client.create_escrow(&sender, &recipient, &escrow_amount, &asset, &2000, &String::from_str(&env, ""));
-    
+
+    let escrow_id = client.create_escrow(
+        &sender,
+        &recipient,
+        &escrow_amount,
+        &asset,
+        &2000,
+        &String::from_str(&env, ""),
+    );
+
     // Try to deposit more than escrow amount (overflow check)
     let result = client.try_deposit(&escrow_id, &sender, &(escrow_amount + 1), &token.address);
     assert_eq!(result, Err(Ok(Error::InsufficientAmount)));
@@ -587,11 +753,18 @@ fn test_batch_operation_overflow() {
 
     // Create multiple escrows and try to exceed limits
     let max_u64 = u64::MAX as i128;
-    let result = client.try_create_escrow(&sender, &recipient, &max_u64, &asset, &2000, &String::from_str(&env, ""));
-    
+    let result = client.try_create_escrow(
+        &sender,
+        &recipient,
+        &max_u64,
+        &asset,
+        &2000,
+        &String::from_str(&env, ""),
+    );
+
     // Should handle large amounts properly
     match result {
-        Err(Err(_)) => {},
+        Err(Err(_)) => {}
         Err(Ok(Error::ArithmeticOverflow)) | Ok(_) => {}
         Err(Ok(_)) => {
             // Other errors like InvalidAmount are acceptable
@@ -609,7 +782,14 @@ fn test_escrow_id_counter_overflow() {
     // Create many escrows to test counter behavior
     let mut last_id = 0u64;
     for i in 0..100 {
-        let id = client.create_escrow(&sender, &recipient, &(i as i128 + 1), &asset, &2000, &String::from_str(&env, ""));
+        let id = client.create_escrow(
+            &sender,
+            &recipient,
+            &(i as i128 + 1),
+            &asset,
+            &2000,
+            &String::from_str(&env, ""),
+        );
         assert_eq!(id, last_id + 1);
         last_id = id;
     }
@@ -626,13 +806,13 @@ fn test_multiplication_overflow_in_conversions() {
     client.set_processing_fee(&admin, &10000); // 100%
     client.set_forex_fee(&admin, &10000); // 100%
     client.set_compliance_fee(&admin, &i128::MAX); // Maximum flat fee
-    
+
     // Try to get fee breakdown with maximum amount
     let result = client.try_get_fee_breakdown(&i128::MAX);
-    
+
     // Should handle overflow in fee calculations
     match result {
-        Err(Err(_)) => {},
+        Err(Err(_)) => {}
         Err(Ok(Error::ArithmeticOverflow)) | Ok(_) => {}
         _ => {}
     }
@@ -645,11 +825,18 @@ fn test_max_u64_handling() {
     let (client, _admin, sender, recipient, _token, asset) = setup_test(&env);
 
     let max_u64 = u64::MAX as i128;
-    let result = client.try_create_escrow(&sender, &recipient, &max_u64, &asset, &2000, &String::from_str(&env, ""));
-    
+    let result = client.try_create_escrow(
+        &sender,
+        &recipient,
+        &max_u64,
+        &asset,
+        &2000,
+        &String::from_str(&env, ""),
+    );
+
     // Should handle u64::MAX properly
     match result {
-        Err(Err(_)) => {},
+        Err(Err(_)) => {}
         Err(Ok(Error::ArithmeticOverflow)) | Ok(_) => {}
         Err(Ok(_)) => {
             // InvalidAmount or other errors are acceptable
@@ -665,11 +852,18 @@ fn test_max_i128_handling() {
     let (client, _admin, sender, recipient, _token, asset) = setup_test(&env);
 
     let max_i128 = i128::MAX;
-    let result = client.try_create_escrow(&sender, &recipient, &max_i128, &asset, &2000, &String::from_str(&env, ""));
-    
+    let result = client.try_create_escrow(
+        &sender,
+        &recipient,
+        &max_i128,
+        &asset,
+        &2000,
+        &String::from_str(&env, ""),
+    );
+
     // Should handle i128::MAX properly
     match result {
-        Err(Err(_)) => {},
+        Err(Err(_)) => {}
         Err(Ok(Error::ArithmeticOverflow)) | Ok(_) => {}
         Err(Ok(_)) => {
             // InvalidAmount or other errors are acceptable
@@ -686,18 +880,18 @@ fn test_partial_release_amount_overflow() {
 
     let amount = 1000;
     token_admin.mint(&sender, &amount);
-    
+
     let escrow_id = client.create_escrow(
-        &sender, 
-        &recipient, 
-        &amount, 
-        &asset, 
-        &2000, 
-        &String::from_str(&env, "")
+        &sender,
+        &recipient,
+        &amount,
+        &asset,
+        &2000,
+        &String::from_str(&env, ""),
     );
-    
+
     client.deposit(&escrow_id, &sender, &amount, &token.address);
-    
+
     // Try to release more than available (overflow)
     let result = client.try_release_partial(&escrow_id, &recipient, &token.address, &(amount + 1));
     assert_eq!(result, Err(Ok(Error::InsufficientFunds)));
@@ -711,15 +905,200 @@ fn test_refund_amount_overflow() {
 
     let amount = 1000;
     token_admin.mint(&sender, &amount);
-    
-    let escrow_id = client.create_escrow(&sender, &recipient, &amount, &asset, &2000, &String::from_str(&env, ""));
+
+    let escrow_id = client.create_escrow(
+        &sender,
+        &recipient,
+        &amount,
+        &asset,
+        &2000,
+        &String::from_str(&env, ""),
+    );
     client.deposit(&escrow_id, &sender, &amount, &token.address);
-    
+
     // Try to refund more than deposited
-    let result = client.try_refund_partial(&escrow_id, &sender, &token.address, &(amount + 1), &RefundReason::SenderRequest);
+    let result = client.try_refund_partial(
+        &escrow_id,
+        &sender,
+        &token.address,
+        &(amount + 1),
+        &RefundReason::SenderRequest,
+    );
     assert_eq!(result, Err(Ok(Error::InvalidRefundAmount)));
 }
 
+#[test]
+fn test_query_filters_and_pagination() {
+    let env = Env::default();
+    let (client, _admin, sender, recipient, _token, asset) = setup_test(&env);
+    let other_sender = Address::generate(&env);
+
+    env.ledger().with_mut(|li| li.timestamp = 1000);
+    let first = client.create_escrow(
+        &sender,
+        &recipient,
+        &100,
+        &asset,
+        &3000,
+        &String::from_str(&env, "one"),
+    );
+    env.ledger().with_mut(|li| li.timestamp = 1100);
+    let second = client.create_escrow(
+        &sender,
+        &recipient,
+        &200,
+        &asset,
+        &3000,
+        &String::from_str(&env, "two"),
+    );
+    env.ledger().with_mut(|li| li.timestamp = 1200);
+    client.create_escrow(
+        &other_sender,
+        &recipient,
+        &300,
+        &asset,
+        &3000,
+        &String::from_str(&env, "three"),
+    );
+
+    let sender_page = client.query_escrows_by_sender(&sender, &1, &1);
+    assert_eq!(sender_page.len(), 1);
+    assert_eq!(sender_page.get(0).unwrap().escrow_id, second);
+
+    let pending = client.query_escrows_by_status(&EscrowStatus::Pending, &10, &0);
+    assert_eq!(pending.len(), 3);
+
+    let date_matches = client.query_escrows_by_date_range(&1000, &1100, &10, &0);
+    assert_eq!(date_matches.len(), 2);
+    assert_eq!(date_matches.get(0).unwrap().escrow_id, first);
+
+    let amount_matches = client.query_escrows_by_amount_range(&150, &350, &10, &0);
+    assert_eq!(amount_matches.len(), 2);
+}
+
+#[test]
+fn test_recurring_escrow_process_history_and_cancel() {
+    let env = Env::default();
+    let (client, _admin, sender, recipient, _token, asset) = setup_test(&env);
+    env.ledger().with_mut(|li| li.timestamp = 1000);
+
+    let config = RecurringConfig {
+        recipient: recipient.clone(),
+        asset: asset.clone(),
+        amount: 250,
+        interval: 100,
+        count: 2,
+        auto_release: false,
+        expiration_window: 1000,
+        memo: String::from_str(&env, "monthly"),
+    };
+    let recurring_id = client.create_recurring_escrow(&sender, &config);
+    let first_escrow = client.process_recurring_payment(&recurring_id);
+    assert_eq!(first_escrow, 1);
+
+    let not_due = client.try_process_recurring_payment(&recurring_id);
+    assert_eq!(not_due, Err(Ok(Error::NotExpired)));
+
+    env.ledger().with_mut(|li| li.timestamp = 1100);
+    let second_escrow = client.process_recurring_payment(&recurring_id);
+    assert_eq!(second_escrow, 2);
+
+    let history = client.get_recurring_history(&recurring_id);
+    assert_eq!(history.len(), 2);
+    assert_eq!(history.get(0).unwrap().escrow_id, first_escrow);
+
+    let recurring = client.get_recurring_escrow(&recurring_id).unwrap();
+    assert!(recurring.cancelled);
+
+    let cancel_result = client.try_cancel_recurring_escrow(&recurring_id, &sender);
+    assert!(cancel_result.is_ok());
+}
+
+#[test]
+fn test_notification_hooks_validate_and_record_delivery() {
+    let env = Env::default();
+    let (client, _admin, sender, recipient, (token, token_admin), asset) = setup_test(&env);
+    let amount = 1000;
+    token_admin.mint(&sender, &amount);
+
+    let escrow_id = client.create_escrow(
+        &sender,
+        &recipient,
+        &amount,
+        &asset,
+        &2000,
+        &String::from_str(&env, ""),
+    );
+    let mut urls = Vec::new(&env);
+    urls.push_back(String::from_str(&env, "https://example.com/escrow"));
+    let config = NotificationConfig {
+        webhook_urls: urls,
+        max_retries: 3,
+    };
+    client.register_notification_hook(&escrow_id, &sender, &config);
+
+    let mut bad_urls = Vec::new(&env);
+    bad_urls.push_back(String::from_str(&env, ""));
+    let bad_config = NotificationConfig {
+        webhook_urls: bad_urls,
+        max_retries: 1,
+    };
+    let bad = client.try_register_notification_hook(&escrow_id, &sender, &bad_config);
+    assert_eq!(bad, Err(Ok(Error::InvalidAsset)));
+
+    client.deposit(&escrow_id, &sender, &amount, &token.address);
+    let deliveries = client.get_notification_history(&escrow_id);
+    assert_eq!(deliveries.len(), 1);
+    assert_eq!(deliveries.get(0).unwrap().attempts, 3);
+}
+
+#[test]
+fn test_multi_asset_deposit_release_and_refund() {
+    let env = Env::default();
+    let (client, admin, sender, recipient, (token_a, token_a_admin), asset_a) = setup_test(&env);
+    let (token_b, token_b_admin) = create_token_contract(&env, &admin);
+    let asset_b = Asset {
+        code: String::from_str(&env, "EURC"),
+        issuer: admin.clone(),
+    };
+    client.add_supported_asset(&admin, &asset_b);
+
+    token_a_admin.mint(&sender, &1000);
+    token_b_admin.mint(&sender, &500);
+
+    let mut assets = Vec::new(&env);
+    assets.push_back(asset_a.clone());
+    assets.push_back(asset_b.clone());
+    let mut amounts = Map::new(&env);
+    amounts.set(asset_a.clone(), 1000);
+    amounts.set(asset_b.clone(), 500);
+
+    let escrow_id = client.create_multi_asset_escrow(
+        &sender,
+        &recipient,
+        &assets,
+        &amounts,
+        &3000,
+        &String::from_str(&env, "multi"),
+    );
+    client.deposit_asset(&escrow_id, &sender, &asset_a, &1000, &token_a.address);
+    client.deposit_asset(&escrow_id, &sender, &asset_b, &500, &token_b.address);
+
+    let escrow = client.get_escrow(&escrow_id).unwrap();
+    assert_eq!(escrow.status, EscrowStatus::Funded);
+    assert_eq!(escrow.deposited_amounts.get(asset_b.clone()).unwrap(), 500);
+
+    client.release_asset(&escrow_id, &recipient, &asset_a, &token_a.address);
+    assert_eq!(token_a.balance(&recipient), 1000);
+
+    client.refund_asset(
+        &escrow_id,
+        &sender,
+        &asset_b,
+        &token_b.address,
+        &RefundReason::SenderRequest,
+    );
+    assert_eq!(token_b.balance(&sender), 500);
 // ============================================================================
 // MILESTONE-BASED ESCROW TESTS (#129)
 // ============================================================================

@@ -203,7 +203,11 @@ pub fn verify_proof(
     }
 
     let revoked_key = KycDataKey::RevokedProof(proof_signature.clone());
-    let revoked: bool = env.storage().persistent().get(&revoked_key).unwrap_or(false);
+    let revoked: bool = env
+        .storage()
+        .persistent()
+        .get(&revoked_key)
+        .unwrap_or(false);
     if revoked {
         return Err(KycError::InvalidProof);
     }
@@ -234,7 +238,11 @@ pub fn verify_proof(
     Ok(true)
 }
 
-pub fn revoke_proof(env: &Env, admin: &Address, proof_signature: &BytesN<64>) -> Result<(), KycError> {
+pub fn revoke_proof(
+    env: &Env,
+    admin: &Address,
+    proof_signature: &BytesN<64>,
+) -> Result<(), KycError> {
     admin.require_auth();
     let config: Option<KycConfig> = env.storage().persistent().get(&KycDataKey::Config);
     let config = config.ok_or(KycError::NotConfigured)?;

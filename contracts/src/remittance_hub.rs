@@ -246,6 +246,7 @@ impl RemittanceHubContract {
             0,
             symbol_short!("na"),
             EventData::PairAction(symbol_short!("orc_set"), primary_oracle.clone(), secondary_oracle.clone()),
+            EventData::PairAction(symbol_short!("orc_set"), primary_oracle, secondary_oracle),
         );
 
         Ok(())
@@ -429,6 +430,7 @@ impl RemittanceHubContract {
             0,
             symbol_short!("na"),
             EventData::AddressAction(symbol_short!("aml_orc"), oracle_address.clone()),
+            EventData::AddressAction(symbol_short!("aml_orc"), oracle_address),
         );
 
         Ok(())
@@ -765,6 +767,7 @@ impl RemittanceHubContract {
                     issuer: invoice.asset.issuer.clone(),
                 },
                 total_due,
+                invoice.amount,
             ),
         );
 
@@ -942,6 +945,7 @@ impl RemittanceHubContract {
             .checked_div(10000)
             .unwrap_or(0);
 
+        let old_amount = invoice.amount;
         invoice.amount = new_amount;
         invoice.fees = fees;
         invoice.total_due = new_amount.checked_add(fees).unwrap_or(new_amount);
@@ -959,6 +963,7 @@ impl RemittanceHubContract {
             invoice.total_due,
             symbol_short!("unpaid"),
             EventData::InvoiceUpdated(invoice_id, new_amount, fees),
+            EventData::InvoiceUpdated(invoice_id, old_amount, invoice.total_due),
         );
 
         Ok(())
@@ -1158,11 +1163,7 @@ impl RemittanceHubContract {
                 .persistent()
                 .set(&DataKey::Escrow(id), &escrow);
 
-            token_client.transfer(
-                &contract_address,
-                &escrow.recipient,
-                &escrow.amount,
-            );
+            token_client.transfer(&contract_address, &escrow.recipient, &escrow.amount);
         }
 
         events::emit(
@@ -1195,12 +1196,17 @@ impl RemittanceHubContract {
         if caller != stored_admin {
             return Err(RemittanceError::Unauthorized);
         }
-        env.storage().persistent().set(&DataKey::MaxBatchSize, &limit);
+        env.storage()
+            .persistent()
+            .set(&DataKey::MaxBatchSize, &limit);
         Ok(())
     }
 
     pub fn get_max_batch_size(env: Env) -> u32 {
-        env.storage().persistent().get(&DataKey::MaxBatchSize).unwrap_or(10)
+        env.storage()
+            .persistent()
+            .get(&DataKey::MaxBatchSize)
+            .unwrap_or(10)
     }
 
     fn convert_with_oracle(env: &Env, amount: i128, asset_code: &String) -> i128 {
@@ -1398,8 +1404,6 @@ impl RemittanceHubContract {
         }
         upgradeable::migrate(&env, &admin)
     }
-
-
 
     // ── Analytics ──────────────────────────────────────────────────
 

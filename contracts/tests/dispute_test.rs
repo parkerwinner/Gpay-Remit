@@ -175,14 +175,15 @@ fn test_arbitrator_vote() {
     client.deposit(&escrow_id, &sender, &amount, &token.address);
 
     let evidence_hash = BytesN::from_array(&env, &[4u8; 32]);
-    client.raise_dispute(&escrow_id, &sender, &DisputeReason::NonDelivery, &evidence_hash);
+    client.raise_dispute(
+        &escrow_id,
+        &sender,
+        &DisputeReason::NonDelivery,
+        &evidence_hash,
+    );
 
     // Admin is automatically added as arbitrator
-    let result = client.try_vote_on_dispute(
-        &escrow_id,
-        &admin,
-        &ResolutionOutcome::FavorRecipient,
-    );
+    let result = client.try_vote_on_dispute(&escrow_id, &admin, &ResolutionOutcome::FavorRecipient);
 
     assert!(result.is_ok());
 }
@@ -207,14 +208,16 @@ fn test_non_arbitrator_cannot_vote() {
     client.deposit(&escrow_id, &sender, &amount, &token.address);
 
     let evidence_hash = BytesN::from_array(&env, &[5u8; 32]);
-    client.raise_dispute(&escrow_id, &sender, &DisputeReason::NonDelivery, &evidence_hash);
+    client.raise_dispute(
+        &escrow_id,
+        &sender,
+        &DisputeReason::NonDelivery,
+        &evidence_hash,
+    );
 
     let non_arbitrator = Address::generate(&env);
-    let result = client.try_vote_on_dispute(
-        &escrow_id,
-        &non_arbitrator,
-        &ResolutionOutcome::FavorSender,
-    );
+    let result =
+        client.try_vote_on_dispute(&escrow_id, &non_arbitrator, &ResolutionOutcome::FavorSender);
 
     assert_eq!(result, Err(Ok(Error::NotArbitrator)));
 }
@@ -240,7 +243,12 @@ fn test_dispute_resolved_favor_sender() {
     client.deposit(&escrow_id, &sender, &amount, &token.address);
 
     let evidence_hash = BytesN::from_array(&env, &[6u8; 32]);
-    client.raise_dispute(&escrow_id, &sender, &DisputeReason::NonDelivery, &evidence_hash);
+    client.raise_dispute(
+        &escrow_id,
+        &sender,
+        &DisputeReason::NonDelivery,
+        &evidence_hash,
+    );
 
     // Admin votes in favor of sender (majority of 1)
     client.vote_on_dispute(&escrow_id, &admin, &ResolutionOutcome::FavorSender);
@@ -274,7 +282,12 @@ fn test_dispute_resolved_favor_recipient() {
     client.deposit(&escrow_id, &sender, &amount, &token.address);
 
     let evidence_hash = BytesN::from_array(&env, &[7u8; 32]);
-    client.raise_dispute(&escrow_id, &sender, &DisputeReason::NonDelivery, &evidence_hash);
+    client.raise_dispute(
+        &escrow_id,
+        &sender,
+        &DisputeReason::NonDelivery,
+        &evidence_hash,
+    );
 
     // Admin votes in favor of recipient
     client.vote_on_dispute(&escrow_id, &admin, &ResolutionOutcome::FavorRecipient);
@@ -311,11 +324,7 @@ fn test_admin_resolve_dispute() {
     client.raise_dispute(&escrow_id, &sender, &DisputeReason::Fraud, &evidence_hash);
 
     // Admin resolves directly
-    let result = client.try_resolve_dispute(
-        &escrow_id,
-        &admin,
-        &ResolutionOutcome::FavorRecipient,
-    );
+    let result = client.try_resolve_dispute(&escrow_id, &admin, &ResolutionOutcome::FavorRecipient);
 
     assert!(result.is_ok());
 
@@ -345,11 +354,7 @@ fn test_non_admin_cannot_resolve() {
     let evidence_hash = BytesN::from_array(&env, &[9u8; 32]);
     client.raise_dispute(&escrow_id, &sender, &DisputeReason::Fraud, &evidence_hash);
 
-    let result = client.try_resolve_dispute(
-        &escrow_id,
-        &sender,
-        &ResolutionOutcome::FavorSender,
-    );
+    let result = client.try_resolve_dispute(&escrow_id, &sender, &ResolutionOutcome::FavorSender);
 
     assert_eq!(result, Err(Ok(Error::Unauthorized)));
 }
@@ -374,15 +379,16 @@ fn test_cannot_raise_duplicate_dispute() {
     client.deposit(&escrow_id, &sender, &amount, &token.address);
 
     let evidence_hash = BytesN::from_array(&env, &[10u8; 32]);
-    client.raise_dispute(&escrow_id, &sender, &DisputeReason::NonDelivery, &evidence_hash);
-
-    // Try to raise another dispute
-    let result = client.try_raise_dispute(
+    client.raise_dispute(
         &escrow_id,
         &sender,
-        &DisputeReason::Fraud,
+        &DisputeReason::NonDelivery,
         &evidence_hash,
     );
+
+    // Try to raise another dispute
+    let result =
+        client.try_raise_dispute(&escrow_id, &sender, &DisputeReason::Fraud, &evidence_hash);
 
     assert_eq!(result, Err(Ok(Error::AlreadyDisputed)));
 }
@@ -407,7 +413,12 @@ fn test_arbitrator_cannot_vote_twice() {
     client.deposit(&escrow_id, &sender, &amount, &token.address);
 
     let evidence_hash = BytesN::from_array(&env, &[11u8; 32]);
-    client.raise_dispute(&escrow_id, &sender, &DisputeReason::NonDelivery, &evidence_hash);
+    client.raise_dispute(
+        &escrow_id,
+        &sender,
+        &DisputeReason::NonDelivery,
+        &evidence_hash,
+    );
 
     // First vote
     client.vote_on_dispute(&escrow_id, &admin, &ResolutionOutcome::FavorSender);
@@ -415,11 +426,7 @@ fn test_arbitrator_cannot_vote_twice() {
     // Try to vote again - should fail
     // Note: After first vote with single arbitrator, dispute is resolved
     // so this will fail with InvalidStatus rather than AlreadyVoted
-    let result = client.try_vote_on_dispute(
-        &escrow_id,
-        &admin,
-        &ResolutionOutcome::FavorRecipient,
-    );
+    let result = client.try_vote_on_dispute(&escrow_id, &admin, &ResolutionOutcome::FavorRecipient);
 
     assert!(result.is_err());
 }
@@ -479,12 +486,17 @@ fn test_dispute_status_transitions() {
     client.deposit(&escrow_id, &sender, &amount, &token.address);
 
     let evidence_hash = BytesN::from_array(&env, &[13u8; 32]);
-    
+
     // Initially no dispute
     assert!(client.get_dispute(&escrow_id).is_none());
 
     // Raise dispute - status should be Open
-    client.raise_dispute(&escrow_id, &sender, &DisputeReason::NonDelivery, &evidence_hash);
+    client.raise_dispute(
+        &escrow_id,
+        &sender,
+        &DisputeReason::NonDelivery,
+        &evidence_hash,
+    );
     let dispute = client.get_dispute(&escrow_id).unwrap();
     assert_eq!(dispute.status, DisputeStatus::Open);
 
@@ -515,9 +527,14 @@ fn test_escrow_status_after_resolution() {
     );
     client.deposit(&escrow_id1, &sender, &amount, &token.address);
     let evidence_hash = BytesN::from_array(&env, &[14u8; 32]);
-    client.raise_dispute(&escrow_id1, &sender, &DisputeReason::NonDelivery, &evidence_hash);
+    client.raise_dispute(
+        &escrow_id1,
+        &sender,
+        &DisputeReason::NonDelivery,
+        &evidence_hash,
+    );
     client.resolve_dispute(&escrow_id1, &admin, &ResolutionOutcome::FavorSender);
-    
+
     let escrow1 = client.get_escrow(&escrow_id1).unwrap();
     assert_eq!(escrow1.status, EscrowStatus::Funded);
 
@@ -532,9 +549,14 @@ fn test_escrow_status_after_resolution() {
     );
     client.deposit(&escrow_id2, &sender, &amount, &token.address);
     let evidence_hash2 = BytesN::from_array(&env, &[15u8; 32]);
-    client.raise_dispute(&escrow_id2, &sender, &DisputeReason::NonDelivery, &evidence_hash2);
+    client.raise_dispute(
+        &escrow_id2,
+        &sender,
+        &DisputeReason::NonDelivery,
+        &evidence_hash2,
+    );
     client.resolve_dispute(&escrow_id2, &admin, &ResolutionOutcome::FavorRecipient);
-    
+
     let escrow2 = client.get_escrow(&escrow_id2).unwrap();
     assert_eq!(escrow2.status, EscrowStatus::Approved);
 }
