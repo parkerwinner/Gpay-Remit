@@ -39,12 +39,12 @@ func main() {
 	router.Use(middleware.RequestIDMiddleware())
 	router.Use(middleware.RequestLogger())
 	router.Use(middleware.ErrorHandler())
+	router.Use(middleware.VersionMiddleware())
 
-	// CORS middleware
 	router.Use(func(c *gin.Context) {
 		c.Writer.Header().Set("Access-Control-Allow-Origin", "*")
 		c.Writer.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-		c.Writer.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+		c.Writer.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-API-Version, Accept-Version")
 		if c.Request.Method == "OPTIONS" {
 			c.AbortWithStatus(204)
 			return
@@ -103,12 +103,68 @@ func main() {
 			protected.DELETE("/webhooks/:id", webhookHandler.DeleteWebhook)
 			protected.GET("/webhooks/:id/deliveries", webhookHandler.GetWebhookDeliveries)
 			protected.POST("/webhooks/deliveries/:delivery_id/retry", webhookHandler.RetryWebhookDelivery)
+
+			analyticsHandler := handlers.NewAnalyticsHandler(db)
+			protected.GET("/analytics/volume", middleware.RequireRole("admin"), analyticsHandler.GetVolumeMetrics)
+			protected.GET("/analytics/fees", middleware.RequireRole("admin"), analyticsHandler.GetFeeMetrics)
+			protected.GET("/analytics/success-rate", middleware.RequireRole("admin"), analyticsHandler.GetSuccessRate)
+			protected.GET("/analytics/top-corridors", middleware.RequireRole("admin"), analyticsHandler.GetTopCorridors)
 		}
-	}	})
-			return
+	}
+
+	api2 := router.Group("/api/v2")
+	api2.Use(middleware.RequireVersion("v2"))
+	{
+		authHandler := handlers.NewAuthHandler(db, cfg)
+		api2.POST("/auth/register", authHandler.Register)
+		api2.POST("/auth/login", authHandler.Login)
+		api2.POST("/auth/refresh", authHandler.Refresh)
+
+		api2.POST("/users", authHandler.Register)
+
+		protected := api2.Group("/")
+		protected.Use(middleware.JwtAuthMiddleware(cfg))
+		protected.Use(middleware.AuditTrail(db))
+		{
+			remittanceHandler := handlers.NewRemittanceHandler(db, cfg)
+			protected.POST("/remittances/create", remittanceHandler.CreateRemittance)
+			protected.POST("/remittances", remittanceHandler.SendRemittance)
+			protected.GET("/remittances/:id", remittanceHandler.GetRemittance)
+			protected.GET("/remittances", remittanceHandler.ListRemittances)
+			protected.POST("/remittances/:id/complete", middleware.RequireRole("admin"), remittanceHandler.CompleteRemittance)
+
+			protected.POST("/invoices", remittanceHandler.CreateInvoice)
+			protected.GET("/invoices/:id", remittanceHandler.GetInvoice)
+
+			feeService := services.NewFeeService(cfg)
+			feeHandler := handlers.NewFeeHandler(feeService)
+			protected.GET("/fees/calculate", feeHandler.Calculate)
+
+			auditHandler := handlers.NewAuditLogHandler(db)
+			protected.GET("/audit/logs", middleware.RequireRole("admin"), auditHandler.List)
+
+			exportHandler := handlers.NewExportHandler(db)
+			protected.GET("/transactions/export", exportHandler.ExportTransactions)
+
+			protected.POST("/admin/rate-limit/reset", middleware.RequireRole("admin"), middleware.AdminResetRateLimit(cfg))
+			protected.GET("/admin/rate-limit/view", middleware.RequireRole("admin"), middleware.AdminViewRateLimits(cfg))
+
+			webhookHandler := handlers.NewWebhookHandler(db)
+			protected.POST("/webhooks", webhookHandler.CreateWebhook)
+			protected.GET("/webhooks", webhookHandler.ListWebhooks)
+			protected.GET("/webhooks/:id", webhookHandler.GetWebhook)
+			protected.PUT("/webhooks/:id", webhookHandler.UpdateWebhook)
+			protected.DELETE("/webhooks/:id", webhookHandler.DeleteWebhook)
+			protected.GET("/webhooks/:id/deliveries", webhookHandler.GetWebhookDeliveries)
+			protected.POST("/webhooks/deliveries/:delivery_id/retry", webhookHandler.RetryWebhookDelivery)
+
+			analyticsHandler := handlers.NewAnalyticsHandler(db)
+			protected.GET("/analytics/volume", middleware.RequireRole("admin"), analyticsHandler.GetVolumeMetrics)
+			protected.GET("/analytics/fees", middleware.RequireRole("admin"), analyticsHandler.GetFeeMetrics)
+			protected.GET("/analytics/success-rate", middleware.RequireRole("admin"), analyticsHandler.GetSuccessRate)
+			protected.GET("/analytics/top-corridors", middleware.RequireRole("admin"), analyticsHandler.GetTopCorridors)
 		}
-		c.Next()
-	})
+	}
 
 	server := &http.Server{
 		Addr:    ":" + port,
