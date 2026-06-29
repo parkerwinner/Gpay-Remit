@@ -46,6 +46,11 @@ type Config struct {
 	SMTPPassword string
 	SMTPFrom     string
 	EmailEnabled bool
+
+	// Redis configuration
+	RedisAddr     string
+	RedisPassword string
+	RedisDB       int
 }
 
 func LoadConfig() (*Config, error) {
@@ -79,6 +84,10 @@ func LoadConfig() (*Config, error) {
 		SMTPPassword: os.Getenv("SMTP_PASSWORD"),
 		SMTPFrom:     getEnvOrDefault("SMTP_FROM", os.Getenv("SMTP_USER")),
 		EmailEnabled: getEnvOrDefault("EMAIL_ENABLED", "false") == "true",
+
+		RedisAddr:     getEnvOrDefault("REDIS_ADDR", "localhost:6379"),
+		RedisPassword: os.Getenv("REDIS_PASSWORD"),
+		RedisDB:       getEnvAsInt("REDIS_DB", 0),
 	}, nil
 }
 

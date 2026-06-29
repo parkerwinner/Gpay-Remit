@@ -174,6 +174,7 @@ func TestExportTransactionsInvalidFormat(t *testing.T) {
 	handler := NewExportHandler(db)
 	router := gin.New()
 	router.Use(gin.Recovery())
+	router.Use(errorHandlerForTests())
 	router.GET("/api/v1/transactions/export", handler.ExportTransactions)
 
 	w := httptest.NewRecorder()
@@ -190,6 +191,7 @@ func TestExportTransactionsNoData(t *testing.T) {
 	handler := NewExportHandler(db)
 	router := gin.New()
 	router.Use(gin.Recovery())
+	router.Use(errorHandlerForTests())
 	router.GET("/api/v1/transactions/export", handler.ExportTransactions)
 
 	w := httptest.NewRecorder()

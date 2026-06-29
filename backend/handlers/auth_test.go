@@ -213,16 +213,18 @@ func TestLogin(t *testing.T) {
 	t.Run("Inactive User Returns 403", func(t *testing.T) {
 		handler, r := setupAuthHandler(t)
 
-		// Create inactive user directly in DB
+		// Create user first (IsActive defaults to true via GORM tag), then deactivate.
 		hash, _ := models.HashPassword("Secure@Inactive1")
 		user := models.User{
 			Email:          "inactive@example.com",
 			Name:           "Inactive User",
 			PasswordHash:   hash,
 			StellarAddress: "GDQJUTQYK2MQX2VGDR2FYWLIYAQIEGXTQVTFEMGH6DNHFMHIDENFINIAC",
-			IsActive:       false,
+			IsActive:       true,
 		}
 		handler.DB.Create(&user)
+		// Explicitly set IsActive = false after insert to bypass GORM zero-value handling.
+		handler.DB.Model(&user).Update("is_active", false)
 
 		body, _ := json.Marshal(map[string]string{
 			"email":    "inactive@example.com",
