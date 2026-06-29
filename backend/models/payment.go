@@ -1,6 +1,7 @@
 package models
 
 import (
+	"fmt"
 	"time"
 
 	"gorm.io/gorm"
@@ -31,9 +32,15 @@ type Payment struct {
 	NetworkFee    float64 `gorm:"default:0" json:"network_fee"`
 	Conditions      string         `gorm:"type:text" json:"conditions"` // JSON blob of conditions
 	Notes           string         `gorm:"type:text" json:"notes"`
+	SearchVector    string         `gorm:"type:tsvector" json:"-"`
 }
 
 // TableName overrides the table name
 func (Payment) TableName() string {
 	return "payments"
+}
+
+// SearchableText returns a concatenated text used for searching/highlighting
+func (p *Payment) SearchableText() string {
+	return fmt.Sprintf("%v %s %s %s", p.Amount, p.Currency, p.Status, p.Notes)
 }
