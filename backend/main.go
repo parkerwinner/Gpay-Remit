@@ -20,6 +20,9 @@ import (
 	"github.com/yourusername/gpay-remit/workers"
 )
 
+// shuttingDown signals goroutines to stop when a shutdown signal is received
+var shuttingDown atomic.Bool
+
 func main() {
 	env := os.Getenv("APP_ENV")
 	logger.Init(env)
@@ -57,6 +60,9 @@ func main() {
 	router.GET("/health/ready", healthHandler.Ready)
 	router.GET("/health/live", healthHandler.Live)
 
+	router.GET("/api/docs", handlers.DocsUI)
+	router.GET("/api/docs/openapi.yaml", handlers.DocsSpec)
+
 	api := router.Group("/api/v1")
 	{
 		authHandler := handlers.NewAuthHandler(db, cfg)
@@ -78,6 +84,7 @@ func main() {
 			protected.POST("/remittances/:id/complete", middleware.RequireRole("admin"), remittanceHandler.CompleteRemittance)
 
 			protected.POST("/invoices", remittanceHandler.CreateInvoice)
+			protected.GET("/invoices", remittanceHandler.ListInvoices)
 			protected.GET("/invoices/:id", remittanceHandler.GetInvoice)
 
 			feeService := services.NewFeeService(cfg)
@@ -134,6 +141,7 @@ func main() {
 			protected.POST("/remittances/:id/complete", middleware.RequireRole("admin"), remittanceHandler.CompleteRemittance)
 
 			protected.POST("/invoices", remittanceHandler.CreateInvoice)
+			protected.GET("/invoices", remittanceHandler.ListInvoices)
 			protected.GET("/invoices/:id", remittanceHandler.GetInvoice)
 
 			feeService := services.NewFeeService(cfg)
@@ -167,7 +175,7 @@ func main() {
 	}
 
 	server := &http.Server{
-		Addr:    ":" + port,
+		Addr:    ":" + cfg.Port,
 		Handler: router,
 	}
 
@@ -177,7 +185,7 @@ func main() {
 
 	errCh := make(chan error, 1)
 	go func() {
-		logger.Log.WithField("port", port).Info("Starting Gpay-Remit API server")
+		logger.Log.WithField("port", cfg.Port).Info("Starting Gpay-Remit API server")
 		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			errCh <- err
 		}

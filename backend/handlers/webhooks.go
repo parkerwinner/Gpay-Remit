@@ -48,7 +48,7 @@ func (h *WebhookHandler) CreateWebhook(c *gin.Context) {
 
 	userID, exists := c.Get("userID")
 	if !exists {
-		c.Error(errors.NewAuthError("Unauthorized"))
+		c.Error(errors.NewUnauthorizedError("Unauthorized"))
 		return
 	}
 
@@ -90,7 +90,7 @@ func (h *WebhookHandler) CreateWebhook(c *gin.Context) {
 func (h *WebhookHandler) ListWebhooks(c *gin.Context) {
 	userID, exists := c.Get("userID")
 	if !exists {
-		c.Error(errors.NewAuthError("Unauthorized"))
+		c.Error(errors.NewUnauthorizedError("Unauthorized"))
 		return
 	}
 
@@ -120,7 +120,7 @@ func (h *WebhookHandler) ListWebhooks(c *gin.Context) {
 func (h *WebhookHandler) GetWebhook(c *gin.Context) {
 	userID, exists := c.Get("userID")
 	if !exists {
-		c.Error(errors.NewAuthError("Unauthorized"))
+		c.Error(errors.NewUnauthorizedError("Unauthorized"))
 		return
 	}
 
@@ -152,7 +152,7 @@ func (h *WebhookHandler) GetWebhook(c *gin.Context) {
 func (h *WebhookHandler) UpdateWebhook(c *gin.Context) {
 	userID, exists := c.Get("userID")
 	if !exists {
-		c.Error(errors.NewAuthError("Unauthorized"))
+		c.Error(errors.NewUnauthorizedError("Unauthorized"))
 		return
 	}
 
@@ -208,7 +208,7 @@ func (h *WebhookHandler) UpdateWebhook(c *gin.Context) {
 func (h *WebhookHandler) DeleteWebhook(c *gin.Context) {
 	userID, exists := c.Get("userID")
 	if !exists {
-		c.Error(errors.NewAuthError("Unauthorized"))
+		c.Error(errors.NewUnauthorizedError("Unauthorized"))
 		return
 	}
 
@@ -236,7 +236,7 @@ func (h *WebhookHandler) DeleteWebhook(c *gin.Context) {
 func (h *WebhookHandler) GetWebhookDeliveries(c *gin.Context) {
 	userID, exists := c.Get("userID")
 	if !exists {
-		c.Error(errors.NewAuthError("Unauthorized"))
+		c.Error(errors.NewUnauthorizedError("Unauthorized"))
 		return
 	}
 
@@ -270,7 +270,7 @@ func (h *WebhookHandler) GetWebhookDeliveries(c *gin.Context) {
 func (h *WebhookHandler) RetryWebhookDelivery(c *gin.Context) {
 	userID, exists := c.Get("userID")
 	if !exists {
-		c.Error(errors.NewAuthError("Unauthorized"))
+		c.Error(errors.NewUnauthorizedError("Unauthorized"))
 		return
 	}
 

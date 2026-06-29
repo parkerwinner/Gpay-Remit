@@ -493,7 +493,7 @@ pub enum DataKey {
     EscrowComplianceOverride(u64),
     UserJurisdiction(Address),
     EscrowCancellationConfig(u64),
-    Recurring(u64),
+Recurring(u64),
     RecurringHistory(u64),
     NotificationHooks(u64),
     NotificationHistory(u64),
