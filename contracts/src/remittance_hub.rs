@@ -246,7 +246,6 @@ impl RemittanceHubContract {
             0,
             symbol_short!("na"),
             EventData::PairAction(symbol_short!("orc_set"), primary_oracle.clone(), secondary_oracle.clone()),
-            EventData::PairAction(symbol_short!("orc_set"), primary_oracle, secondary_oracle),
         );
 
         Ok(())
@@ -430,7 +429,6 @@ impl RemittanceHubContract {
             0,
             symbol_short!("na"),
             EventData::AddressAction(symbol_short!("aml_orc"), oracle_address.clone()),
-            EventData::AddressAction(symbol_short!("aml_orc"), oracle_address),
         );
 
         Ok(())
@@ -767,7 +765,6 @@ impl RemittanceHubContract {
                     issuer: invoice.asset.issuer.clone(),
                 },
                 total_due,
-                invoice.amount,
             ),
         );
 
@@ -963,7 +960,6 @@ impl RemittanceHubContract {
             invoice.total_due,
             symbol_short!("unpaid"),
             EventData::InvoiceUpdated(invoice_id, new_amount, fees),
-            EventData::InvoiceUpdated(invoice_id, old_amount, invoice.total_due),
         );
 
         Ok(())
