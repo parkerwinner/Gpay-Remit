@@ -245,7 +245,6 @@ impl RemittanceHubContract {
             &caller,
             0,
             symbol_short!("na"),
-            EventData::PairAction(symbol_short!("orc_set"), primary_oracle.clone(), secondary_oracle.clone()),
             EventData::PairAction(symbol_short!("orc_set"), primary_oracle, secondary_oracle),
         );
 
@@ -429,7 +428,6 @@ impl RemittanceHubContract {
             &caller,
             0,
             symbol_short!("na"),
-            EventData::AddressAction(symbol_short!("aml_orc"), oracle_address.clone()),
             EventData::AddressAction(symbol_short!("aml_orc"), oracle_address),
         );
 
@@ -945,7 +943,7 @@ impl RemittanceHubContract {
             .checked_div(10000)
             .unwrap_or(0);
 
-        let old_amount = invoice.amount;
+        let _old_amount = invoice.amount;
         invoice.amount = new_amount;
         invoice.fees = fees;
         invoice.total_due = new_amount.checked_add(fees).unwrap_or(new_amount);
@@ -963,7 +961,6 @@ impl RemittanceHubContract {
             invoice.total_due,
             symbol_short!("unpaid"),
             EventData::InvoiceUpdated(invoice_id, new_amount, fees),
-            EventData::InvoiceUpdated(invoice_id, old_amount, invoice.total_due),
         );
 
         Ok(())

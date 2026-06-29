@@ -496,6 +496,8 @@ pub enum DataKey {
     NotificationHooks(u64),
     NotificationHistory(u64),
     RecurringCounter,
+    Recurring(u64),
+    RecurringHistory(u64),
 }
 
 #[contract]
@@ -1350,7 +1352,6 @@ impl PaymentEscrowContract {
             .unwrap_or(0u64);
         counter = counter.checked_add(1).ok_or(Error::CounterOverflow)?;
 
-        let mut escrow = Escrow {
         let mut escrow_assets = Vec::new(&env);
         escrow_assets.push_back(asset.clone());
         let mut amounts = Self::empty_asset_amount_map(&env);
@@ -1362,7 +1363,7 @@ impl PaymentEscrowContract {
         let mut refunded_amounts = Self::empty_asset_amount_map(&env);
         refunded_amounts.set(asset.clone(), 0);
 
-        let escrow = Escrow {
+        let mut escrow = Escrow {
             sender: sender.clone(),
             recipient,
             amount,
@@ -1557,6 +1558,8 @@ impl PaymentEscrowContract {
             allow_partial_release: false,
             multi_party_enabled: false,
             kyc_compliant: false,
+            compliant: true,
+            milestones: Vec::new(&env),
         };
 
         env.storage()
@@ -1719,8 +1722,6 @@ impl PaymentEscrowContract {
             return Err(Error::NonCompliant);
         }
 
-        if escrow.status != EscrowStatus::Funded {
-            return Err(Error::InvalidStatus);
         if caller != escrow.sender {
             return Err(Error::WrongSender);
         }
@@ -1779,10 +1780,6 @@ impl PaymentEscrowContract {
             symbol_short!("escrow"),
             symbol_short!("deposit"),
             escrow_id,
-            &approver,
-            escrow.amount,
-            symbol_short!("approved"),
-            EventData::EscrowApproved(escrow_id),
             &caller,
             amount,
             if fully_funded {
