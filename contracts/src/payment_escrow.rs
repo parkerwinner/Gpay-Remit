@@ -493,6 +493,8 @@ pub enum DataKey {
     EscrowComplianceOverride(u64),
     UserJurisdiction(Address),
     EscrowCancellationConfig(u64),
+Recurring(u64),
+    RecurringHistory(u64),
     NotificationHooks(u64),
     NotificationHistory(u64),
     RecurringCounter,
@@ -922,7 +924,7 @@ impl PaymentEscrowContract {
             total_fee = max_fee;
         }
 
-        if total_fee >= amount {
+        if total_fee > amount {
             return Err(Error::FeeExceedsAmount);
         }
 
@@ -2366,11 +2368,11 @@ impl PaymentEscrowContract {
         }
 
         let stored_admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
-        if caller != escrow.recipient && caller != stored_admin && caller != escrow.sender {
+        if caller != escrow.recipient && caller != stored_admin {
             env.storage()
                 .instance()
                 .set(&DataKey::ReentrancyGuard, &false);
-            return Err(Error::UnauthorizedCaller);
+            return Err(Error::Unauthorized);
         }
 
         if escrow.deposited_amount == 0 {
@@ -5462,7 +5464,7 @@ mod test {
         client.approve_escrow(&escrow_id, &admin);
 
         let result = client.try_release_escrow(&escrow_id, &unauthorized, &token.address);
-        assert_eq!(result, Err(Ok(Error::UnauthorizedCaller)));
+        assert_eq!(result, Err(Ok(Error::Unauthorized)));
     }
 
     #[test]

@@ -765,7 +765,6 @@ impl RemittanceHubContract {
                     issuer: invoice.asset.issuer.clone(),
                 },
                 total_due,
-                invoice.amount,
             ),
         );
 

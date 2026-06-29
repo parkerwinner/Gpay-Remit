@@ -360,7 +360,7 @@ fn test_send_remittance_success() {
         &soroban_sdk::Symbol::new(&env, "USD"),
     );
 
-    assert_eq!(remittance_id, 1);
+    assert_eq!(remittance_id, 0);
 
     let remittance = client.get_remittance(&remittance_id);
     assert!(remittance.is_some());

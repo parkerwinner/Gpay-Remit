@@ -122,6 +122,18 @@
                         "key": {
                           "vec": [
                             {
+                              "symbol": "RecurringCounter"
+                            }
+                          ]
+                        },
+                        "val": {
+                          "u64": 0
+                        }
+                      },
+                      {
+                        "key": {
+                          "vec": [
+                            {
                               "symbol": "ReentrancyGuard"
                             }
                           ]
@@ -256,7 +268,7 @@
             "data": {
               "i128": {
                 "hi": 0,
-                "lo": 605937746539599
+                "lo": 945322438813917
               }
             }
           }
