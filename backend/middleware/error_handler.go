@@ -1,7 +1,6 @@
 package middleware
 
 import (
-	"fmt"
 	"net/http"
 	"runtime/debug"
 
@@ -39,7 +38,7 @@ func ErrorHandler() gin.HandlerFunc {
 		defer func() {
 			if err := recover(); err != nil {
 				stack := debug.Stack()
-				
+
 				// Extract context info for logging
 				requestID := c.GetString("requestID")
 				userID, _ := c.Get("userID")
@@ -56,7 +55,7 @@ func ErrorHandler() gin.HandlerFunc {
 				resp := ErrorResponse{}
 				resp.Error.Code = errors.CodeInternal
 				resp.Error.Message = "An internal server error occurred"
-				
+
 				c.AbortWithStatusJSON(http.StatusInternalServerError, resp)
 			}
 		}()
@@ -71,7 +70,7 @@ func ErrorHandler() gin.HandlerFunc {
 
 			var appErr *errors.AppError
 			var ok bool
-			
+
 			if appErr, ok = err.(*errors.AppError); !ok {
 				// Wrap unknown errors as internal errors
 				appErr = errors.NewInternalError("An unexpected error occurred", err)

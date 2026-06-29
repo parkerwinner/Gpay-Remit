@@ -181,6 +181,7 @@ func main() {
 
 	baseCtx, cancelWorkers := context.WithCancel(context.Background())
 	var wg sync.WaitGroup
+	middleware.StartIdempotencyCleanupScheduler(baseCtx, &wg, db, time.Hour)
 	workers.StartMonitor(baseCtx, &wg)
 
 	errCh := make(chan error, 1)

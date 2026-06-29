@@ -1,7 +1,7 @@
 package middleware
 
 import (
-	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -19,14 +19,14 @@ import (
 
 // IdempotencyConfig holds configuration for idempotency middleware
 type IdempotencyConfig struct {
-	TTL           time.Duration // Time to live for idempotency keys (default: 24 hours)
+	TTL            time.Duration // Time to live for idempotency keys (default: 24 hours)
 	AllowedMethods []string      // HTTP methods that require idempotency keys
 }
 
 // DefaultIdempotencyConfig returns default configuration
 func DefaultIdempotencyConfig() IdempotencyConfig {
 	return IdempotencyConfig{
-		TTL:           24 * time.Hour,
+		TTL:            24 * time.Hour,
 		AllowedMethods: []string{"POST", "PUT", "PATCH"},
 	}
 }
@@ -272,12 +272,10 @@ func updateIdempotencyRecord(c *gin.Context, key string, db *gorm.DB) {
 
 	// Get response body
 	responseBody := ""
-	if rw, ok := c.Writer.(*gin.ResponseWriter); ok {
-		// Try to capture response from context if stored
-		if val, exists := c.Get("idempotency_response"); exists {
-			if resp, ok := val.(string); ok {
-				responseBody = resp
-			}
+	// Try to capture response from context if stored
+	if val, exists := c.Get("idempotency_response"); exists {
+		if resp, ok := val.(string); ok {
+			responseBody = resp
 		}
 	}
 
@@ -285,9 +283,12 @@ func updateIdempotencyRecord(c *gin.Context, key string, db *gorm.DB) {
 	record.Status = "completed"
 	record.ResponseStatus = statusCode
 	record.ResponseBody = responseBody
-	record.CompletedAt = time.Now()
+	now := time.Now()
+	record.CompletedAt = &now
 
-	db.Save(&record)
+	if err := db.Save(&record).Error; err != nil {
+		return
+	}
 
 	// Update in-memory cache
 	if val, ok := idempotencyCache.Load(key); ok {
@@ -314,17 +315,33 @@ func bytesBufferPool(b []byte) *strings.Reader {
 }
 
 // CleanupExpiredIdempotencyRecords removes expired idempotency records
-func CleanupExpiredIdempotencyRecords(db *gorm.DB) error {
-	return db.Where("expires_at < ?", time.Now()).Delete(&models.IdempotencyRecord{}).Error
+func CleanupExpiredIdempotencyRecords(db *gorm.DB) (int64, error) {
+	result := db.Where("expires_at < ?", time.Now()).Delete(&models.IdempotencyRecord{})
+	if result.Error != nil {
+		return 0, result.Error
+	}
+	return result.RowsAffected, nil
 }
 
 // StartIdempotencyCleanupScheduler starts a background job to clean up expired records
-func StartIdempotencyCleanupScheduler(db *gorm.DB, interval time.Duration) {
+func StartIdempotencyCleanupScheduler(ctx context.Context, wg *sync.WaitGroup, db *gorm.DB, interval time.Duration) {
 	ticker := time.NewTicker(interval)
+	wg.Add(1)
 	go func() {
-		for range ticker.C {
-			if err := CleanupExpiredIdempotencyRecords(db); err != nil {
-				fmt.Printf("Error cleaning up idempotency records: %v\n", err)
+		defer wg.Done()
+		for {
+			select {
+			case <-ticker.C:
+				rowsAffected, err := CleanupExpiredIdempotencyRecords(db)
+				if err != nil {
+					fmt.Printf("Error cleaning up idempotency records: %v\n", err)
+				} else {
+					fmt.Printf("Cleaned up %d expired idempotency records\n", rowsAffected)
+				}
+			case <-ctx.Done():
+				ticker.Stop()
+				fmt.Println("Idempotency cleanup scheduler stopped")
+				return
 			}
 		}
 	}()
