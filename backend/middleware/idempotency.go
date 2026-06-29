@@ -1,7 +1,6 @@
 package middleware
 
 import (
-	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -272,12 +271,10 @@ func updateIdempotencyRecord(c *gin.Context, key string, db *gorm.DB) {
 
 	// Get response body
 	responseBody := ""
-	if rw, ok := c.Writer.(*gin.ResponseWriter); ok {
-		// Try to capture response from context if stored
-		if val, exists := c.Get("idempotency_response"); exists {
-			if resp, ok := val.(string); ok {
-				responseBody = resp
-			}
+	// Try to capture response from context if stored
+	if val, exists := c.Get("idempotency_response"); exists {
+		if resp, ok := val.(string); ok {
+			responseBody = resp
 		}
 	}
 
@@ -285,7 +282,8 @@ func updateIdempotencyRecord(c *gin.Context, key string, db *gorm.DB) {
 	record.Status = "completed"
 	record.ResponseStatus = statusCode
 	record.ResponseBody = responseBody
-	record.CompletedAt = time.Now()
+	completedAt := time.Now()
+	record.CompletedAt = &completedAt
 
 	db.Save(&record)
 

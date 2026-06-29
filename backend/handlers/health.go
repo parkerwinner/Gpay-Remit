@@ -61,7 +61,9 @@ func (h *HealthHandler) Health(c *gin.Context) {
 
 	overall := "healthy"
 	httpStatus := http.StatusOK
-	if dbStatus.Status != "healthy" || horizonStatus.Status != "healthy" || redisStatus.Status != "healthy" {
+	// "unconfigured" is a known, non-fatal state — Redis is optional.
+	if dbStatus.Status != "healthy" || horizonStatus.Status != "healthy" ||
+		(redisStatus.Status != "healthy" && redisStatus.Status != "unconfigured") {
 		overall = "degraded"
 		httpStatus = http.StatusServiceUnavailable
 	}
@@ -84,7 +86,9 @@ func (h *HealthHandler) Ready(c *gin.Context) {
 	horizonStatus := h.checkHorizon()
 	redisStatus := h.checkRedis()
 
-	if dbStatus.Status != "healthy" || horizonStatus.Status != "healthy" || redisStatus.Status != "healthy" {
+	// "unconfigured" is non-fatal for readiness — allow the pod to serve traffic.
+	if dbStatus.Status != "healthy" || horizonStatus.Status != "healthy" ||
+		(redisStatus.Status != "healthy" && redisStatus.Status != "unconfigured") {
 		c.JSON(http.StatusServiceUnavailable, gin.H{
 			"status":   "not_ready",
 			"database": dbStatus,

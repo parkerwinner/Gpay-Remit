@@ -138,7 +138,7 @@ func (s *WebhookDeliveryService) DeliverWebhook(webhook *models.Webhook, deliver
 		logger.Log.WithField("webhook_id", webhook.ID).
 			WithField("delivery_id", delivery.ID).
 			WithField("attempt", attempt+1).
-			WithError(fmt.Errorf(errMsg)).
+			WithError(fmt.Errorf("%s", errMsg)).
 			Warn("Webhook delivery failed, will retry")
 	}
 
