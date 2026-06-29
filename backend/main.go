@@ -57,6 +57,9 @@ func main() {
 	router.GET("/health/ready", healthHandler.Ready)
 	router.GET("/health/live", healthHandler.Live)
 
+	router.GET("/api/docs", handlers.DocsUI)
+	router.GET("/api/docs/openapi.yaml", handlers.DocsSpec)
+
 	api := router.Group("/api/v1")
 	{
 		authHandler := handlers.NewAuthHandler(db, cfg)
