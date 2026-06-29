@@ -311,3 +311,67 @@ func (h *RemittanceHandler) GetInvoice(c *gin.Context) {
 
 	c.JSON(http.StatusOK, invoice)
 }
+
+type ListInvoicesResponse struct {
+	Data       []models.Invoice `json:"data"`
+	Page       int              `json:"page"`
+	PageSize   int              `json:"page_size"`
+	TotalCount int64            `json:"total_count"`
+}
+
+func (h *RemittanceHandler) ListInvoices(c *gin.Context) {
+	userID, exists := c.Get("userID")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
+		return
+	}
+
+	page := 1
+	pageSize := 20
+	fmt.Sscanf(c.Query("page"), "%d", &page)
+	fmt.Sscanf(c.Query("page_size"), "%d", &pageSize)
+	if page <= 0 {
+		page = 1
+	}
+	if pageSize <= 0 || pageSize > 100 {
+		pageSize = 20
+	}
+
+	query := h.db.Model(&models.Invoice{}).
+		Preload("Payment").
+		Where("issuer_id = ? OR recipient_id = ?", userID, userID)
+
+	if status := c.Query("status"); status != "" {
+		query = query.Where("status = ?", status)
+	}
+
+	if from := c.Query("from"); from != "" {
+		if t, err := time.Parse("2006-01-02", from); err == nil {
+			query = query.Where("created_at >= ?", t)
+		}
+	}
+	if to := c.Query("to"); to != "" {
+		if t, err := time.Parse("2006-01-02", to); err == nil {
+			query = query.Where("created_at <= ?", t.Add(24*time.Hour-time.Second))
+		}
+	}
+
+	var total int64
+	query.Count(&total)
+
+	var invoices []models.Invoice
+	if err := query.Order("created_at DESC").
+		Offset((page - 1) * pageSize).
+		Limit(pageSize).
+		Find(&invoices).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch invoices"})
+		return
+	}
+
+	c.JSON(http.StatusOK, ListInvoicesResponse{
+		Data:       invoices,
+		Page:       page,
+		PageSize:   pageSize,
+		TotalCount: total,
+	})
+}

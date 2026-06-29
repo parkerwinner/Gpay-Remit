@@ -78,6 +78,7 @@ func main() {
 			protected.POST("/remittances/:id/complete", middleware.RequireRole("admin"), remittanceHandler.CompleteRemittance)
 
 			protected.POST("/invoices", remittanceHandler.CreateInvoice)
+			protected.GET("/invoices", remittanceHandler.ListInvoices)
 			protected.GET("/invoices/:id", remittanceHandler.GetInvoice)
 
 			feeService := services.NewFeeService(cfg)
@@ -134,6 +135,7 @@ func main() {
 			protected.POST("/remittances/:id/complete", middleware.RequireRole("admin"), remittanceHandler.CompleteRemittance)
 
 			protected.POST("/invoices", remittanceHandler.CreateInvoice)
+			protected.GET("/invoices", remittanceHandler.ListInvoices)
 			protected.GET("/invoices/:id", remittanceHandler.GetInvoice)
 
 			feeService := services.NewFeeService(cfg)
