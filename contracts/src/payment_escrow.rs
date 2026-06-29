@@ -498,6 +498,8 @@ Recurring(u64),
     NotificationHooks(u64),
     NotificationHistory(u64),
     RecurringCounter,
+    Recurring(u64),
+    RecurringHistory(u64),
 }
 
 #[contract]
@@ -1721,7 +1723,6 @@ impl PaymentEscrowContract {
         if !escrow.compliant {
             return Err(Error::NonCompliant);
         }
-
 
         if caller != escrow.sender {
             return Err(Error::WrongSender);
