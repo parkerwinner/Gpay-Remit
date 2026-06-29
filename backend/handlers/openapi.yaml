@@ -1,0 +1,944 @@
+openapi: 3.0.3
+info:
+  title: Gpay-Remit API
+  description: |
+    REST API for the Gpay-Remit cross-border payment platform built on Stellar.
+
+    ## Authentication
+    All protected endpoints require a Bearer JWT token in the `Authorization` header.
+    Obtain a token via `POST /api/v1/auth/login`.
+
+    ## Versioning
+    The API supports two versions:
+    - **v1** — deprecated, still functional
+    - **v2** — current, recommended
+
+    Set the desired version via the `Accept-Version` header or use the versioned path prefix (`/api/v1/` or `/api/v2/`).
+  version: "2.0.0"
+  contact:
+    name: Gpay-Remit Team
+
+servers:
+  - url: http://localhost:8080/api/v1
+    description: Local development (v1)
+  - url: http://localhost:8080/api/v2
+    description: Local development (v2)
+
+tags:
+  - name: Auth
+    description: Authentication and token management
+  - name: Remittances
+    description: Cross-border payment operations
+  - name: Invoices
+    description: Invoice creation and retrieval
+  - name: Fees
+    description: Fee calculation
+  - name: Webhooks
+    description: Webhook subscription management
+  - name: Analytics
+    description: Transaction analytics (admin only)
+  - name: Audit
+    description: Audit log access (admin only)
+  - name: Health
+    description: Service health and readiness probes
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  schemas:
+    Error:
+      type: object
+      properties:
+        error:
+          type: string
+          example: "Invalid request body"
+
+    RegisterRequest:
+      type: object
+      required: [email, password, first_name, last_name]
+      properties:
+        email:
+          type: string
+          format: email
+          example: alice@example.com
+        password:
+          type: string
+          minLength: 8
+          example: "s3cur3P@ss!"
+        first_name:
+          type: string
+          example: Alice
+        last_name:
+          type: string
+          example: Smith
+
+    LoginRequest:
+      type: object
+      required: [email, password]
+      properties:
+        email:
+          type: string
+          format: email
+          example: alice@example.com
+        password:
+          type: string
+          example: "s3cur3P@ss!"
+
+    AuthResponse:
+      type: object
+      properties:
+        token:
+          type: string
+          example: "eyJhbGciOiJIUzI1NiIs..."
+        refresh_token:
+          type: string
+          example: "eyJhbGciOiJIUzI1NiIs..."
+        user:
+          $ref: '#/components/schemas/User'
+
+    User:
+      type: object
+      properties:
+        id:
+          type: integer
+          example: 42
+        email:
+          type: string
+          example: alice@example.com
+        first_name:
+          type: string
+          example: Alice
+        last_name:
+          type: string
+          example: Smith
+        role:
+          type: string
+          example: user
+        created_at:
+          type: string
+          format: date-time
+
+    Payment:
+      type: object
+      properties:
+        id:
+          type: integer
+          example: 1
+        sender_id:
+          type: integer
+          example: 42
+        recipient_id:
+          type: integer
+          example: 99
+        sender_account:
+          type: string
+          example: "GAAZI4TCR3TY5OJHCTJC2A4QSY6CJWJH5IAJTGKIN2ER7LBNVKOCCWN"
+        recipient_account:
+          type: string
+          example: "GBYNR2QJXLBCBTRN44MRORCMI4YO7FZPFBCNOKTLF24TBDTU6TZXNDO"
+        amount:
+          type: number
+          format: double
+          example: 500.00
+        currency:
+          type: string
+          example: USDC
+        target_currency:
+          type: string
+          example: EUR
+        status:
+          type: string
+          enum: [pending, completed, failed, cancelled]
+          example: pending
+        fee:
+          type: number
+          format: double
+          example: 2.50
+        notes:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+
+    CreateRemittanceRequest:
+      type: object
+      required: [sender_account, recipient_account, amount, asset_code]
+      properties:
+        sender_account:
+          type: string
+          example: "GAAZI4TCR3TY5OJHCTJC2A4QSY6CJWJH5IAJTGKIN2ER7LBNVKOCCWN"
+        recipient_account:
+          type: string
+          example: "GBYNR2QJXLBCBTRN44MRORCMI4YO7FZPFBCNOKTLF24TBDTU6TZXNDO"
+        amount:
+          type: number
+          format: double
+          minimum: 0.0000001
+          example: 500.00
+        asset_code:
+          type: string
+          example: USDC
+        asset_issuer:
+          type: string
+          example: "GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5"
+        notes:
+          type: string
+
+    Invoice:
+      type: object
+      properties:
+        id:
+          type: integer
+          example: 7
+        payment_id:
+          type: integer
+          example: 1
+        invoice_no:
+          type: string
+          example: "INV-1710000000-1"
+        issuer_id:
+          type: integer
+          example: 42
+        recipient_id:
+          type: integer
+          example: 99
+        amount:
+          type: number
+          format: double
+          example: 500.00
+        currency:
+          type: string
+          example: USDC
+        status:
+          type: string
+          enum: [unpaid, paid, overdue, cancelled]
+          example: unpaid
+        description:
+          type: string
+        due_date:
+          type: string
+          format: date-time
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+
+    ListInvoicesResponse:
+      type: object
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/Invoice'
+        page:
+          type: integer
+          example: 1
+        page_size:
+          type: integer
+          example: 20
+        total_count:
+          type: integer
+          format: int64
+          example: 42
+
+    FeeBreakdown:
+      type: object
+      properties:
+        platform_fee:
+          type: number
+          example: 1.25
+        forex_fee:
+          type: number
+          example: 0.63
+        compliance_fee:
+          type: number
+          example: 0.25
+        network_fee:
+          type: number
+          example: 0.38
+        total_fee:
+          type: number
+          example: 2.51
+
+    Webhook:
+      type: object
+      properties:
+        id:
+          type: integer
+          example: 3
+        url:
+          type: string
+          format: uri
+          example: "https://example.com/webhook"
+        events:
+          type: array
+          items:
+            type: string
+          example: ["payment.completed", "payment.failed"]
+        active:
+          type: boolean
+        created_at:
+          type: string
+          format: date-time
+
+    DependencyStatus:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [healthy, unhealthy, unconfigured]
+          example: healthy
+        latency:
+          type: string
+          example: "2.3ms"
+        error:
+          type: string
+
+    HealthResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [healthy, degraded]
+          example: healthy
+        service:
+          type: string
+          example: gpay-remit-api
+        timestamp:
+          type: string
+          format: date-time
+        dependencies:
+          type: object
+          properties:
+            database:
+              $ref: '#/components/schemas/DependencyStatus'
+            horizon:
+              $ref: '#/components/schemas/DependencyStatus'
+            redis:
+              $ref: '#/components/schemas/DependencyStatus'
+
+paths:
+  /auth/register:
+    post:
+      tags: [Auth]
+      summary: Register a new user
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegisterRequest'
+            example:
+              email: alice@example.com
+              password: "s3cur3P@ss!"
+              first_name: Alice
+              last_name: Smith
+      responses:
+        '201':
+          description: User registered successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthResponse'
+        '400':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /auth/login:
+    post:
+      tags: [Auth]
+      summary: Obtain JWT access and refresh tokens
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+      responses:
+        '200':
+          description: Tokens issued
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthResponse'
+        '401':
+          description: Invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /auth/refresh:
+    post:
+      tags: [Auth]
+      summary: Exchange a refresh token for a new access token
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [refresh_token]
+              properties:
+                refresh_token:
+                  type: string
+      responses:
+        '200':
+          description: New access token issued
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthResponse'
+        '401':
+          description: Invalid or expired refresh token
+
+  /remittances:
+    get:
+      tags: [Remittances]
+      summary: List remittances (paginated)
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: query
+          name: page
+          schema:
+            type: integer
+            default: 1
+        - in: query
+          name: page_size
+          schema:
+            type: integer
+            default: 20
+            maximum: 100
+      responses:
+        '200':
+          description: List of payments
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Payment'
+        '401':
+          description: Unauthorized
+    post:
+      tags: [Remittances]
+      summary: Send a remittance (simple)
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [sender_id, recipient_id, amount, currency]
+              properties:
+                sender_id:
+                  type: integer
+                recipient_id:
+                  type: integer
+                amount:
+                  type: number
+                  minimum: 0.0000001
+                currency:
+                  type: string
+                target_currency:
+                  type: string
+                notes:
+                  type: string
+      responses:
+        '201':
+          description: Payment created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Payment'
+        '400':
+          description: Validation error
+
+  /remittances/create:
+    post:
+      tags: [Remittances]
+      summary: Create a Stellar-backed remittance with escrow
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateRemittanceRequest'
+      responses:
+        '201':
+          description: Remittance initiated; returns unsigned Stellar XDR envelope
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  remittance_id:
+                    type: integer
+                  status:
+                    type: string
+                  fee_breakdown:
+                    $ref: '#/components/schemas/FeeBreakdown'
+                  tx_envelope:
+                    type: string
+                    description: Base64-encoded XDR transaction envelope to be signed
+                  message:
+                    type: string
+        '400':
+          description: Invalid Stellar account or request body
+        '401':
+          description: Unauthorized
+
+  /remittances/{id}:
+    get:
+      tags: [Remittances]
+      summary: Get a single remittance by ID
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Payment details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Payment'
+        '404':
+          description: Not found
+
+  /remittances/{id}/complete:
+    post:
+      tags: [Remittances]
+      summary: Mark a remittance as completed (admin only)
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Payment marked completed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Payment'
+        '403':
+          description: Admin role required
+        '404':
+          description: Not found
+
+  /invoices:
+    get:
+      tags: [Invoices]
+      summary: List invoices for the authenticated user
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: query
+          name: status
+          schema:
+            type: string
+            enum: [unpaid, paid, overdue, cancelled]
+          description: Filter by invoice status
+        - in: query
+          name: from
+          schema:
+            type: string
+            format: date
+          description: "Filter invoices created on or after this date (YYYY-MM-DD)"
+        - in: query
+          name: to
+          schema:
+            type: string
+            format: date
+          description: "Filter invoices created on or before this date (YYYY-MM-DD)"
+        - in: query
+          name: page
+          schema:
+            type: integer
+            default: 1
+        - in: query
+          name: page_size
+          schema:
+            type: integer
+            default: 20
+            maximum: 100
+      responses:
+        '200':
+          description: Paginated list of invoices
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListInvoicesResponse'
+        '401':
+          description: Unauthorized
+    post:
+      tags: [Invoices]
+      summary: Create a new invoice
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [payment_id, issuer_id, recipient_id, amount, currency]
+              properties:
+                payment_id:
+                  type: integer
+                issuer_id:
+                  type: integer
+                recipient_id:
+                  type: integer
+                amount:
+                  type: number
+                  minimum: 0.0000001
+                currency:
+                  type: string
+                description:
+                  type: string
+      responses:
+        '201':
+          description: Invoice created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Invoice'
+        '400':
+          description: Validation error
+
+  /invoices/{id}:
+    get:
+      tags: [Invoices]
+      summary: Get a single invoice by ID
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Invoice details with payment info
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Invoice'
+        '404':
+          description: Not found
+
+  /fees/calculate:
+    get:
+      tags: [Fees]
+      summary: Calculate fees for a given amount
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: query
+          name: amount
+          required: true
+          schema:
+            type: number
+          example: 500.00
+      responses:
+        '200':
+          description: Fee breakdown
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FeeBreakdown'
+
+  /webhooks:
+    get:
+      tags: [Webhooks]
+      summary: List registered webhooks
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: Webhook list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Webhook'
+    post:
+      tags: [Webhooks]
+      summary: Register a new webhook
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [url, events]
+              properties:
+                url:
+                  type: string
+                  format: uri
+                events:
+                  type: array
+                  items:
+                    type: string
+      responses:
+        '201':
+          description: Webhook registered
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Webhook'
+
+  /webhooks/{id}:
+    get:
+      tags: [Webhooks]
+      summary: Get webhook by ID
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Webhook details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Webhook'
+        '404':
+          description: Not found
+    put:
+      tags: [Webhooks]
+      summary: Update a webhook
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                url:
+                  type: string
+                  format: uri
+                events:
+                  type: array
+                  items:
+                    type: string
+                active:
+                  type: boolean
+      responses:
+        '200':
+          description: Webhook updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Webhook'
+    delete:
+      tags: [Webhooks]
+      summary: Delete a webhook
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: integer
+      responses:
+        '204':
+          description: Deleted
+
+  /webhooks/{id}/deliveries:
+    get:
+      tags: [Webhooks]
+      summary: List delivery attempts for a webhook
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Delivery list
+
+  /webhooks/deliveries/{delivery_id}/retry:
+    post:
+      tags: [Webhooks]
+      summary: Retry a failed webhook delivery
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: delivery_id
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Delivery retried
+
+  /analytics/volume:
+    get:
+      tags: [Analytics]
+      summary: Transaction volume metrics (admin)
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: query
+          name: period
+          schema:
+            type: string
+            enum: [day, week, month]
+            default: day
+      responses:
+        '200':
+          description: Volume metrics
+        '403':
+          description: Admin role required
+
+  /analytics/fees:
+    get:
+      tags: [Analytics]
+      summary: Fee breakdown analytics (admin)
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: Fee analytics
+        '403':
+          description: Admin role required
+
+  /analytics/success-rate:
+    get:
+      tags: [Analytics]
+      summary: Transaction success rate metrics (admin)
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: Success rate data
+        '403':
+          description: Admin role required
+
+  /analytics/top-corridors:
+    get:
+      tags: [Analytics]
+      summary: Top payment corridors (admin)
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: Top corridors data
+        '403':
+          description: Admin role required
+
+  /audit/logs:
+    get:
+      tags: [Audit]
+      summary: List audit log entries (admin)
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: query
+          name: page
+          schema:
+            type: integer
+            default: 1
+        - in: query
+          name: page_size
+          schema:
+            type: integer
+            default: 20
+      responses:
+        '200':
+          description: Audit log entries
+        '403':
+          description: Admin role required
+
+  /transactions/export:
+    get:
+      tags: [Audit]
+      summary: Export transactions as CSV
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: CSV file
+          content:
+            text/csv:
+              schema:
+                type: string
+
+/health:
+    get:
+      tags: [Health]
+      summary: Full health check with dependency status
+      responses:
+        '200':
+          description: All dependencies healthy
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+        '503':
+          description: One or more dependencies degraded
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+
+  /health/ready:
+    get:
+      tags: [Health]
+      summary: Kubernetes readiness probe
+      responses:
+        '200':
+          description: Service ready
+        '503':
+          description: Service not ready
+
+  /health/live:
+    get:
+      tags: [Health]
+      summary: Kubernetes liveness probe
+      responses:
+        '200':
+          description: Service alive

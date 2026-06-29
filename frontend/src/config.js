@@ -1,8 +1,15 @@
-// #114 — centralise env-var access and validate at startup so a missing /
-// misconfigured REACT_APP_API_URL surfaces as a clear console warning rather
-// than a silent 404 on every API call.
+/**
+ * Required environment variables:
+ *   REACT_APP_API_URL          - Base URL of the Gpay-Remit backend API
+ *                                e.g. http://localhost:8080/api/v1
+ *   REACT_APP_STELLAR_NETWORK  - Stellar network: "testnet" or "mainnet"
+ *                                (optional — defaults to "testnet")
+ *
+ * In development, copy frontend/.env.example to frontend/.env and fill in the values.
+ */
 
-const rawUrl = process.env.REACT_APP_API_URL;
+const DEV_FALLBACK_URL = "http://localhost:8080/api/v1";
+const IS_DEV = process.env.NODE_ENV === "development";
 
 function isValidUrl(str) {
   try {
@@ -13,23 +20,40 @@ function isValidUrl(str) {
   }
 }
 
-const FALLBACK_URL = "http://localhost:8080/api/v1";
+function resolveApiUrl() {
+  const raw = process.env.REACT_APP_API_URL;
 
-let API_BASE_URL;
-if (!rawUrl) {
-  console.warn(
-    "[Gpay-Remit] REACT_APP_API_URL is not set — falling back to",
-    FALLBACK_URL
-  );
-  API_BASE_URL = FALLBACK_URL;
-} else if (!isValidUrl(rawUrl)) {
-  console.warn(
-    "[Gpay-Remit] REACT_APP_API_URL is not a valid URL (" + rawUrl + ") — falling back to",
-    FALLBACK_URL
-  );
-  API_BASE_URL = FALLBACK_URL;
-} else {
-  API_BASE_URL = rawUrl;
+  if (!raw || raw.trim() === "") {
+    if (IS_DEV) {
+      console.warn(
+        `[Gpay-Remit] REACT_APP_API_URL is not set. Using development fallback: ${DEV_FALLBACK_URL}`
+      );
+      return DEV_FALLBACK_URL;
+    }
+    throw new Error(
+      "[Gpay-Remit] REACT_APP_API_URL is required but not set. " +
+        "Set it in your environment or .env file before starting the app."
+    );
+  }
+
+  if (!isValidUrl(raw)) {
+    if (IS_DEV) {
+      console.warn(
+        `[Gpay-Remit] REACT_APP_API_URL "${raw}" is not a valid http/https URL. ` +
+          `Using development fallback: ${DEV_FALLBACK_URL}`
+      );
+      return DEV_FALLBACK_URL;
+    }
+    throw new Error(
+      `[Gpay-Remit] REACT_APP_API_URL "${raw}" is not a valid http/https URL. ` +
+        "Provide a full URL including protocol, e.g. https://api.example.com/api/v1"
+    );
+  }
+
+  return raw.replace(/\/$/, "");
 }
 
-export { API_BASE_URL };
+export const API_BASE_URL = resolveApiUrl();
+
+export const STELLAR_NETWORK =
+  process.env.REACT_APP_STELLAR_NETWORK || "testnet";

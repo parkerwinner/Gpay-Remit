@@ -60,6 +60,9 @@ func main() {
 	router.GET("/health/ready", healthHandler.Ready)
 	router.GET("/health/live", healthHandler.Live)
 
+	router.GET("/api/docs", handlers.DocsUI)
+	router.GET("/api/docs/openapi.yaml", handlers.DocsSpec)
+
 	api := router.Group("/api/v1")
 	{
 		authHandler := handlers.NewAuthHandler(db, cfg)
@@ -81,6 +84,7 @@ func main() {
 			protected.POST("/remittances/:id/complete", middleware.RequireRole("admin"), remittanceHandler.CompleteRemittance)
 
 			protected.POST("/invoices", remittanceHandler.CreateInvoice)
+			protected.GET("/invoices", remittanceHandler.ListInvoices)
 			protected.GET("/invoices/:id", remittanceHandler.GetInvoice)
 
 			feeService := services.NewFeeService(cfg)
@@ -137,6 +141,7 @@ func main() {
 			protected.POST("/remittances/:id/complete", middleware.RequireRole("admin"), remittanceHandler.CompleteRemittance)
 
 			protected.POST("/invoices", remittanceHandler.CreateInvoice)
+			protected.GET("/invoices", remittanceHandler.ListInvoices)
 			protected.GET("/invoices/:id", remittanceHandler.GetInvoice)
 
 			feeService := services.NewFeeService(cfg)
