@@ -1,6 +1,7 @@
 package utils
 
 import (
+	"context"
 	"testing"
 
 	"github.com/stellar/go/keypair"
@@ -48,7 +49,7 @@ func TestSignTx(t *testing.T) {
 
 
 	t.Run("Valid signature", func(t *testing.T) {
-		signedXDR, err := SignTx(envelopeXDR, secret, network.TestNetworkPassphrase)
+		signedXDR, err := SignTx(context.Background(), envelopeXDR, secret, network.TestNetworkPassphrase)
 		assert.NoError(t, err)
 		assert.NotEmpty(t, signedXDR)
 		assert.NotEqual(t, envelopeXDR, signedXDR)
@@ -85,7 +86,7 @@ func TestBuildPaymentTx(t *testing.T) {
 	issuer := issuerKP.Address()
 
 	t.Run("Native payment", func(t *testing.T) {
-		tx, err := client.BuildPaymentTx(sourceAccount, destination, "XLM", "", "100")
+		tx, err := client.BuildPaymentTx(context.Background(), sourceAccount, destination, "XLM", "", "100")
 		assert.NoError(t, err)
 		assert.NotNil(t, tx)
 		assert.Len(t, tx.Operations(), 1)
@@ -96,7 +97,7 @@ func TestBuildPaymentTx(t *testing.T) {
 	})
 
 	t.Run("Native payment lowercase xlm", func(t *testing.T) {
-		tx, err := client.BuildPaymentTx(sourceAccount, destination, "xlm", "", "1")
+		tx, err := client.BuildPaymentTx(context.Background(), sourceAccount, destination, "xlm", "", "1")
 		assert.NoError(t, err)
 		assert.NotNil(t, tx)
 		op := tx.Operations()[0].(*txnbuild.Payment)
@@ -104,14 +105,14 @@ func TestBuildPaymentTx(t *testing.T) {
 	})
 
 	t.Run("Empty asset code treated as native", func(t *testing.T) {
-		tx, err := client.BuildPaymentTx(sourceAccount, destination, "", "", "10")
+		tx, err := client.BuildPaymentTx(context.Background(), sourceAccount, destination, "", "", "10")
 		assert.NoError(t, err)
 		op := tx.Operations()[0].(*txnbuild.Payment)
 		assert.IsType(t, txnbuild.NativeAsset{}, op.Asset)
 	})
 
 	t.Run("Credit asset payment", func(t *testing.T) {
-		tx, err := client.BuildPaymentTx(sourceAccount, destination, "USDC", issuer, "50")
+		tx, err := client.BuildPaymentTx(context.Background(), sourceAccount, destination, "USDC", issuer, "50")
 		assert.NoError(t, err)
 		assert.NotNil(t, tx)
 
@@ -122,7 +123,7 @@ func TestBuildPaymentTx(t *testing.T) {
 	})
 
 	t.Run("Payment destination matches", func(t *testing.T) {
-		tx, err := client.BuildPaymentTx(sourceAccount, destination, "XLM", "", "5")
+		tx, err := client.BuildPaymentTx(context.Background(), sourceAccount, destination, "XLM", "", "5")
 		assert.NoError(t, err)
 		op := tx.Operations()[0].(*txnbuild.Payment)
 		assert.Equal(t, destination, op.Destination)

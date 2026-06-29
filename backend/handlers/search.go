@@ -8,6 +8,7 @@ import (
 
     "github.com/gin-gonic/gin"
     "github.com/yourusername/gpay-remit/config"
+    "github.com/yourusername/gpay-remit/errors"
     "github.com/yourusername/gpay-remit/models"
     "gorm.io/gorm"
 )
@@ -25,7 +26,7 @@ func NewSearchHandler(db *gorm.DB, cfg *config.Config) *SearchHandler {
 func (h *SearchHandler) SearchTransactions(c *gin.Context) {
     q := strings.TrimSpace(c.Query("q"))
     if q == "" {
-        c.JSON(http.StatusBadRequest, gin.H{"error": "missing query parameter 'q'"})
+        c.Error(errors.NewValidationError("Missing query parameter", "q is required"))
         return
     }
 
@@ -83,7 +84,7 @@ func (h *SearchHandler) SearchTransactions(c *gin.Context) {
         base = base.Order(fmt.Sprintf("%s %s", sortBy, sortOrder)).Limit(pageSize).Offset(offset)
         var payments []models.Payment
         if err := base.Find(&payments).Error; err != nil {
-            c.JSON(http.StatusInternalServerError, gin.H{"error": "search failed"})
+            c.Error(errors.NewInternalError("Search failed", err))
             return
         }
         // build rows with highlight

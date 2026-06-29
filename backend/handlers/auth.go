@@ -49,7 +49,7 @@ type RefreshTokenRequest struct {
 func (h *AuthHandler) Register(c *gin.Context) {
 	var req RegisterRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		c.Error(errors.NewValidationError("Invalid request body", err.Error()))
 		return
 	}
 
@@ -58,7 +58,7 @@ func (h *AuthHandler) Register(c *gin.Context) {
 		logger.Log.WithFields(logrus.Fields{
 			"endpoint": "/auth/register",
 		}).Warn("Registration rejected: weak password")
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		c.Error(errors.NewValidationError("Invalid password", err.Error()))
 		return
 	}
 
@@ -72,13 +72,13 @@ func (h *AuthHandler) Register(c *gin.Context) {
 
 	if err := h.DB.Create(&user).Error; err != nil {
 		if strings.Contains(err.Error(), "unique") || strings.Contains(err.Error(), "duplicate") || strings.Contains(err.Error(), "UNIQUE") {
-			c.JSON(http.StatusConflict, gin.H{"error": "Email already registered"})
+			c.Error(errors.NewConflictError("Email already registered"))
 			return
 		}
 		logger.Log.WithFields(logrus.Fields{
 			"endpoint": "/auth/register",
 		}).Error("Failed to create user")
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create user"})
+		c.Error(errors.NewInternalError("Failed to create user", err))
 		return
 	}
 
@@ -95,18 +95,18 @@ func (h *AuthHandler) Register(c *gin.Context) {
 func (h *AuthHandler) Login(c *gin.Context) {
 	var req LoginRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		c.Error(errors.NewValidationError("Invalid request body", err.Error()))
 		return
 	}
 
 	var user models.User
 	if err := h.DB.Where("email = ?", req.Email).First(&user).Error; err != nil {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid credentials"})
+		c.Error(errors.NewUnauthorizedError("Invalid credentials"))
 		return
 	}
 
 	if !user.IsActive {
-		c.JSON(http.StatusForbidden, gin.H{"error": "User account is inactive"})
+		c.Error(errors.NewForbiddenError("User account is inactive"))
 		return
 	}
 
@@ -115,19 +115,19 @@ func (h *AuthHandler) Login(c *gin.Context) {
 			"user_id":  user.ID,
 			"endpoint": "/auth/login",
 		}).Warn("Failed login attempt")
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid credentials"})
+		c.Error(errors.NewUnauthorizedError("Invalid credentials"))
 		return
 	}
 
 	accessToken, err := middleware.GenerateToken(user.ID, user.Role, h.Cfg.JWTSecret, 15*time.Minute)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to generate access token"})
+		c.Error(errors.NewInternalError("Failed to generate access token", err))
 		return
 	}
 
 	refreshToken, err := middleware.GenerateToken(user.ID, user.Role, h.Cfg.JWTRefreshSecret, 7*24*time.Hour)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to generate refresh token"})
+		c.Error(errors.NewInternalError("Failed to generate refresh token", err))
 		return
 	}
 
