@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/yourusername/gpay-remit/errors"
 	"github.com/yourusername/gpay-remit/services"
 	"github.com/yourusername/gpay-remit/utils"
 	"gorm.io/gorm"
@@ -26,9 +27,7 @@ func (h *AnalyticsHandler) GetVolumeMetrics(c *gin.Context) {
 	period := c.DefaultQuery("period", "daily")
 	
 	if !isValidPeriod(period) {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"error": "Invalid period. Valid values are: daily, weekly, monthly, yearly",
-		})
+		c.Error(errors.NewValidationError("Invalid period", "Valid values are: daily, weekly, monthly, yearly"))
 		return
 	}
 
@@ -46,7 +45,7 @@ func (h *AnalyticsHandler) GetVolumeMetrics(c *gin.Context) {
 		var err error
 		startDate, endDate, err = h.service.CalculateDateRange(period)
 		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			c.Error(errors.NewValidationError("Invalid date range", err.Error()))
 			return
 		}
 
@@ -62,7 +61,7 @@ func (h *AnalyticsHandler) GetVolumeMetrics(c *gin.Context) {
 
 	metrics, err := h.service.GetVolumeMetrics(period, startDate, endDate)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to retrieve volume metrics"})
+		c.Error(errors.NewInternalError("Failed to retrieve volume metrics", err))
 		return
 	}
 
@@ -76,9 +75,7 @@ func (h *AnalyticsHandler) GetFeeMetrics(c *gin.Context) {
 	period := c.DefaultQuery("period", "daily")
 	
 	if !isValidPeriod(period) {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"error": "Invalid period. Valid values are: daily, weekly, monthly, yearly",
-		})
+		c.Error(errors.NewValidationError("Invalid period", "Valid values are: daily, weekly, monthly, yearly"))
 		return
 	}
 
@@ -96,7 +93,7 @@ func (h *AnalyticsHandler) GetFeeMetrics(c *gin.Context) {
 		var err error
 		startDate, endDate, err = h.service.CalculateDateRange(period)
 		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			c.Error(errors.NewValidationError("Invalid date range", err.Error()))
 			return
 		}
 
@@ -112,7 +109,7 @@ func (h *AnalyticsHandler) GetFeeMetrics(c *gin.Context) {
 
 	metrics, err := h.service.GetFeeMetrics(period, startDate, endDate)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to retrieve fee metrics"})
+		c.Error(errors.NewInternalError("Failed to retrieve fee metrics", err))
 		return
 	}
 
@@ -126,9 +123,7 @@ func (h *AnalyticsHandler) GetSuccessRate(c *gin.Context) {
 	period := c.DefaultQuery("period", "daily")
 	
 	if !isValidPeriod(period) {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"error": "Invalid period. Valid values are: daily, weekly, monthly, yearly",
-		})
+		c.Error(errors.NewValidationError("Invalid period", "Valid values are: daily, weekly, monthly, yearly"))
 		return
 	}
 
@@ -146,7 +141,7 @@ func (h *AnalyticsHandler) GetSuccessRate(c *gin.Context) {
 		var err error
 		startDate, endDate, err = h.service.CalculateDateRange(period)
 		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			c.Error(errors.NewValidationError("Invalid date range", err.Error()))
 			return
 		}
 
@@ -162,7 +157,7 @@ func (h *AnalyticsHandler) GetSuccessRate(c *gin.Context) {
 
 	metrics, err := h.service.GetSuccessRateMetrics(period, startDate, endDate)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to retrieve success rate metrics"})
+		c.Error(errors.NewInternalError("Failed to retrieve success rate metrics", err))
 		return
 	}
 
@@ -176,15 +171,13 @@ func (h *AnalyticsHandler) GetTopCorridors(c *gin.Context) {
 	limitStr := c.DefaultQuery("limit", "10")
 	limit, err := strconv.Atoi(limitStr)
 	if err != nil || limit < 1 || limit > 100 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid limit. Must be between 1 and 100"})
+		c.Error(errors.NewValidationError("Invalid limit", "Limit must be between 1 and 100"))
 		return
 	}
 
 	period := c.DefaultQuery("period", "monthly")
 	if !isValidPeriod(period) {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"error": "Invalid period. Valid values are: daily, weekly, monthly, yearly",
-		})
+		c.Error(errors.NewValidationError("Invalid period", "Valid values are: daily, weekly, monthly, yearly"))
 		return
 	}
 
@@ -192,7 +185,7 @@ func (h *AnalyticsHandler) GetTopCorridors(c *gin.Context) {
 	if !customRange {
 		startDate, endDate, err = h.service.CalculateDateRange(period)
 		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			c.Error(errors.NewValidationError("Invalid date range", err.Error()))
 			return
 		}
 	}
@@ -212,7 +205,7 @@ func (h *AnalyticsHandler) GetTopCorridors(c *gin.Context) {
 
 	corridors, err := h.service.GetTopCorridors(limit, startDate, endDate)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to retrieve top corridors"})
+		c.Error(errors.NewInternalError("Failed to retrieve top corridors", err))
 		return
 	}
 

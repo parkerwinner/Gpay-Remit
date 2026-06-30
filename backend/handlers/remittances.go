@@ -115,26 +115,29 @@ func (h *RemittanceHandler) SendRemittance(c *gin.Context) {
 func (h *RemittanceHandler) CreateRemittance(c *gin.Context) {
 	var req CreateRemittanceRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		c.Error(errors.NewValidationError("Invalid request body", err.Error()))
 		return
 	}
 
+	ctx := utils.WithRequestContext(c.Request.Context(), c.GetString("requestID"), nil)
+
 	// Validate Stellar accounts
-	if err := h.stellarClient.ValidateAccount(req.SenderAccount); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("Invalid sender account: %v", err)})
+	if err := h.stellarClient.ValidateAccount(ctx, req.SenderAccount); err != nil {
+		c.Error(errors.NewValidationError("Invalid sender account", err.Error()))
 		return
 	}
-	if err := h.stellarClient.ValidateAccount(req.RecipientAccount); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("Invalid recipient account: %v", err)})
+	if err := h.stellarClient.ValidateAccount(ctx, req.RecipientAccount); err != nil {
+		c.Error(errors.NewValidationError("Invalid recipient account", err.Error()))
 		return
 	}
 
 	// Auth: Extract sender user ID from context (set by JWT middleware)
 	userID, exists := c.Get("userID")
 	if !exists {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
+		c.Error(errors.NewUnauthorizedError("Unauthorized"))
 		return
 	}
+	ctx = utils.WithRequestContext(ctx, c.GetString("requestID"), userID)
 
 	// For simplicity, we'll assume the recipient user exists or we just store the account
 	// In a real app, we'd lookup or create the recipient user.
@@ -161,12 +164,13 @@ func (h *RemittanceHandler) CreateRemittance(c *gin.Context) {
 
 	// DB Save
 	if err := h.db.Create(&payment).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create remittance record"})
+		c.Error(errors.NewInternalError("Failed to create remittance record", err))
 		return
 	}
 
 	// Stellar Integration: Build escrow transaction envelope
 	xdr, err := h.stellarClient.BuildEscrowTx(
+		ctx,
 		req.SenderAccount,
 		req.RecipientAccount,
 		req.AssetCode,
@@ -174,7 +178,7 @@ func (h *RemittanceHandler) CreateRemittance(c *gin.Context) {
 		fmt.Sprintf("%.7f", req.Amount),
 	)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to build Stellar transaction: %v", err)})
+		c.Error(errors.NewInternalError("Failed to build Stellar transaction", err))
 		return
 	}
 
@@ -239,14 +243,18 @@ func (h *RemittanceHandler) CompleteRemittance(c *gin.Context) {
 	var payment models.Payment
 
 	if err := h.db.First(&payment, id).Error; err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Payment not found"})
+		if err == gorm.ErrRecordNotFound {
+			c.Error(errors.NewNotFoundError("Payment not found"))
+		} else {
+			c.Error(errors.NewInternalError("Failed to fetch payment", err))
+		}
 		return
 	}
 
 	middleware.SetAuditOld(c, payment)
 	payment.Status = "completed"
 	if err := h.db.Save(&payment).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update payment"})
+		c.Error(errors.NewInternalError("Failed to update payment", err))
 		return
 	}
 
@@ -272,7 +280,7 @@ type CreateInvoiceRequest struct {
 func (h *RemittanceHandler) CreateInvoice(c *gin.Context) {
 	var req CreateInvoiceRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		c.Error(errors.NewValidationError("Invalid request body", err.Error()))
 		return
 	}
 
@@ -290,7 +298,7 @@ func (h *RemittanceHandler) CreateInvoice(c *gin.Context) {
 	}
 
 	if err := h.db.Create(&invoice).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create invoice"})
+		c.Error(errors.NewInternalError("Failed to create invoice", err))
 		return
 	}
 
@@ -305,7 +313,11 @@ func (h *RemittanceHandler) GetInvoice(c *gin.Context) {
 	var invoice models.Invoice
 
 	if err := h.db.Preload("Payment").First(&invoice, id).Error; err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Invoice not found"})
+		if err == gorm.ErrRecordNotFound {
+			c.Error(errors.NewNotFoundError("Invoice not found"))
+		} else {
+			c.Error(errors.NewInternalError("Failed to fetch invoice", err))
+		}
 		return
 	}
 
@@ -322,7 +334,7 @@ type ListInvoicesResponse struct {
 func (h *RemittanceHandler) ListInvoices(c *gin.Context) {
 	userID, exists := c.Get("userID")
 	if !exists {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
+		c.Error(errors.NewUnauthorizedError("Unauthorized"))
 		return
 	}
 
@@ -364,7 +376,7 @@ func (h *RemittanceHandler) ListInvoices(c *gin.Context) {
 		Offset((page - 1) * pageSize).
 		Limit(pageSize).
 		Find(&invoices).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch invoices"})
+		c.Error(errors.NewInternalError("Failed to fetch invoices", err))
 		return
 	}
 

@@ -9,6 +9,20 @@ const api = axios.create({
   },
 });
 
+api.interceptors.response.use(
+  (response) => response,
+  (error) => {
+    const payload = error.response?.data;
+    if (payload?.error) {
+      return Promise.reject(payload.error);
+    }
+    if (payload?.message) {
+      return Promise.reject({ code: "UNKNOWN_ERROR", message: payload.message });
+    }
+    return Promise.reject(error);
+  }
+);
+
 export const sendRemittance = (data) => api.post("/remittances", data);
 export const getRemittance = (id) => api.get(`/remittances/${id}`);
 export const getRemittances = () => api.get("/remittances");
