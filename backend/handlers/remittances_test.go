@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/yourusername/gpay-remit/config"
 	"github.com/yourusername/gpay-remit/models"
+	"github.com/yourusername/gpay-remit/services"
 	"github.com/stellar/go/txnbuild"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
@@ -58,10 +59,12 @@ func TestCreateRemittance(t *testing.T) {
 		ValidateAccountFunc: func(accountID string) error { return nil },
 		BuildEscrowTxFunc:   func(sender, recipient, assetCode, issuer, amount string) (string, error) { return "base64_xdr", nil },
 	}
+	testCfg := &config.Config{}
 	handler := &RemittanceHandler{
 		db:            db,
-		config:        &config.Config{},
+		config:        testCfg,
 		stellarClient: mockStellar,
+		fees:          services.NewFeeService(testCfg),
 	}
 
 	router := gin.Default()
@@ -138,9 +141,11 @@ func TestCreateRemittance(t *testing.T) {
 	})
 
 	t.Run("Stellar Client Failure", func(t *testing.T) {
+		failCfg := &config.Config{}
 		failHandler := &RemittanceHandler{
 			db:     db,
-			config: &config.Config{},
+			config: failCfg,
+			fees:   services.NewFeeService(failCfg),
 			stellarClient: &MockStellarClient{
 				ValidateAccountFunc: func(accountID string) error { return nil },
 				BuildEscrowTxFunc: func(sender, recipient, assetCode, issuer, amount string) (string, error) {

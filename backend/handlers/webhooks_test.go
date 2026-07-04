@@ -254,6 +254,7 @@ func TestCreateWebhook_InvalidURL(t *testing.T) {
 		c.Set("userID", uint(1))
 		c.Next()
 	})
+	router.Use(errorHandlerForTests())
 	router.POST("/webhooks", handler.CreateWebhook)
 
 	payload := CreateWebhookRequest{
@@ -280,6 +281,7 @@ func TestGetWebhook_NotFound(t *testing.T) {
 		c.Set("userID", uint(1))
 		c.Next()
 	})
+	router.Use(errorHandlerForTests())
 	router.GET("/webhooks/:id", handler.GetWebhook)
 
 	w := httptest.NewRecorder()

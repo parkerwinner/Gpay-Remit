@@ -1,5 +1,4 @@
 package logger
-package logger
 
 import (
 	"testing"

@@ -17,6 +17,7 @@ import (
 	"github.com/yourusername/gpay-remit/logger"
 	"github.com/yourusername/gpay-remit/middleware"
 	"github.com/yourusername/gpay-remit/services"
+	"github.com/yourusername/gpay-remit/utils"
 	"github.com/yourusername/gpay-remit/workers"
 )
 
@@ -37,6 +38,14 @@ func main() {
 		logger.Log.WithField("error", err).Fatal("Failed to connect to database")
 	}
 
+	// Initialize Redis — non-fatal: the app runs without Redis but cache and
+	// some health-check fields will be degraded.
+	if err := utils.InitRedis(cfg.RedisAddr, cfg.RedisPassword, cfg.RedisDB); err != nil {
+		logger.Log.WithField("error", err).Warn("Redis unavailable — continuing without cache")
+	} else {
+		logger.Log.WithField("addr", cfg.RedisAddr).Info("Redis connected")
+	}
+
 	router := gin.New()
 	router.Use(gin.Recovery())
 	router.Use(middleware.RequestIDMiddleware())
@@ -55,7 +64,7 @@ func main() {
 		c.Next()
 	})
 
-	healthHandler := handlers.NewHealthHandler(db, cfg)
+	healthHandler := handlers.NewHealthHandlerWithRedis(db, cfg, utils.RedisClient)
 	router.GET("/health", healthHandler.Health)
 	router.GET("/health/ready", healthHandler.Ready)
 	router.GET("/health/live", healthHandler.Live)

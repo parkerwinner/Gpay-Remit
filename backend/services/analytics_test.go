@@ -228,7 +228,7 @@ func TestCalculateDateRange(t *testing.T) {
 			period:      "yearly",
 			expectError: false,
 			validateRange: func(t *testing.T, start, end time.Time) {
-				assert.Equal(t, 1, start.Month())
+				assert.Equal(t, 1, int(start.Month()))
 				assert.Equal(t, 1, start.Day())
 				assert.NotEqual(t, start.Year(), end.Year())
 			},
