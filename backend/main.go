@@ -100,6 +100,9 @@ func main() {
 			feeHandler := handlers.NewFeeHandler(feeService)
 			protected.GET("/fees/calculate", feeHandler.Calculate)
 
+			exchangeRateHandler := handlers.NewExchangeRateHandler(cfg)
+			protected.GET("/exchange-rates", middleware.RateLimitMiddleware(cfg), exchangeRateHandler.GetRate)
+
 			auditHandler := handlers.NewAuditLogHandler(db)
 			protected.GET("/audit/logs", middleware.RequireRole("admin"), auditHandler.List)
 
@@ -156,6 +159,9 @@ func main() {
 			feeService := services.NewFeeService(cfg)
 			feeHandler := handlers.NewFeeHandler(feeService)
 			protected.GET("/fees/calculate", feeHandler.Calculate)
+
+			exchangeRateHandler := handlers.NewExchangeRateHandler(cfg)
+			protected.GET("/exchange-rates", middleware.RateLimitMiddleware(cfg), exchangeRateHandler.GetRate)
 
 			auditHandler := handlers.NewAuditLogHandler(db)
 			protected.GET("/audit/logs", middleware.RequireRole("admin"), auditHandler.List)
