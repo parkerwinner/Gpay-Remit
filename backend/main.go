@@ -100,6 +100,9 @@ func main() {
 			feeHandler := handlers.NewFeeHandler(feeService)
 			protected.GET("/fees/calculate", feeHandler.Calculate)
 
+			exchangeRateHandler := handlers.NewExchangeRateHandler(cfg)
+			protected.GET("/exchange-rates", middleware.RateLimitMiddleware(cfg), exchangeRateHandler.GetRate)
+
 			auditHandler := handlers.NewAuditLogHandler(db)
 			protected.GET("/audit/logs", middleware.RequireRole("admin"), auditHandler.List)
 
@@ -157,6 +160,9 @@ func main() {
 			feeHandler := handlers.NewFeeHandler(feeService)
 			protected.GET("/fees/calculate", feeHandler.Calculate)
 
+			exchangeRateHandler := handlers.NewExchangeRateHandler(cfg)
+			protected.GET("/exchange-rates", middleware.RateLimitMiddleware(cfg), exchangeRateHandler.GetRate)
+
 			auditHandler := handlers.NewAuditLogHandler(db)
 			protected.GET("/audit/logs", middleware.RequireRole("admin"), auditHandler.List)
 
@@ -191,6 +197,7 @@ func main() {
 	baseCtx, cancelWorkers := context.WithCancel(context.Background())
 	var wg sync.WaitGroup
 	workers.StartMonitor(baseCtx, &wg)
+	workers.StartWebhookRetryWorker(baseCtx, &wg, db)
 
 	errCh := make(chan error, 1)
 	go func() {

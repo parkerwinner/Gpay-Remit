@@ -144,6 +144,8 @@ func RateLimitMiddleware(cfg *config.Config) gin.HandlerFunc {
 		"POST /api/v1/invoices":           20,
 		"POST /api/v1/auth/login":         5,   // 5 login attempts per minute
 		"POST /api/v1/auth/register":      3,
+		"GET /api/v1/exchange-rates":      30, // 30 lookups per minute (backed by cache)
+		"GET /api/v2/exchange-rates":      30,
 		"default":                         100, // Default 100 requests per minute
 	}
 

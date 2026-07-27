@@ -51,6 +51,9 @@ type Config struct {
 	RedisAddr     string
 	RedisPassword string
 	RedisDB       int
+
+	// Exchange rate oracle/pricing provider
+	ExchangeRateAPIURL string
 }
 
 func LoadConfig() (*Config, error) {
@@ -88,6 +91,8 @@ func LoadConfig() (*Config, error) {
 		RedisAddr:     getEnvOrDefault("REDIS_ADDR", "localhost:6379"),
 		RedisPassword: os.Getenv("REDIS_PASSWORD"),
 		RedisDB:       getEnvAsInt("REDIS_DB", 0),
+
+		ExchangeRateAPIURL: getEnvOrDefault("EXCHANGE_RATE_API_URL", "https://open.er-api.com/v6/latest"),
 	}, nil
 }
 

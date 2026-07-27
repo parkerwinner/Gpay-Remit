@@ -10,12 +10,27 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/yourusername/gpay-remit/logger"
 	"github.com/yourusername/gpay-remit/models"
 	"gorm.io/gorm"
 )
+
+// Delivery metrics — tracked in-process so the webhook retry worker can
+// report retry success/failure counts without pulling in an external
+// metrics dependency.
+var (
+	webhookDeliverySuccessCount atomic.Int64
+	webhookDeliveryFailureCount atomic.Int64
+)
+
+// WebhookDeliveryMetrics returns the cumulative count of successful and
+// failed webhook delivery attempts since process start.
+func WebhookDeliveryMetrics() (success int64, failure int64) {
+	return webhookDeliverySuccessCount.Load(), webhookDeliveryFailureCount.Load()
+}
 
 type WebhookDeliveryService struct {
 	db         *gorm.DB
@@ -119,7 +134,8 @@ func (s *WebhookDeliveryService) DeliverWebhook(webhook *models.Webhook, deliver
 			delivery.CompletedAt = &now
 			delivery.NextRetryAt = nil
 			s.db.Save(delivery)
-			
+			webhookDeliverySuccessCount.Add(1)
+
 			logger.Log.WithField("webhook_id", webhook.ID).
 				WithField("delivery_id", delivery.ID).
 				Info("Webhook delivered successfully")
@@ -148,7 +164,8 @@ func (s *WebhookDeliveryService) DeliverWebhook(webhook *models.Webhook, deliver
 	delivery.CompletedAt = &now
 	delivery.NextRetryAt = nil
 	s.db.Save(delivery)
-	
+	webhookDeliveryFailureCount.Add(1)
+
 	logger.Log.WithField("webhook_id", webhook.ID).
 		WithField("delivery_id", delivery.ID).
 		Error("Webhook delivery failed after all retry attempts")
