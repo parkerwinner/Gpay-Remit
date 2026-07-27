@@ -197,6 +197,7 @@ func main() {
 	baseCtx, cancelWorkers := context.WithCancel(context.Background())
 	var wg sync.WaitGroup
 	workers.StartMonitor(baseCtx, &wg)
+	workers.StartWebhookRetryWorker(baseCtx, &wg, db)
 
 	errCh := make(chan error, 1)
 	go func() {
