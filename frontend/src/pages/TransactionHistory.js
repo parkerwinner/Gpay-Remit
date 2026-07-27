@@ -6,6 +6,7 @@ import SkeletonLoader from "../components/SkeletonLoader";
 import TransactionDetails from "../components/TransactionDetails";
 
 const STATUS_OPTIONS = ["all", "pending", "completed", "failed"];
+const PAGE_SIZE_OPTIONS = [10, 20, 50, 100];
 
 function TransactionHistory() {
   const [transactions, setTransactions] = useState([]);
@@ -14,10 +15,13 @@ function TransactionHistory() {
   const [filter, setFilter] = useState("all");
   const [search, setSearch] = useState("");
   const [selected, setSelected] = useState(null);
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(PAGE_SIZE_OPTIONS[1]);
 
-  const fetchTransactions = useCallback(async () => {
+  const fetchTransactions = useCallback(async (targetPage = page, targetPageSize = pageSize) => {
+    setLoading(true);
     try {
-      const response = await getRemittances();
+      const response = await getRemittances(targetPage, targetPageSize);
       setTransactions(response.data);
       setError(null);
     } catch (err) {
@@ -25,10 +29,25 @@ function TransactionHistory() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [page, pageSize]);
 
   // Poll every 10 s for real-time updates (#113).
   usePolling(fetchTransactions, 10_000);
+
+  const hasNextPage = transactions.length === pageSize;
+  const hasPrevPage = page > 1;
+
+  const goToPage = (newPage) => {
+    if (newPage < 1) return;
+    setPage(newPage);
+    fetchTransactions(newPage, pageSize);
+  };
+
+  const changePageSize = (newSize) => {
+    setPageSize(newSize);
+    setPage(1);
+    fetchTransactions(1, newSize);
+  };
 
   const filtered = transactions.filter((tx) => {
     const matchesStatus = filter === "all" || tx.status?.toLowerCase() === filter;
@@ -130,6 +149,48 @@ function TransactionHistory() {
             )}
           </tbody>
         </table>
+      )}
+
+      {!error && (
+        <div className="tx-pagination" role="navigation" aria-label="Transaction pagination">
+          <span className="tx-pagination-status" aria-live="polite">
+            Page {page} · {transactions.length} result{transactions.length === 1 ? "" : "s"}
+          </span>
+
+          <label htmlFor="tx-page-size" className="sr-only">
+            Results per page
+          </label>
+          <select
+            id="tx-page-size"
+            value={pageSize}
+            onChange={(e) => changePageSize(Number(e.target.value))}
+            aria-label="Results per page"
+            disabled={loading}
+          >
+            {PAGE_SIZE_OPTIONS.map((size) => (
+              <option key={size} value={size}>
+                {size} / page
+              </option>
+            ))}
+          </select>
+
+          <button
+            type="button"
+            onClick={() => goToPage(page - 1)}
+            disabled={!hasPrevPage || loading}
+            aria-label="Previous page"
+          >
+            Previous
+          </button>
+          <button
+            type="button"
+            onClick={() => goToPage(page + 1)}
+            disabled={!hasNextPage || loading}
+            aria-label="Next page"
+          >
+            Next
+          </button>
+        </div>
       )}
 
       {selected && (
