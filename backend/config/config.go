@@ -59,6 +59,23 @@ type Config struct {
 func LoadConfig() (*Config, error) {
 	godotenv.Load()
 
+	// Validate critical security configurations
+	jwtSecret := os.Getenv("JWT_SECRET")
+	if jwtSecret == "" {
+		return nil, fmt.Errorf("JWT_SECRET environment variable is required")
+	}
+	if len(jwtSecret) < 32 {
+		return nil, fmt.Errorf("JWT_SECRET must be at least 32 characters long")
+	}
+
+	jwtRefreshSecret := os.Getenv("JWT_REFRESH_SECRET")
+	if jwtRefreshSecret == "" {
+		return nil, fmt.Errorf("JWT_REFRESH_SECRET environment variable is required")
+	}
+	if len(jwtRefreshSecret) < 32 {
+		return nil, fmt.Errorf("JWT_REFRESH_SECRET must be at least 32 characters long")
+	}
+
 	return &Config{
 		Port:              os.Getenv("PORT"),
 		DatabaseURL:       os.Getenv("DATABASE_URL"),
@@ -67,8 +84,8 @@ func LoadConfig() (*Config, error) {
 		ContractID:        os.Getenv("CONTRACT_ID"),
 		EscrowContractID:  os.Getenv("ESCROW_CONTRACT_ID"),
 		NetworkPassphrase: getEnvOrDefault("NETWORK_PASSPHRASE", "Test SDF Network ; September 2015"),
-		JWTSecret:         getEnvOrDefault("JWT_SECRET", "super-secret-key-change-me"),
-		JWTRefreshSecret:  getEnvOrDefault("JWT_REFRESH_SECRET", "super-secret-refresh-key-change-me"),
+		JWTSecret:         jwtSecret,
+		JWTRefreshSecret:  jwtRefreshSecret,
 
 		PlatformFeeBps:   getEnvAsInt("PLATFORM_FEE_BPS", 50),
 		ForexFeeBps:      getEnvAsInt("FOREX_FEE_BPS", 25),
