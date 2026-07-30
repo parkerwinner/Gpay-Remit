@@ -1,9 +1,11 @@
 package handlers
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -34,7 +36,44 @@ func NewRemittanceHandler(db *gorm.DB, cfg *config.Config) *RemittanceHandler {
 	}
 }
 
-// Paginate is a GORM scope for pagination
+const (
+	// MaxPage prevents integer overflow in offset calculation (#198)
+	MaxPage = 10000
+)
+
+// PaginationCursor represents cursor-based pagination state
+type PaginationCursor struct {
+	CreatedAt time.Time `json:"created_at"`
+	ID        uint      `json:"id"`
+}
+
+// EncodeCursor encodes pagination cursor to base64 string
+func EncodeCursor(cursor PaginationCursor) string {
+	data, _ := json.Marshal(cursor)
+	return base64.StdEncoding.EncodeToString(data)
+}
+
+// DecodeCursor decodes base64 cursor string to PaginationCursor
+func DecodeCursor(encoded string) (PaginationCursor, error) {
+	var cursor PaginationCursor
+	if encoded == "" {
+		return cursor, nil
+	}
+	
+	data, err := base64.StdEncoding.DecodeString(encoded)
+	if err != nil {
+		return cursor, fmt.Errorf("invalid cursor encoding: %w", err)
+	}
+	
+	err = json.Unmarshal(data, &cursor)
+	if err != nil {
+		return cursor, fmt.Errorf("invalid cursor format: %w", err)
+	}
+	
+	return cursor, nil
+}
+
+// Paginate is a GORM scope for pagination with overflow protection
 func Paginate(c *gin.Context) func(db *gorm.DB) *gorm.DB {
 	return func(db *gorm.DB) *gorm.DB {
 		page := 1
@@ -49,6 +88,11 @@ func Paginate(c *gin.Context) func(db *gorm.DB) *gorm.DB {
 
 		if page <= 0 {
 			page = 1
+		}
+		if page > MaxPage {
+			// Return error context to be handled by calling function
+			c.Set("pagination_error", errors.NewValidationError(fmt.Sprintf("Page number cannot exceed %d", MaxPage), nil))
+			return db
 		}
 		if pageSize <= 0 || pageSize > 100 {
 			pageSize = 20
@@ -212,9 +256,73 @@ func (h *RemittanceHandler) GetRemittance(c *gin.Context) {
 	c.JSON(http.StatusOK, payment)
 }
 
+type ListRemittancesResponse struct {
+	Data       []models.Payment `json:"data"`
+	Page       int              `json:"page,omitempty"`       // Deprecated: use cursor instead
+	PageSize   int              `json:"page_size,omitempty"`  // Deprecated: use limit instead  
+	NextCursor string           `json:"next_cursor,omitempty"`
+	HasMore    bool             `json:"has_more"`
+}
+
 func (h *RemittanceHandler) ListRemittances(c *gin.Context) {
 	var payments []models.Payment
 
+	// Support both cursor-based and legacy offset-based pagination
+	cursor := c.Query("cursor")
+	limitStr := c.Query("limit")
+	
+	// Cursor-based pagination (preferred)
+	if cursor != "" || limitStr != "" {
+		// Cursor-based pagination eliminates overflow risk (#198)
+		limit := 20
+		if limitStr != "" {
+			if l, err := strconv.Atoi(limitStr); err == nil && l > 0 && l <= 100 {
+				limit = l
+			}
+		}
+
+		decodedCursor, err := DecodeCursor(cursor)
+		if err != nil {
+			c.Error(errors.NewValidationError("Invalid cursor format", err.Error()))
+			return
+		}
+
+		query := h.db.Model(&models.Payment{}).Order("created_at DESC, id DESC")
+		
+		// Apply cursor filtering: WHERE created_at < cursor.CreatedAt OR (created_at = cursor.CreatedAt AND id < cursor.ID)
+		if !decodedCursor.CreatedAt.IsZero() {
+			query = query.Where("created_at < ? OR (created_at = ? AND id < ?)", 
+				decodedCursor.CreatedAt, decodedCursor.CreatedAt, decodedCursor.ID)
+		}
+
+		if err := query.Limit(limit + 1).Find(&payments).Error; err != nil {
+			c.Error(errors.NewInternalError("Failed to fetch payments", err))
+			return
+		}
+
+		var nextCursor string
+		hasMore := len(payments) > limit
+		if hasMore {
+			// Remove the extra item used for has_more detection
+			lastItem := payments[limit-1]
+			payments = payments[:limit]
+			nextCursor = EncodeCursor(PaginationCursor{
+				CreatedAt: lastItem.CreatedAt,
+				ID:        lastItem.ID,
+			})
+		}
+
+		response := ListRemittancesResponse{
+			Data:       payments,
+			NextCursor: nextCursor,
+			HasMore:    hasMore,
+		}
+
+		c.JSON(http.StatusOK, response)
+		return
+	}
+
+	// Legacy offset-based pagination for backward compatibility
 	// Cache key based on query params
 	cacheKey := fmt.Sprintf("payments:list:%s:%s", c.Query("page"), c.Query("page_size"))
 	
@@ -225,9 +333,15 @@ func (h *RemittanceHandler) ListRemittances(c *gin.Context) {
 		return
 	}
 
-	// DB query with pagination
+	// DB query with pagination - check for pagination error from MaxPage validation
 	if err := h.db.Scopes(Paginate(c)).Order("created_at DESC").Find(&payments).Error; err != nil {
 		c.Error(errors.NewInternalError("Failed to fetch payments", err))
+		return
+	}
+
+	// Check if MaxPage validation failed
+	if paginationErr, exists := c.Get("pagination_error"); exists {
+		c.Error(paginationErr.(error))
 		return
 	}
 

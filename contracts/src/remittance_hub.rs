@@ -98,8 +98,11 @@ pub struct Invoice {
     pub fees: i128,
     pub total_due: i128,
     pub status: InvoiceStatus,
+    /// All timestamps are UTC Unix seconds as returned by env.ledger().timestamp() (#201)
     pub created_at: u64,
+    /// Due date in UTC Unix seconds - timezone metadata implicit (#201)
     pub due_date: u64,
+    /// Payment timestamp in UTC Unix seconds (#201)
     pub paid_at: u64,
     pub description: String,
     pub escrow_id: u64,
@@ -304,6 +307,7 @@ impl RemittanceHubContract {
         let cached = CachedRate {
             rate,
             denominator,
+            // All timestamps are UTC Unix seconds as returned by env.ledger().timestamp() (#201)
             timestamp: env.ledger().timestamp(),
             from_asset: from_asset.clone(),
             to_asset: to_asset.clone(),
@@ -534,6 +538,7 @@ impl RemittanceHubContract {
                         amount,
                         risk_score: 0,
                         status: AmlStatus::Reviewing,
+                        // All timestamps are UTC Unix seconds as returned by env.ledger().timestamp() (#201)
                         timestamp: env.ledger().timestamp(),
                     };
                     env.storage()
@@ -691,6 +696,7 @@ impl RemittanceHubContract {
         }
 
         let current_time = env.ledger().timestamp();
+        // All timestamp comparisons use UTC Unix seconds as returned by env.ledger().timestamp() (#201)
         if due_date <= current_time {
             return Err(RemittanceError::DueDateInPast);
         }
@@ -809,6 +815,7 @@ impl RemittanceHubContract {
         }
 
         invoice.status = InvoiceStatus::Paid;
+        // All timestamps are UTC Unix seconds as returned by env.ledger().timestamp() (#201)
         invoice.paid_at = env.ledger().timestamp();
 
         env.storage()
@@ -840,6 +847,7 @@ impl RemittanceHubContract {
 
         let current_time = env.ledger().timestamp();
 
+        // All timestamp comparisons use UTC Unix seconds as returned by env.ledger().timestamp() (#201)
         if current_time <= invoice.due_date {
             return Err(RemittanceError::InvalidInvoiceStatus);
         }
@@ -1016,6 +1024,7 @@ impl RemittanceHubContract {
         }
 
         let current_time = env.ledger().timestamp();
+        // All timestamp comparisons use UTC Unix seconds as returned by env.ledger().timestamp() (#201)
         if request.expiration_timestamp <= current_time {
             return Err(RemittanceError::DueDateInPast);
         }
@@ -1468,6 +1477,7 @@ impl RemittanceHubContract {
             return;
         }
 
+        // All timestamps are UTC Unix seconds as returned by env.ledger().timestamp() (#201)
         let now = env.ledger().timestamp();
         let day = now / 86400;
         let week = now / (86400 * 7);
