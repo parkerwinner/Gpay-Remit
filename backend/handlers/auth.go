@@ -16,6 +16,7 @@ import (
 	"github.com/yourusername/gpay-remit/middleware"
 	"github.com/yourusername/gpay-remit/models"
 	"github.com/yourusername/gpay-remit/services"
+	"github.com/yourusername/gpay-remit/utils"
 	"gorm.io/gorm"
 )
 
@@ -357,7 +358,46 @@ func (h *AuthHandler) ResetPassword(c *gin.Context) {
 		"endpoint": "/auth/reset-password",
 	}).Info("Password reset successfully")
 
-	c.JSON(http.StatusOK, gin.H{
-		"message": "Password has been reset successfully",
 	})
+}
+
+// Logout invalidates the user's current token
+func (h *AuthHandler) Logout(c *gin.Context) {
+	authHeader := c.GetHeader("Authorization")
+	if authHeader == "" {
+		c.JSON(http.StatusOK, gin.H{"message": "Logged out successfully"})
+		return
+	}
+
+	parts := strings.Split(authHeader, " ")
+	if len(parts) != 2 || parts[0] != "Bearer" {
+		c.JSON(http.StatusOK, gin.H{"message": "Logged out successfully"})
+		return
+	}
+
+	tokenString := parts[1]
+	claims := &middleware.Claims{}
+	// Parse token without verifying since it already passed middleware
+	token, _ := jwt.ParseWithClaims(tokenString, claims, func(token *jwt.Token) (interface{}, error) {
+		return []byte(h.Cfg.JWTSecret), nil
+	})
+
+	if token != nil && claims.ID != "" && claims.ExpiresAt != nil {
+		ttl := time.Until(claims.ExpiresAt.Time)
+		if ttl > 0 {
+			utils.SetCached("revoked:"+claims.ID, true, ttl)
+		}
+	}
+
+	userID := uint(0)
+	if claims != nil {
+		userID = claims.UserID
+	}
+
+	logger.Log.WithFields(logrus.Fields{
+		"user_id":  userID,
+		"endpoint": "/auth/logout",
+	}).Info("User logged out")
+
+	c.JSON(http.StatusOK, gin.H{"message": "Logged out successfully"})
 }

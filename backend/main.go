@@ -86,6 +86,7 @@ func main() {
 		protected.Use(middleware.JwtAuthMiddleware(cfg))
 		protected.Use(middleware.AuditTrail(db))
 		{
+			protected.POST("/auth/logout", authHandler.Logout)
 			remittanceHandler := handlers.NewRemittanceHandler(db, cfg)
 			protected.POST("/remittances/create", remittanceHandler.CreateRemittance)
 			protected.POST("/remittances", remittanceHandler.SendRemittance)
@@ -146,6 +147,7 @@ func main() {
 		protected.Use(middleware.JwtAuthMiddleware(cfg))
 		protected.Use(middleware.AuditTrail(db))
 		{
+			protected.POST("/auth/logout", authHandler.Logout)
 			remittanceHandler := handlers.NewRemittanceHandler(db, cfg)
 			protected.POST("/remittances/create", remittanceHandler.CreateRemittance)
 			protected.POST("/remittances", remittanceHandler.SendRemittance)
