@@ -357,8 +357,6 @@ func (h *AuthHandler) ResetPassword(c *gin.Context) {
 		"user_id":  user.ID,
 		"endpoint": "/auth/reset-password",
 	}).Info("Password reset successfully")
-
-	})
 }
 
 // Logout invalidates the user's current token
