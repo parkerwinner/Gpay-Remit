@@ -1,6 +1,7 @@
 package config
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"time"
@@ -8,6 +9,8 @@ import (
 	"github.com/joho/godotenv"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
+
+	"github.com/yourusername/gpay-remit/secrets"
 )
 
 type Config struct {
@@ -59,18 +62,29 @@ type Config struct {
 func LoadConfig() (*Config, error) {
 	godotenv.Load()
 
-	// Validate critical security configurations
-	jwtSecret := os.Getenv("JWT_SECRET")
-	if jwtSecret == "" {
-		return nil, fmt.Errorf("JWT_SECRET environment variable is required")
+	// Secrets (#193): resolved through the secrets package rather than a
+	// direct os.Getenv call, so JWT_SECRET/JWT_REFRESH_SECRET can be
+	// migrated to a real secrets manager (AWS Secrets Manager, selected
+	// via SECRETS_PROVIDER=aws) without touching this call site again.
+	// Defaults to reading plain environment variables (SECRETS_PROVIDER
+	// unset or "env"), so existing deployments are unaffected.
+	ctx := context.Background()
+	secretsProvider, err := secrets.NewProvider(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("initializing secrets provider: %w", err)
+	}
+
+	jwtSecret, err := secretsProvider.GetSecret(ctx, "JWT_SECRET")
+	if err != nil {
+		return nil, err
 	}
 	if len(jwtSecret) < 32 {
 		return nil, fmt.Errorf("JWT_SECRET must be at least 32 characters long")
 	}
 
-	jwtRefreshSecret := os.Getenv("JWT_REFRESH_SECRET")
-	if jwtRefreshSecret == "" {
-		return nil, fmt.Errorf("JWT_REFRESH_SECRET environment variable is required")
+	jwtRefreshSecret, err := secretsProvider.GetSecret(ctx, "JWT_REFRESH_SECRET")
+	if err != nil {
+		return nil, err
 	}
 	if len(jwtRefreshSecret) < 32 {
 		return nil, fmt.Errorf("JWT_REFRESH_SECRET must be at least 32 characters long")
