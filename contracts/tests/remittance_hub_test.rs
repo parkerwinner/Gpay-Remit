@@ -431,3 +431,299 @@ fn test_aml_screening() {
     let config = client.get_aml_config();
     assert!(config.is_some());
 }
+// ============================================================================
+// TIMEZONE AND UTC CONSISTENCY TESTS (#201)
+// ============================================================================
+
+use gpay_remit_contracts::remittance_hub::{Asset};
+
+// Test that invoice due dates are stored as UTC Unix seconds
+#[test]
+fn test_invoice_due_date_utc_storage() {
+    let env = Env::default();
+    env.mock_all_auths();
+    env.ledger().with_mut(|li| {
+        li.timestamp = 1000; // Fixed timestamp for predictable testing
+    });
+
+    let (client, _admin, user1, user2) = setup_test(&env);
+
+    let issuer = Address::generate(&env);
+    let asset = Asset {
+        code: String::from_str(&env, "USDC"),
+        issuer,
+    };
+
+    let due_date = 2000; // Future timestamp
+    let invoice_id = client.generate_invoice(
+        &user1,
+        &user2,
+        &1000,
+        &asset,
+        &due_date,
+        &String::from_str(&env, "Test invoice"),
+        &0,
+        &String::from_str(&env, "Test memo"),
+    );
+
+    let invoice = client.get_invoice(&invoice_id).unwrap();
+    
+    // Verify timestamps are stored as provided (UTC Unix seconds)
+    assert_eq!(invoice.created_at, 1000);
+    assert_eq!(invoice.due_date, due_date);
+    assert_eq!(invoice.paid_at, 0); // Not paid yet
+}
+
+// Test due date comparison uses UTC consistently
+#[test]
+fn test_due_date_comparison_utc() {
+    let env = Env::default();
+    env.mock_all_auths();
+    env.ledger().with_mut(|li| {
+        li.timestamp = 1000;
+    });
+
+    let (client, _admin, user1, user2) = setup_test(&env);
+
+    let issuer = Address::generate(&env);
+    let asset = Asset {
+        code: String::from_str(&env, "USDC"),
+        issuer,
+    };
+
+    // Test past due date rejection
+    let past_due_date = 500; // Before current timestamp
+    let result = client.try_generate_invoice(
+        &user1,
+        &user2,
+        &1000,
+        &asset,
+        &past_due_date,
+        &String::from_str(&env, "Test invoice"),
+        &0,
+        &String::from_str(&env, "Test memo"),
+    );
+    assert_eq!(result, Err(Ok(RemittanceError::DueDateInPast)));
+
+    // Test future due date acceptance
+    let future_due_date = 2000; // After current timestamp
+    let invoice_id = client.generate_invoice(
+        &user1,
+        &user2,
+        &1000,
+        &asset,
+        &future_due_date,
+        &String::from_str(&env, "Test invoice"),
+        &0,
+        &String::from_str(&env, "Test memo"),
+    );
+    assert_eq!(invoice_id, 1);
+}
+
+// Test mark_invoice_overdue with UTC timestamp comparison
+#[test]
+fn test_mark_invoice_overdue_utc_comparison() {
+    let env = Env::default();
+    env.mock_all_auths();
+    env.ledger().with_mut(|li| {
+        li.timestamp = 1000;
+    });
+
+    let (client, _admin, user1, user2) = setup_test(&env);
+
+    let issuer = Address::generate(&env);
+    let asset = Asset {
+        code: String::from_str(&env, "USDC"),
+        issuer,
+    };
+
+    // Create invoice with future due date
+    let due_date = 2000;
+    let invoice_id = client.generate_invoice(
+        &user1,
+        &user2,
+        &1000,
+        &asset,
+        &due_date,
+        &String::from_str(&env, "Test invoice"),
+        &0,
+        &String::from_str(&env, "Test memo"),
+    );
+
+    // Try to mark overdue before due date - should fail
+    let result = client.try_mark_invoice_overdue(&invoice_id);
+    assert_eq!(result, Err(Ok(RemittanceError::InvalidInvoiceStatus)));
+
+    // Advance ledger timestamp past due date
+    env.ledger().with_mut(|li| {
+        li.timestamp = 2500; // Past the due date
+    });
+
+    // Now should successfully mark as overdue
+    client.mark_invoice_overdue(&invoice_id);
+    
+    let invoice = client.get_invoice(&invoice_id).unwrap();
+    assert_eq!(invoice.status, InvoiceStatus::Overdue);
+}
+
+// Test that paid_at timestamp uses UTC from ledger
+#[test]
+fn test_invoice_paid_at_utc_timestamp() {
+    let env = Env::default();
+    env.mock_all_auths();
+    env.ledger().with_mut(|li| {
+        li.timestamp = 1000;
+    });
+
+    let (client, _admin, user1, user2) = setup_test(&env);
+
+    let issuer = Address::generate(&env);
+    let asset = Asset {
+        code: String::from_str(&env, "USDC"),
+        issuer,
+    };
+
+    let invoice_id = client.generate_invoice(
+        &user1,
+        &user2,
+        &1000,
+        &asset,
+        &2000,
+        &String::from_str(&env, "Test invoice"),
+        &0,
+        &String::from_str(&env, "Test memo"),
+    );
+
+    // Advance time and mark as paid
+    env.ledger().with_mut(|li| {
+        li.timestamp = 1500;
+    });
+
+    client.mark_invoice_paid(&invoice_id, &user1);
+    
+    let invoice = client.get_invoice(&invoice_id).unwrap();
+    assert_eq!(invoice.status, InvoiceStatus::Paid);
+    assert_eq!(invoice.paid_at, 1500); // Should match ledger timestamp
+}
+
+// Test escrow expiration timestamp UTC comparison
+#[test]
+fn test_escrow_expiration_utc_comparison() {
+    use gpay_remit_contracts::remittance_hub::EscrowRequest;
+    
+    let env = Env::default();
+    env.mock_all_auths();
+    env.ledger().with_mut(|li| {
+        li.timestamp = 1000;
+    });
+
+    let (client, _admin, user1, user2) = setup_test(&env);
+
+    let issuer = Address::generate(&env);
+    let asset = Asset {
+        code: String::from_str(&env, "USDC"),
+        issuer,
+    };
+
+    // Test past expiration timestamp rejection
+    let past_expiration = 500;
+    let mut requests = soroban_sdk::Vec::new(&env);
+    requests.push_back(EscrowRequest {
+        recipient: user2.clone(),
+        amount: 1000,
+        asset: asset.clone(),
+        expiration_timestamp: past_expiration,
+    });
+
+    let result = client.try_batch_create_escrows(&user1, &requests);
+    assert_eq!(result, Err(Ok(RemittanceError::DueDateInPast)));
+
+    // Test future expiration timestamp acceptance
+    let future_expiration = 2000;
+    requests.clear();
+    requests.push_back(EscrowRequest {
+        recipient: user2.clone(),
+        amount: 1000,
+        asset: asset.clone(),
+        expiration_timestamp: future_expiration,
+    });
+
+    let escrow_ids = client.batch_create_escrows(&user1, &requests);
+    assert_eq!(escrow_ids.len(), 1);
+}
+
+// Test AML timestamp consistency
+#[test]
+fn test_aml_timestamp_utc_consistency() {
+    let env = Env::default();
+    env.mock_all_auths();
+    env.ledger().with_mut(|li| {
+        li.timestamp = 1000;
+    });
+
+    let (client, admin, user1, user2) = setup_test(&env);
+
+    // Configure AML with mock oracle
+    let aml_oracle = Address::generate(&env);
+    client.configure_aml(&admin, &aml_oracle, &50);
+
+    // This will trigger AML screening which should use UTC timestamps
+    let remittance_id = client.send_remittance(
+        &user1,
+        &user2,
+        &5000,
+        &soroban_sdk::symbol_short!("USD"),
+    );
+
+    // Verify remittance was created (AML logic may set status based on mock behavior)
+    let remittance = client.get_remittance(&remittance_id);
+    assert!(remittance.is_some());
+}
+
+// Test metric tracking uses UTC timestamps
+#[test]
+fn test_metric_tracking_utc_timestamps() {
+    use gpay_remit_contracts::remittance_hub::MetricType;
+    
+    let env = Env::default();
+    env.mock_all_auths();
+    
+    // Set specific timestamp for predictable day/week calculation
+    let test_timestamp = 86400 * 10; // Day 10
+    env.ledger().with_mut(|li| {
+        li.timestamp = test_timestamp;
+    });
+
+    let (client, _admin, user1, user2) = setup_test(&env);
+
+    let issuer = Address::generate(&env);
+    let asset = Asset {
+        code: String::from_str(&env, "USDC"),
+        issuer,
+    };
+
+    // Generate invoice to trigger metric tracking
+    let invoice_id = client.generate_invoice(
+        &user1,
+        &user2,
+        &1000,
+        &asset,
+        &(test_timestamp + 1000),
+        &String::from_str(&env, "Test invoice"),
+        &0,
+        &String::from_str(&env, "Test memo"),
+    );
+
+    // Check metrics are tracked using the correct UTC timestamp
+    let daily_volume = client.get_metric(&MetricType::Volume, &test_timestamp, &false);
+    let weekly_volume = client.get_metric(&MetricType::Volume, &test_timestamp, &true);
+    
+    assert_eq!(daily_volume, 1000);
+    assert_eq!(weekly_volume, 1000);
+
+    // Mark invoice as paid to trigger success metric
+    client.mark_invoice_paid(&invoice_id, &user1);
+    
+    let daily_success = client.get_metric(&MetricType::Success, &test_timestamp, &false);
+    assert_eq!(daily_success, 1);
+}

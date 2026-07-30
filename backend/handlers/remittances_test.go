@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
@@ -187,5 +188,143 @@ func TestCreateRemittance(t *testing.T) {
 		router.ServeHTTP(w, req)
 
 		assert.Equal(t, http.StatusCreated, w.Code)
+	})
+}
+
+// Test pagination overflow fix (#198)
+func TestPaginationOverflow(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db := setupTestDB()
+	
+	// Create some test payments
+	for i := 0; i < 5; i++ {
+		payment := models.Payment{
+			SenderID:    1,
+			RecipientID: 2,
+			Amount:      float64(100 + i),
+			Currency:    "USD",
+			Status:      "pending",
+		}
+		db.Create(&payment)
+	}
+	
+	mockStellar := &MockStellarClient{}
+	testCfg := &config.Config{}
+	handler := &RemittanceHandler{
+		db:            db,
+		config:        testCfg,
+		stellarClient: mockStellar,
+		fees:          services.NewFeeService(testCfg),
+	}
+
+	router := gin.Default()
+	router.GET("/remittances", handler.ListRemittances)
+
+	t.Run("Valid MaxPage", func(t *testing.T) {
+		w := httptest.NewRecorder()
+		req, _ := http.NewRequest("GET", "/remittances?page=10000&page_size=20", nil)
+		router.ServeHTTP(w, req)
+
+		assert.Equal(t, http.StatusOK, w.Code)
+	})
+
+	t.Run("Exceeds MaxPage", func(t *testing.T) {
+		w := httptest.NewRecorder()
+		req, _ := http.NewRequest("GET", "/remittances?page=10001&page_size=20", nil)
+		router.ServeHTTP(w, req)
+
+		assert.Equal(t, http.StatusBadRequest, w.Code)
+		assert.Contains(t, w.Body.String(), "cannot exceed 10000")
+	})
+
+	t.Run("Zero Page", func(t *testing.T) {
+		w := httptest.NewRecorder()
+		req, _ := http.NewRequest("GET", "/remittances?page=0&page_size=20", nil)
+		router.ServeHTTP(w, req)
+
+		assert.Equal(t, http.StatusOK, w.Code) // Should default to page 1
+	})
+
+	t.Run("Negative Page", func(t *testing.T) {
+		w := httptest.NewRecorder()
+		req, _ := http.NewRequest("GET", "/remittances?page=-1&page_size=20", nil)
+		router.ServeHTTP(w, req)
+
+		assert.Equal(t, http.StatusOK, w.Code) // Should default to page 1
+	})
+}
+
+// Test cursor-based pagination (#198)
+func TestCursorPagination(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db := setupTestDB()
+	
+	// Create test payments with known timestamps
+	now := time.Now()
+	for i := 0; i < 5; i++ {
+		payment := models.Payment{
+			SenderID:    1,
+			RecipientID: 2,
+			Amount:      float64(100 + i),
+			Currency:    "USD",
+			Status:      "pending",
+			CreatedAt:   now.Add(time.Duration(i) * time.Hour), // Different timestamps
+		}
+		db.Create(&payment)
+	}
+	
+	mockStellar := &MockStellarClient{}
+	testCfg := &config.Config{}
+	handler := &RemittanceHandler{
+		db:            db,
+		config:        testCfg,
+		stellarClient: mockStellar,
+		fees:          services.NewFeeService(testCfg),
+	}
+
+	router := gin.Default()
+	router.GET("/remittances", handler.ListRemittances)
+
+	t.Run("Valid Cursor", func(t *testing.T) {
+		// First request with limit
+		w := httptest.NewRecorder()
+		req, _ := http.NewRequest("GET", "/remittances?limit=2", nil)
+		router.ServeHTTP(w, req)
+
+		assert.Equal(t, http.StatusOK, w.Code)
+		
+		var response ListRemittancesResponse
+		err := json.Unmarshal(w.Body.Bytes(), &response)
+		assert.NoError(t, err)
+		assert.Equal(t, 2, len(response.Data))
+		assert.True(t, response.HasMore)
+		assert.NotEmpty(t, response.NextCursor)
+	})
+
+	t.Run("Invalid Cursor", func(t *testing.T) {
+		w := httptest.NewRecorder()
+		req, _ := http.NewRequest("GET", "/remittances?cursor=invalid_base64&limit=2", nil)
+		router.ServeHTTP(w, req)
+
+		assert.Equal(t, http.StatusBadRequest, w.Code)
+		assert.Contains(t, w.Body.String(), "Invalid cursor format")
+	})
+
+	t.Run("Empty Result Set", func(t *testing.T) {
+		// Clear all payments
+		db.Where("1 = 1").Delete(&models.Payment{})
+		
+		w := httptest.NewRecorder()
+		req, _ := http.NewRequest("GET", "/remittances?limit=2", nil)
+		router.ServeHTTP(w, req)
+
+		assert.Equal(t, http.StatusOK, w.Code)
+		
+		var response ListRemittancesResponse
+		err := json.Unmarshal(w.Body.Bytes(), &response)
+		assert.NoError(t, err)
+		assert.Equal(t, 0, len(response.Data))
+		assert.False(t, response.HasMore)
+		assert.Empty(t, response.NextCursor)
 	})
 }

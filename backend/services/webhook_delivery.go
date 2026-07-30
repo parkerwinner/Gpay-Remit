@@ -6,11 +6,14 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"strings"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/yourusername/gpay-remit/logger"
@@ -108,22 +111,86 @@ func (s *WebhookDeliveryService) TriggerWebhook(event string, data map[string]in
 	return nil
 }
 
-// DeliverWebhook delivers a webhook with retry logic
-func (s *WebhookDeliveryService) DeliverWebhook(webhook *models.Webhook, delivery *models.WebhookDelivery) {
-	maxAttempts := 5
-	baseDelay := time.Second
+// isConnectionRefused checks if the error is a connection refused error
+func isConnectionRefused(opErr *net.OpError) bool {
+	if opErr.Err == nil {
+		return false
+	}
+	// Check for syscall.ECONNREFUSED in the error chain
+	return errors.Is(opErr.Err, syscall.ECONNREFUSED)
+}
 
-	for attempt := 0; attempt < maxAttempts; attempt++ {
-		delivery.AttemptCount = attempt + 1
-		
-		// Exponential backoff
-		if attempt > 0 {
-			delay := baseDelay * time.Duration(1<<uint(attempt-1)) // 1s, 2s, 4s, 8s, 16s
-			time.Sleep(delay)
+// ErrorClassification represents different types of webhook delivery errors
+type ErrorClassification int
+
+const (
+	ErrorTimeout ErrorClassification = iota
+	ErrorDNS
+	ErrorConnectionRefused
+	ErrorHTTP4xx
+	ErrorHTTP5xx
+	ErrorOther
+)
+
+// classifyError categorizes the error for appropriate retry handling (#197)
+func classifyError(err error, statusCode int) ErrorClassification {
+	if err == nil && statusCode >= 400 {
+		if statusCode >= 400 && statusCode < 500 {
+			return ErrorHTTP4xx
 		}
+		if statusCode >= 500 {
+			return ErrorHTTP5xx
+		}
+	}
 
-		success, responseCode, responseBody, errMsg := s.sendWebhookRequest(webhook, delivery.Payload)
+	var netErr net.Error
+	var dnsErr *net.DNSError
+	var opErr *net.OpError
 
+	switch {
+	case errors.As(err, &dnsErr):
+		return ErrorDNS
+	case errors.As(err, &netErr) && netErr.Timeout():
+		return ErrorTimeout
+	case errors.As(err, &opErr) && isConnectionRefused(opErr):
+		return ErrorConnectionRefused
+	default:
+		return ErrorOther
+	}
+}
+
+// getRetryPolicy returns retry configuration based on error type (#197)
+func getRetryPolicy(errorType ErrorClassification) (maxRetries int, baseDelay time.Duration, shouldRetry bool) {
+	switch errorType {
+	case ErrorTimeout:
+		// Timeouts indicate transient network congestion - retry with exponential backoff
+		return 3, time.Second, true
+	case ErrorDNS:
+		// DNS failures may be transient but aggressive retrying is counterproductive
+		return 2, 5 * time.Second, true
+	case ErrorConnectionRefused:
+		// Connection refused typically indicates server down - don't retry immediately
+		return 0, 30 * time.Second, false // Mark as failed, schedule for later
+	case ErrorHTTP5xx:
+		// Server errors - retry with exponential backoff
+		return 3, time.Second, true
+	case ErrorHTTP4xx:
+		// Client errors - malformed request, don't retry
+		return 0, 0, false
+	case ErrorOther:
+		// Unclassified errors - single retry with moderate delay
+		return 1, 2 * time.Second, true
+	default:
+		return 1, 2 * time.Second, true
+	}
+}
+// DeliverWebhook delivers a webhook with per-error-type retry logic (#197)
+func (s *WebhookDeliveryService) DeliverWebhook(webhook *models.Webhook, delivery *models.WebhookDelivery) {
+	for {
+		delivery.AttemptCount++
+		
+		success, responseCode, responseBody, errMsg, err := s.sendWebhookRequest(webhook, delivery.Payload)
+		
 		delivery.ResponseCode = responseCode
 		delivery.ResponseBody = responseBody
 		delivery.ErrorMessage = errMsg
@@ -142,43 +209,63 @@ func (s *WebhookDeliveryService) DeliverWebhook(webhook *models.Webhook, deliver
 			return
 		}
 
-		// Calculate next retry time
-		if attempt < maxAttempts-1 {
-			nextDelay := baseDelay * time.Duration(1<<uint(attempt))
-			nextRetry := time.Now().Add(nextDelay)
-			delivery.NextRetryAt = &nextRetry
+		// Classify error type for appropriate retry handling
+		errorType := classifyError(err, responseCode)
+		maxRetries, baseDelay, shouldRetry := getRetryPolicy(errorType)
+
+		// Log the error with classification
+		logLevel := logger.Log.WithField("webhook_id", webhook.ID).
+			WithField("delivery_id", delivery.ID).
+			WithField("attempt", delivery.AttemptCount).
+			WithField("error_type", fmt.Sprintf("%d", errorType))
+
+		if err != nil {
+			logLevel = logLevel.WithError(err)
 		}
 
+		if !shouldRetry || delivery.AttemptCount >= maxRetries {
+			// Mark as failed
+			delivery.Status = "failed"
+			now := time.Now()
+			delivery.CompletedAt = &now
+			delivery.NextRetryAt = nil
+			s.db.Save(delivery)
+			webhookDeliveryFailureCount.Add(1)
+
+			logLevel.Error("Webhook delivery permanently failed")
+			return
+		}
+
+		// Calculate delay based on error type and attempt count
+		var delay time.Duration
+		if errorType == ErrorTimeout || errorType == ErrorHTTP5xx {
+			// Exponential backoff for timeout and 5xx errors
+			delay = baseDelay * time.Duration(1<<uint(delivery.AttemptCount-1))
+		} else {
+			// Fixed delay for other retryable errors
+			delay = baseDelay
+		}
+
+		// Schedule next retry
+		nextRetry := time.Now().Add(delay)
+		delivery.NextRetryAt = &nextRetry
 		s.db.Save(delivery)
+
+		logLevel.Warn("Webhook delivery failed, will retry after delay")
 		
-		logger.Log.WithField("webhook_id", webhook.ID).
-			WithField("delivery_id", delivery.ID).
-			WithField("attempt", attempt+1).
-			WithError(fmt.Errorf("%s", errMsg)).
-			Warn("Webhook delivery failed, will retry")
+		// Wait before retry
+		time.Sleep(delay)
 	}
-
-	// All attempts failed
-	delivery.Status = "failed"
-	now := time.Now()
-	delivery.CompletedAt = &now
-	delivery.NextRetryAt = nil
-	s.db.Save(delivery)
-	webhookDeliveryFailureCount.Add(1)
-
-	logger.Log.WithField("webhook_id", webhook.ID).
-		WithField("delivery_id", delivery.ID).
-		Error("Webhook delivery failed after all retry attempts")
 }
 
 // sendWebhookRequest sends the HTTP request to the webhook URL
-func (s *WebhookDeliveryService) sendWebhookRequest(webhook *models.Webhook, payload string) (success bool, responseCode int, responseBody string, errorMsg string) {
+func (s *WebhookDeliveryService) sendWebhookRequest(webhook *models.Webhook, payload string) (success bool, responseCode int, responseBody string, errorMsg string, err error) {
 	// Create signature
 	signature := s.generateSignature(webhook.Secret, payload)
 
 	req, err := http.NewRequest("POST", webhook.URL, bytes.NewBufferString(payload))
 	if err != nil {
-		return false, 0, "", fmt.Sprintf("failed to create request: %v", err)
+		return false, 0, "", fmt.Sprintf("failed to create request: %v", err), err
 	}
 
 	req.Header.Set("Content-Type", "application/json")
@@ -188,13 +275,13 @@ func (s *WebhookDeliveryService) sendWebhookRequest(webhook *models.Webhook, pay
 
 	resp, err := s.httpClient.Do(req)
 	if err != nil {
-		return false, 0, "", fmt.Sprintf("request failed: %v", err)
+		return false, 0, "", fmt.Sprintf("request failed: %v", err), err
 	}
 	defer resp.Body.Close()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return false, resp.StatusCode, "", fmt.Sprintf("failed to read response: %v", err)
+		return false, resp.StatusCode, "", fmt.Sprintf("failed to read response: %v", err), err
 	}
 
 	responseBody = string(body)
@@ -204,10 +291,10 @@ func (s *WebhookDeliveryService) sendWebhookRequest(webhook *models.Webhook, pay
 
 	// Consider 2xx status codes as success
 	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
-		return true, resp.StatusCode, responseBody, ""
+		return true, resp.StatusCode, responseBody, "", nil
 	}
 
-	return false, resp.StatusCode, responseBody, fmt.Sprintf("HTTP %d: %s", resp.StatusCode, responseBody)
+	return false, resp.StatusCode, responseBody, fmt.Sprintf("HTTP %d: %s", resp.StatusCode, responseBody), nil
 }
 
 // generateSignature creates HMAC-SHA256 signature for webhook verification

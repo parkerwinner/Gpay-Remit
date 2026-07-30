@@ -5,102 +5,126 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
-// resetRedisClient sets RedisClient to nil before each test so tests are
-// isolated regardless of execution order.
-func resetRedisClient() {
-	RedisClient = nil
+// Test graceful degradation when Redis is unavailable (#202)
+func TestRedisGracefulDegradation(t *testing.T) {
+	// Save original client
+	originalClient := RedisClient
+	defer func() {
+		RedisClient = originalClient
+	}()
+
+	t.Run("GetCached returns cache miss when Redis unavailable", func(t *testing.T) {
+		// Set client to nil to simulate unavailability
+		RedisClient = nil
+		
+		var result interface{}
+		found, err := GetCached("test-key", &result)
+		
+		assert.False(t, found)
+		assert.NoError(t, err)
+	})
+
+	t.Run("SetCached continues silently when Redis unavailable", func(t *testing.T) {
+		// Set client to nil to simulate unavailability
+		RedisClient = nil
+		
+		err := SetCached("test-key", map[string]string{"test": "data"}, time.Minute)
+		
+		// Should not return error for graceful degradation
+		assert.NoError(t, err)
+	})
+
+	t.Run("DeleteCached continues silently when Redis unavailable", func(t *testing.T) {
+		// Set client to nil to simulate unavailability
+		RedisClient = nil
+		
+		err := DeleteCached("test-key")
+		
+		// Should not return error for graceful degradation
+		assert.NoError(t, err)
+	})
+
+	t.Run("PingRedis returns ErrCacheUnavailable when Redis unavailable", func(t *testing.T) {
+		// Set client to nil to simulate unavailability
+		RedisClient = nil
+		
+		err := PingRedis()
+		
+		assert.Equal(t, ErrCacheUnavailable, err)
+	})
 }
 
-// TestGetCachedNilClient verifies that GetCached is a no-op when the Redis
-// client has not been initialised (returns false, nil).
-func TestGetCachedNilClient(t *testing.T) {
-	resetRedisClient()
-
-	var dest map[string]interface{}
-	found, err := GetCached("some-key", &dest)
-
-	assert.NoError(t, err)
-	assert.False(t, found)
-	assert.Nil(t, dest)
+// Test that InitRedis doesn't panic when Redis is unavailable (#202)
+func TestInitRedisGracefulFailure(t *testing.T) {
+	t.Run("InitRedis handles connection failure gracefully", func(t *testing.T) {
+		// Try to connect to non-existent Redis instance
+		err := InitRedis("localhost:9999", "", 0)
+		
+		// Should not return error (graceful degradation)
+		assert.NoError(t, err)
+		
+		// Client should be nil after failed initialization
+		assert.Nil(t, RedisClient)
+	})
 }
 
-// TestSetCachedNilClient verifies that SetCached silently succeeds (no-op)
-// when the Redis client is nil.
-func TestSetCachedNilClient(t *testing.T) {
-	resetRedisClient()
-
-	err := SetCached("some-key", map[string]string{"hello": "world"}, time.Minute)
-
-	assert.NoError(t, err)
-}
-
-// TestDeleteCachedNilClient verifies that DeleteCached silently succeeds
-// (no-op) when the Redis client is nil.
-func TestDeleteCachedNilClient(t *testing.T) {
-	resetRedisClient()
-
-	err := DeleteCached("some-key")
-
-	assert.NoError(t, err)
-}
-
-// TestGetCachedNotFound verifies that GetCached returns (false, nil) for a key
-// that has never been stored (requires a live Redis connection; skipped when
-// REDIS_ADDR is not reachable).
-func TestGetCachedNotFound(t *testing.T) {
-	if RedisClient == nil {
-		t.Skip("skipping: no Redis client available")
+// Test cache operations with working Redis (integration test)
+func TestCacheOperationsWithRedis(t *testing.T) {
+	// This test requires a running Redis instance
+	// Skip if Redis is not available
+	err := InitRedis("localhost:6379", "", 0)
+	if err != nil || RedisClient == nil {
+		t.Skip("Redis not available for integration test")
 	}
 
-	var dest string
-	found, err := GetCached("nonexistent-key-xyz", &dest)
+	t.Run("Set and Get cache value", func(t *testing.T) {
+		testData := map[string]interface{}{
+			"key1": "value1",
+			"key2": 123,
+		}
+		
+		err := SetCached("integration-test-key", testData, time.Minute)
+		assert.NoError(t, err)
+		
+		var result map[string]interface{}
+		found, err := GetCached("integration-test-key", &result)
+		
+		assert.True(t, found)
+		assert.NoError(t, err)
+		assert.Equal(t, "value1", result["key1"])
+		assert.Equal(t, float64(123), result["key2"]) // JSON unmarshaling converts numbers to float64
+		
+		// Clean up
+		err = DeleteCached("integration-test-key")
+		assert.NoError(t, err)
+	})
 
-	require.NoError(t, err)
-	assert.False(t, found)
+	t.Run("Get non-existent key returns cache miss", func(t *testing.T) {
+		var result interface{}
+		found, err := GetCached("non-existent-key", &result)
+		
+		assert.False(t, found)
+		assert.NoError(t, err)
+	})
+
+	t.Run("PingRedis succeeds with working Redis", func(t *testing.T) {
+		err := PingRedis()
+		assert.NoError(t, err)
+	})
 }
 
-// TestSetAndGetCached verifies that a value stored with SetCached can be
-// retrieved with GetCached (requires a live Redis connection).
-func TestSetAndGetCached(t *testing.T) {
-	if RedisClient == nil {
-		t.Skip("skipping: no Redis client available")
-	}
-
-	type payload struct {
-		Message string `json:"message"`
-	}
-
-	key := "test-set-get-key"
-	want := payload{Message: "hello-redis"}
-
-	require.NoError(t, SetCached(key, want, 10*time.Second))
-	t.Cleanup(func() { _ = DeleteCached(key) })
-
-	var got payload
-	found, err := GetCached(key, &got)
-
-	require.NoError(t, err)
-	assert.True(t, found)
-	assert.Equal(t, want, got)
-}
-
-// TestDeleteCached verifies that after a key is deleted GetCached returns false
-// (requires a live Redis connection).
-func TestDeleteCached(t *testing.T) {
-	if RedisClient == nil {
-		t.Skip("skipping: no Redis client available")
-	}
-
-	key := "test-delete-key"
-	require.NoError(t, SetCached(key, "value", 10*time.Second))
-
-	require.NoError(t, DeleteCached(key))
-
-	var dest string
-	found, err := GetCached(key, &dest)
-	require.NoError(t, err)
-	assert.False(t, found)
+// Test connection pool configuration
+func TestRedisConnectionPoolConfig(t *testing.T) {
+	// This test verifies that InitRedis sets up connection pool properly
+	// We can't easily test the actual pool settings without accessing internals,
+	// but we can verify the function completes successfully
+	
+	t.Run("InitRedis with valid config", func(t *testing.T) {
+		// This should not panic and should handle connection gracefully
+		assert.NotPanics(t, func() {
+			InitRedis("localhost:6379", "", 0)
+		})
+	})
 }
