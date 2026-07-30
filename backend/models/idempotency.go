@@ -12,7 +12,14 @@ type IdempotencyRecord struct {
 	CreatedAt        time.Time      `json:"created_at"`
 	UpdatedAt        time.Time      `json:"updated_at"`
 	DeletedAt        gorm.DeletedAt `gorm:"index" json:"-"`
-	IdempotencyKey   string         `gorm:"size:256;not null;index" json:"idempotency_key"`
+	// uniqueIndex (#195): a plain index does not prevent two concurrent
+	// requests with the same key from both passing a "does this exist?"
+	// check before either commits. The actual DB-level constraint is
+	// created by migrations/000008_add_idempotency_key_unique_constraint
+	// (a partial unique index respecting soft-deletes) since this project
+	// applies schema changes via SQL migration files, not GORM AutoMigrate
+	// — this tag documents the invariant rather than enforcing it itself.
+	IdempotencyKey   string         `gorm:"size:256;not null;uniqueIndex" json:"idempotency_key"`
 	RequestHash      string         `gorm:"size:64;not null" json:"request_hash"`
 	RequestMethod    string         `gorm:"size:10;not null" json:"request_method"`
 	RequestPath      string         `gorm:"size:512;not null" json:"request_path"`
