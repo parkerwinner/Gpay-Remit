@@ -45,54 +45,108 @@ func (h *SearchHandler) SearchTransactions(c *gin.Context) {
     }
     offset := (page - 1) * pageSize
 
-    // Sorting
+    // Sorting - validate and sanitize sort parameters
     sortBy := c.DefaultQuery("sort_by", "created_at")
     sortOrder := strings.ToUpper(c.DefaultQuery("sort_order", "DESC"))
     if sortOrder != "ASC" && sortOrder != "DESC" {
         sortOrder = "DESC"
     }
-    allowedSort := map[string]bool{"amount": true, "created_at": true}
+    allowedSort := map[string]bool{"amount": true, "created_at": true, "status": true, "currency": true}
     if !allowedSort[sortBy] {
         sortBy = "created_at"
     }
 
-    // Build query depending on dialect
+    // Build query using parameterized queries to prevent SQL injection
     var total int64
     var rows []map[string]interface{}
 
     dialect := h.db.Dialector.Name()
     if dialect == "postgres" {
-        // Use full-text search on the persisted `search_vector` column
-        tsQuery := q
-        countSQL := "SELECT COUNT(*) FROM payments WHERE search_vector @@ plainto_tsquery(?)"
-        h.db.Raw(countSQL, tsQuery).Scan(&total)
+        // Use full-text search with parameterized query
+        // Count total results
+        h.db.Model(&models.Payment{}).
+            Where("search_vector @@ plainto_tsquery(?)", q).
+            Count(&total)
 
-        sql := fmt.Sprintf(`SELECT id, sender_id, recipient_id, amount, currency, status, notes, created_at, ts_headline('english', notes, plainto_tsquery(?), 'StartSel=<em>, StopSel=</em>') AS notes_highlight FROM payments WHERE search_vector @@ plainto_tsquery(?) ORDER BY %s %s LIMIT ? OFFSET ?`, sortBy, sortOrder)
-        h.db.Raw(sql, tsQuery, tsQuery, pageSize, offset).Scan(&rows)
-    } else {
-        // Fallback: simple LIKE search and amount equality if numeric
-        like := "%%%s%%"
-        likeQ := fmt.Sprintf(like, q)
-        // count
-        h.db.Model(&models.Payment{}).Where("notes LIKE ? OR currency LIKE ? OR status LIKE ?", likeQ, likeQ, likeQ).Count(&total)
-
-        // query
-        base := h.db.Model(&models.Payment{}).Select("id, sender_id, recipient_id, amount, currency, status, notes, created_at").Where("notes LIKE ? OR currency LIKE ? OR status LIKE ?", likeQ, likeQ, likeQ)
-        if amt, err := strconv.ParseFloat(q, 64); err == nil {
-            base = base.Or("amount = ?", amt)
-        }
-        base = base.Order(fmt.Sprintf("%s %s", sortBy, sortOrder)).Limit(pageSize).Offset(offset)
+        // Query with parameterized values and safe column names
         var payments []models.Payment
-        if err := base.Find(&payments).Error; err != nil {
+        query := h.db.Model(&models.Payment{}).
+            Select("id, sender_id, recipient_id, amount, currency, status, notes, created_at").
+            Where("search_vector @@ plainto_tsquery(?)", q).
+            Order(fmt.Sprintf("%s %s", sortBy, sortOrder)).
+            Limit(pageSize).
+            Offset(offset)
+        
+        if err := query.Find(&payments).Error; err != nil {
             c.Error(errors.NewInternalError("Search failed", err))
             return
         }
-        // build rows with highlight
+
+        // Build response with highlighted results
+        for _, p := range payments {
+            // Use GORM's parameterized query for ts_headline
+            var highlightResult struct {
+                Highlight string
+            }
+            h.db.Raw(
+                "SELECT ts_headline('english', ?, plainto_tsquery(?), 'StartSel=<em>, StopSel=</em>') as highlight",
+                p.Notes,
+                q,
+            ).Scan(&highlightResult)
+
+            rows = append(rows, map[string]interface{}{
+                "id":              p.ID,
+                "sender_id":       p.SenderID,
+                "recipient_id":    p.RecipientID,
+                "amount":          p.Amount,
+                "currency":        p.Currency,
+                "status":          p.Status,
+                "notes":           p.Notes,
+                "notes_highlight": highlightResult.Highlight,
+                "created_at":      p.CreatedAt,
+            })
+        }
+    } else {
+        // Fallback: use parameterized LIKE queries
+        likeQ := "%" + q + "%"
+        
+        // Count with parameterized query
+        h.db.Model(&models.Payment{}).
+            Where("notes LIKE ? OR currency LIKE ? OR status LIKE ?", likeQ, likeQ, likeQ).
+            Count(&total)
+
+        // Query with parameterized values
+        query := h.db.Model(&models.Payment{}).
+            Select("id, sender_id, recipient_id, amount, currency, status, notes, created_at").
+            Where("notes LIKE ? OR currency LIKE ? OR status LIKE ?", likeQ, likeQ, likeQ)
+        
+        // Add amount search if query is numeric
+        if amt, err := strconv.ParseFloat(q, 64); err == nil {
+            query = query.Or("amount = ?", amt)
+        }
+        
+        query = query.Order(fmt.Sprintf("%s %s", sortBy, sortOrder)).
+            Limit(pageSize).
+            Offset(offset)
+
+        var payments []models.Payment
+        if err := query.Find(&payments).Error; err != nil {
+            c.Error(errors.NewInternalError("Search failed", err))
+            return
+        }
+        
+        // Build rows with simple highlight
         for _, p := range payments {
             notes := p.Notes
             highlight := notes
-            if q != "" {
-                highlight = strings.Replace(strings.ToLower(notes), strings.ToLower(q), "<em>"+q+"</em>", -1)
+            if q != "" && strings.Contains(strings.ToLower(notes), strings.ToLower(q)) {
+                // Simple case-insensitive highlighting
+                lowerNotes := strings.ToLower(notes)
+                lowerQ := strings.ToLower(q)
+                idx := strings.Index(lowerNotes, lowerQ)
+                if idx != -1 {
+                    highlight = notes[:idx] + "<em>" + notes[idx:idx+len(q)] + "</em>" + notes[idx+len(q):]
+                }
             }
             rows = append(rows, map[string]interface{}{
                 "id":              p.ID,

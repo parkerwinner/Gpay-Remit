@@ -401,3 +401,83 @@ func (s *EmailService) SendPaymentFailedEmail(user *models.User, payment *models
 	subject := fmt.Sprintf("Payment #%d Failed", payment.ID)
 	return s.SendEmail(user.Email, subject, body.String())
 }
+
+
+// SendPasswordResetEmail sends a password reset link to the user
+func (s *EmailService) SendPasswordResetEmail(user *models.User, token string) error {
+	tmpl := `
+<!DOCTYPE html>
+<html>
+<head>
+    <style>
+        body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
+        .container { max-width: 600px; margin: 0 auto; padding: 20px; }
+        .header { background-color: #2196F3; color: white; padding: 20px; text-align: center; }
+        .content { padding: 20px; background-color: #f9f9f9; }
+        .info { background-color: #e3f2fd; border-left: 4px solid #2196F3; padding: 15px; margin: 15px 0; }
+        .cta { text-align: center; margin: 30px 0; }
+        .button { background-color: #2196F3; color: white; padding: 12px 30px; text-decoration: none; border-radius: 5px; display: inline-block; }
+        .token { background-color: #f5f5f5; padding: 15px; border-radius: 5px; font-family: monospace; word-break: break-all; margin: 15px 0; }
+        .warning { color: #f44336; font-weight: bold; margin: 15px 0; }
+        .footer { text-align: center; padding: 20px; font-size: 12px; color: #777; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>Password Reset Request</h1>
+        </div>
+        <div class="content">
+            <p>Hello {{.UserName}},</p>
+            
+            <p>We received a request to reset your password for your GPay-Remit account.</p>
+            
+            <div class="info">
+                <strong>Reset Token:</strong>
+                <div class="token">{{.Token}}</div>
+            </div>
+            
+            <p>This token will expire in <strong>1 hour</strong> for security reasons.</p>
+            
+            <div class="cta">
+                <p>Use this token to reset your password through the application.</p>
+            </div>
+            
+            <div class="warning">
+                ⚠️ If you did not request this password reset, please ignore this email and your password will remain unchanged.
+            </div>
+            
+            <p>For security reasons, we recommend:</p>
+            <ul>
+                <li>Never share this token with anyone</li>
+                <li>Use a strong, unique password</li>
+                <li>Enable two-factor authentication if available</li>
+            </ul>
+        </div>
+        <div class="footer">
+            <p>This is an automated email. Please do not reply.</p>
+            <p>GPay-Remit Security Team</p>
+        </div>
+    </div>
+</body>
+</html>
+`
+
+	t, err := template.New("password_reset").Parse(tmpl)
+	if err != nil {
+		return fmt.Errorf("failed to parse template: %w", err)
+	}
+
+	data := map[string]interface{}{
+		"UserName": user.Name,
+		"Token":    token,
+	}
+
+	var body bytes.Buffer
+	if err := t.Execute(&body, data); err != nil {
+		return fmt.Errorf("failed to execute template: %w", err)
+	}
+
+	subject := "Password Reset Request - GPay-Remit"
+	return s.SendEmail(user.Email, subject, body.String())
+}
