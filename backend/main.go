@@ -52,6 +52,7 @@ func main() {
 	router.Use(middleware.RequestLogger())
 	router.Use(middleware.ErrorHandler())
 	router.Use(middleware.VersionMiddleware())
+	router.Use(middleware.TLSMiddleware())
 
 	router.Use(func(c *gin.Context) {
 		c.Writer.Header().Set("Access-Control-Allow-Origin", "*")
