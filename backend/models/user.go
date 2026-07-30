@@ -1,7 +1,13 @@
 package models
 
 import (
+	"crypto/sha1"
+	"encoding/hex"
 	"errors"
+	"fmt"
+	"io"
+	"net/http"
+	"strings"
 	"time"
 	"unicode"
 
@@ -66,6 +72,44 @@ func ValidatePasswordStrength(password string) error {
 	}
 	if !hasSpecial {
 		return errors.New("password must contain at least one special character")
+	}
+
+	if err := checkCommonPassword(password); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// checkCommonPassword uses HaveIBeenPwned API (k-Anonymity) to check if the password is known
+func checkCommonPassword(password string) error {
+	hasher := sha1.New()
+	hasher.Write([]byte(password))
+	hash := strings.ToUpper(hex.EncodeToString(hasher.Sum(nil)))
+
+	prefix := hash[:5]
+	suffix := hash[5:]
+
+	url := fmt.Sprintf("https://api.pwnedpasswords.com/range/%s", prefix)
+	resp, err := http.Get(url)
+	if err != nil {
+		// Fail open if the external API is down so users can still register
+		return nil
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusOK {
+		bodyBytes, err := io.ReadAll(resp.Body)
+		if err == nil {
+			bodyString := string(bodyBytes)
+			lines := strings.Split(bodyString, "\n")
+			for _, line := range lines {
+				parts := strings.Split(strings.TrimSpace(line), ":")
+				if len(parts) >= 1 && parts[0] == suffix {
+					return errors.New("password is too common or has been compromised in a data breach")
+				}
+			}
+		}
 	}
 	return nil
 }
