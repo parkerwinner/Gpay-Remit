@@ -113,6 +113,20 @@ type CreateRemittanceRequest struct {
 	Notes           string                 `json:"notes"`
 }
 
+type BatchPaymentItem struct {
+	RecipientAccount string                 `json:"recipient_account" binding:"required"`
+	Amount           float64                `json:"amount" binding:"required,gt=0"`
+	Conditions       map[string]interface{} `json:"conditions"`
+	Notes            string                 `json:"notes"`
+}
+
+type CreateBatchRemittanceRequest struct {
+	SenderAccount string             `json:"sender_account" binding:"required"`
+	AssetCode     string             `json:"asset_code" binding:"required"`
+	AssetIssuer   string             `json:"asset_issuer"`
+	Payments      []BatchPaymentItem `json:"payments" binding:"required,min=1,max=100"`
+}
+
 type SendRemittanceRequest struct {
 	SenderID       uint    `json:"sender_id" binding:"required"`
 	RecipientID    uint    `json:"recipient_id" binding:"required"`
@@ -238,6 +252,81 @@ func (h *RemittanceHandler) CreateRemittance(c *gin.Context) {
 	middleware.SetIdempotencyResponse(c, response)
 
 	c.JSON(http.StatusCreated, response)
+}
+
+func (h *RemittanceHandler) CreateBatchRemittance(c *gin.Context) {
+	var req CreateBatchRemittanceRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.Error(errors.NewValidationError("Invalid request body", err.Error()))
+		return
+	}
+
+	ctx := utils.WithRequestContext(c.Request.Context(), c.GetString("requestID"), nil)
+
+	// Validate sender account
+	if err := h.stellarClient.ValidateAccount(ctx, req.SenderAccount); err != nil {
+		c.Error(errors.NewValidationError("Invalid sender account", err.Error()))
+		return
+	}
+
+	userID, exists := c.Get("userID")
+	if !exists {
+		c.Error(errors.NewUnauthorizedError("Unauthorized"))
+		return
+	}
+	ctx = utils.WithRequestContext(ctx, c.GetString("requestID"), userID)
+
+	var payments []models.Payment
+	tx := h.db.Begin()
+	if tx.Error != nil {
+		c.Error(errors.NewInternalError("Failed to start transaction", tx.Error))
+		return
+	}
+
+	for _, p := range req.Payments {
+		if err := h.stellarClient.ValidateAccount(ctx, p.RecipientAccount); err != nil {
+			tx.Rollback()
+			c.Error(errors.NewValidationError("Invalid recipient account", fmt.Sprintf("Account %s is invalid", p.RecipientAccount)))
+			return
+		}
+
+		conditionsJSON, _ := json.Marshal(p.Conditions)
+		feeBreakdown := h.fees.Calculate(p.Amount)
+
+		payment := models.Payment{
+			SenderID:         userID.(uint),
+			SenderAccount:    req.SenderAccount,
+			RecipientAccount: p.RecipientAccount,
+			Amount:           p.Amount,
+			Currency:         req.AssetCode,
+			Status:           "pending",
+			Fee:              feeBreakdown.TotalFee,
+			PlatformFee:      feeBreakdown.PlatformFee,
+			ForexFee:         feeBreakdown.ForexFee,
+			ComplianceFee:    feeBreakdown.ComplianceFee,
+			NetworkFee:       feeBreakdown.NetworkFee,
+			Conditions:       string(conditionsJSON),
+			Notes:            p.Notes,
+		}
+
+		if err := tx.Create(&payment).Error; err != nil {
+			tx.Rollback()
+			c.Error(errors.NewInternalError("Failed to create remittance record", err))
+			return
+		}
+
+		payments = append(payments, payment)
+	}
+
+	if err := tx.Commit().Error; err != nil {
+		c.Error(errors.NewInternalError("Failed to commit transaction", err))
+		return
+	}
+
+	c.JSON(http.StatusCreated, gin.H{
+		"message":  "Batch remittance initiated successfully",
+		"payments": payments,
+	})
 }
 
 func (h *RemittanceHandler) GetRemittance(c *gin.Context) {
