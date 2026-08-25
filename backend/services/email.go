@@ -6,10 +6,54 @@ import (
 	"fmt"
 	"html/template"
 	"net/smtp"
+	"regexp"
+	"strings"
 	"time"
 
 	"github.com/yourusername/gpay-remit/models"
 )
+
+// htmlTagPattern matches any `<...>` sequence, used by sanitizeEmailField
+// to strip markup from user-controlled text before it's placed into an
+// email template.
+var htmlTagPattern = regexp.MustCompile(`<[^>]*>`)
+
+// sanitizeEmailField neutralizes markup and control characters in
+// user-controlled text (#194) before it's substituted into an email
+// template.
+//
+// html/template (used for every template in this file, via
+// template.New(...).Parse(...).Execute(...)) already contextually
+// HTML-escapes every {{.Field}} substitution — verified directly: executing
+// a template with UserName = "<script>alert(1)</script>" produces
+// "&lt;script&gt;alert(1)&lt;/script&gt;" in the rendered body, not
+// executable markup. This function is deliberately redundant with that:
+// explicit sanitization at the point user input enters a template is worth
+// having so the property doesn't silently depend on every future template
+// staying on html/template (a switch to text/template, or a
+// template.HTML(...) cast to render pre-built HTML, would silently
+// reintroduce injection without this).
+func sanitizeEmailField(input string) string {
+	// Strip HTML/script tags entirely rather than escaping them here —
+	// html/template's own escaping is what actually makes the output safe
+	// to render; this pass exists to keep the *data* clean of markup
+	// regardless of which template engine ends up consuming it.
+	sanitized := htmlTagPattern.ReplaceAllString(input, "")
+
+	// Drop non-printable/control characters (keeps the visible content
+	// intact) — these have no legitimate reason to appear in a name,
+	// account reference, or failure reason, and some (CR/LF in
+	// particular) are the building blocks of header/log injection if this
+	// value is ever reused outside the HTML body context.
+	sanitized = strings.Map(func(r rune) rune {
+		if r < 0x20 || r == 0x7f {
+			return -1
+		}
+		return r
+	}, sanitized)
+
+	return strings.TrimSpace(sanitized)
+}
 
 type EmailService struct {
 	smtpHost     string
@@ -191,11 +235,11 @@ func (s *EmailService) SendPaymentCompletedEmail(user *models.User, payment *mod
 	}
 
 	data := map[string]interface{}{
-		"UserName":         user.Name,
+		"UserName":         sanitizeEmailField(user.Name),
 		"PaymentID":        payment.ID,
 		"Amount":           fmt.Sprintf("%.2f", payment.Amount),
 		"Currency":         payment.Currency,
-		"RecipientAccount": payment.RecipientAccount,
+		"RecipientAccount": sanitizeEmailField(payment.RecipientAccount),
 		"Fee":              fmt.Sprintf("%.4f", payment.Fee),
 		"Status":           payment.Status,
 		"Date":             payment.CreatedAt.Format("2006-01-02 15:04:05"),
@@ -293,11 +337,11 @@ func (s *EmailService) SendEscrowExpirationWarningEmail(user *models.User, payme
 	}
 
 	data := map[string]interface{}{
-		"UserName":         user.Name,
+		"UserName":         sanitizeEmailField(user.Name),
 		"PaymentID":        payment.ID,
 		"Amount":           fmt.Sprintf("%.2f", payment.Amount),
 		"Currency":         payment.Currency,
-		"RecipientAccount": payment.RecipientAccount,
+		"RecipientAccount": sanitizeEmailField(payment.RecipientAccount),
 		"EscrowID":         payment.EscrowID,
 		"HoursRemaining":   hoursRemaining,
 	}
@@ -384,12 +428,12 @@ func (s *EmailService) SendPaymentFailedEmail(user *models.User, payment *models
 	}
 
 	data := map[string]interface{}{
-		"UserName":         user.Name,
+		"UserName":         sanitizeEmailField(user.Name),
 		"PaymentID":        payment.ID,
 		"Amount":           fmt.Sprintf("%.2f", payment.Amount),
 		"Currency":         payment.Currency,
-		"RecipientAccount": payment.RecipientAccount,
-		"Reason":           reason,
+		"RecipientAccount": sanitizeEmailField(payment.RecipientAccount),
+		"Reason":           sanitizeEmailField(reason),
 		"Date":             time.Now().Format("2006-01-02 15:04:05"),
 	}
 
@@ -469,7 +513,7 @@ func (s *EmailService) SendPasswordResetEmail(user *models.User, token string) e
 	}
 
 	data := map[string]interface{}{
-		"UserName": user.Name,
+		"UserName": sanitizeEmailField(user.Name),
 		"Token":    token,
 	}
 
