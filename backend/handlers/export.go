@@ -305,3 +305,42 @@ func (h *ExportHandler) exportPDF(c *gin.Context, payments []models.Payment) {
 	c.Header("Content-Disposition", fmt.Sprintf("attachment; filename=%s", filename))
 	c.Data(http.StatusOK, "application/pdf", buf.Bytes())
 }
+
+type ScheduleExportRequest struct {
+	Frequency   string `json:"frequency" binding:"required,oneof=daily weekly monthly"`
+	Format      string `json:"format" binding:"required,oneof=csv pdf"`
+	Destination string `json:"destination" binding:"required,oneof=email s3"`
+}
+
+// ScheduleExport allows users to schedule automated transaction exports
+func (h *ExportHandler) ScheduleExport(c *gin.Context) {
+	userID, exists := c.Get("userID")
+	if !exists {
+		c.Error(errors.NewUnauthorizedError("Unauthorized"))
+		return
+	}
+
+	var req ScheduleExportRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.Error(errors.NewValidationError("Invalid request body", err.Error()))
+		return
+	}
+
+	schedule := models.ExportSchedule{
+		UserID:      userID.(uint),
+		Frequency:   req.Frequency,
+		Format:      req.Format,
+		Destination: req.Destination,
+		IsActive:    true,
+	}
+
+	if err := h.db.Create(&schedule).Error; err != nil {
+		c.Error(errors.NewInternalError("Failed to create export schedule", err))
+		return
+	}
+
+	c.JSON(http.StatusCreated, gin.H{
+		"message":  "Export schedule created successfully",
+		"schedule": schedule,
+	})
+}
