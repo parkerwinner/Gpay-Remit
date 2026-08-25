@@ -45,6 +45,25 @@ func (h *SearchHandler) SearchTransactions(c *gin.Context) {
     }
     offset := (page - 1) * pageSize
 
+    var minAmount *float64
+    if minAmtStr := c.Query("min_amount"); minAmtStr != "" {
+        if val, err := strconv.ParseFloat(minAmtStr, 64); err == nil {
+            minAmount = &val
+        }
+    }
+
+    var maxAmount *float64
+    if maxAmtStr := c.Query("max_amount"); maxAmtStr != "" {
+        if val, err := strconv.ParseFloat(maxAmtStr, 64); err == nil {
+            maxAmount = &val
+        }
+    }
+
+    var filterCurrency string
+    if cStr := c.Query("currency"); cStr != "" {
+        filterCurrency = cStr
+    }
+
     // Sorting - validate and sanitize sort parameters
     sortBy := c.DefaultQuery("sort_by", "created_at")
     sortOrder := strings.ToUpper(c.DefaultQuery("sort_order", "DESC"))
@@ -64,16 +83,36 @@ func (h *SearchHandler) SearchTransactions(c *gin.Context) {
     if dialect == "postgres" {
         // Use full-text search with parameterized query
         // Count total results
-        h.db.Model(&models.Payment{}).
-            Where("search_vector @@ plainto_tsquery(?)", q).
-            Count(&total)
+        countQuery := h.db.Model(&models.Payment{}).
+            Where("search_vector @@ plainto_tsquery(?)", q)
+        if minAmount != nil {
+            countQuery = countQuery.Where("amount >= ?", *minAmount)
+        }
+        if maxAmount != nil {
+            countQuery = countQuery.Where("amount <= ?", *maxAmount)
+        }
+        if filterCurrency != "" {
+            countQuery = countQuery.Where("currency = ?", filterCurrency)
+        }
+        countQuery.Count(&total)
 
         // Query with parameterized values and safe column names
         var payments []models.Payment
         query := h.db.Model(&models.Payment{}).
             Select("id, sender_id, recipient_id, amount, currency, status, notes, created_at").
-            Where("search_vector @@ plainto_tsquery(?)", q).
-            Order(fmt.Sprintf("%s %s", sortBy, sortOrder)).
+            Where("search_vector @@ plainto_tsquery(?)", q)
+        
+        if minAmount != nil {
+            query = query.Where("amount >= ?", *minAmount)
+        }
+        if maxAmount != nil {
+            query = query.Where("amount <= ?", *maxAmount)
+        }
+        if filterCurrency != "" {
+            query = query.Where("currency = ?", filterCurrency)
+        }
+
+        query = query.Order(fmt.Sprintf("%s %s", sortBy, sortOrder)).
             Limit(pageSize).
             Offset(offset)
         
@@ -110,19 +149,43 @@ func (h *SearchHandler) SearchTransactions(c *gin.Context) {
         // Fallback: use parameterized LIKE queries
         likeQ := "%" + q + "%"
         
+        countQuery := h.db.Model(&models.Payment{})
         // Count with parameterized query
-        h.db.Model(&models.Payment{}).
-            Where("notes LIKE ? OR currency LIKE ? OR status LIKE ?", likeQ, likeQ, likeQ).
-            Count(&total)
+        if amt, err := strconv.ParseFloat(q, 64); err == nil {
+            countQuery = countQuery.Where("notes LIKE ? OR currency LIKE ? OR status LIKE ? OR amount = ?", likeQ, likeQ, likeQ, amt)
+        } else {
+            countQuery = countQuery.Where("notes LIKE ? OR currency LIKE ? OR status LIKE ?", likeQ, likeQ, likeQ)
+        }
+        
+        if minAmount != nil {
+            countQuery = countQuery.Where("amount >= ?", *minAmount)
+        }
+        if maxAmount != nil {
+            countQuery = countQuery.Where("amount <= ?", *maxAmount)
+        }
+        if filterCurrency != "" {
+            countQuery = countQuery.Where("currency = ?", filterCurrency)
+        }
+        countQuery.Count(&total)
 
         // Query with parameterized values
         query := h.db.Model(&models.Payment{}).
-            Select("id, sender_id, recipient_id, amount, currency, status, notes, created_at").
-            Where("notes LIKE ? OR currency LIKE ? OR status LIKE ?", likeQ, likeQ, likeQ)
-        
-        // Add amount search if query is numeric
+            Select("id, sender_id, recipient_id, amount, currency, status, notes, created_at")
+            
         if amt, err := strconv.ParseFloat(q, 64); err == nil {
-            query = query.Or("amount = ?", amt)
+            query = query.Where("notes LIKE ? OR currency LIKE ? OR status LIKE ? OR amount = ?", likeQ, likeQ, likeQ, amt)
+        } else {
+            query = query.Where("notes LIKE ? OR currency LIKE ? OR status LIKE ?", likeQ, likeQ, likeQ)
+        }
+        
+        if minAmount != nil {
+            query = query.Where("amount >= ?", *minAmount)
+        }
+        if maxAmount != nil {
+            query = query.Where("amount <= ?", *maxAmount)
+        }
+        if filterCurrency != "" {
+            query = query.Where("currency = ?", filterCurrency)
         }
         
         query = query.Order(fmt.Sprintf("%s %s", sortBy, sortOrder)).
