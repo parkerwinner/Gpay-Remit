@@ -31,6 +31,7 @@ type User struct {
 	IsActive              bool           `gorm:"index;default:true" json:"is_active"`
 	DefaultCurrency       string         `gorm:"size:10;default:'USD'" json:"default_currency"`
 	EmailNotifications    bool           `gorm:"default:true" json:"email_notifications"`
+	Preferences           string         `gorm:"type:jsonb;default:'{}'" json:"preferences"`
 	ResetToken            string         `gorm:"size:255;index" json:"-"`
 	ResetTokenExpiresAt   *time.Time     `json:"-"`
 	FailedLoginAttempts   int            `gorm:"default:0" json:"-"`
