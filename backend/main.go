@@ -116,6 +116,16 @@ func main() {
 			protected.POST("/admin/rate-limit/reset", middleware.RequireRole("admin"), middleware.AdminResetRateLimit(cfg))
 			protected.GET("/admin/rate-limit/view", middleware.RequireRole("admin"), middleware.AdminViewRateLimits(cfg))
 
+			// Payment request endpoints
+			emailService := services.NewEmailService(cfg.SMTPHost, cfg.SMTPPort, cfg.SMTPUser, cfg.SMTPPassword, cfg.SMTPFrom, cfg.EmailEnabled)
+			paymentRequestHandler := handlers.NewPaymentRequestHandler(db, feeService, emailService)
+			protected.POST("/payment-requests", paymentRequestHandler.CreatePaymentRequest)
+			protected.GET("/payment-requests", paymentRequestHandler.ListPaymentRequests)
+			protected.GET("/payment-requests/:id", paymentRequestHandler.GetPaymentRequest)
+			protected.POST("/payment-requests/:id/accept", paymentRequestHandler.AcceptPaymentRequest)
+			protected.POST("/payment-requests/:id/reject", paymentRequestHandler.RejectPaymentRequest)
+			protected.POST("/payment-requests/:id/cancel", paymentRequestHandler.CancelPaymentRequest)
+
 			// Webhook endpoints
 			webhookHandler := handlers.NewWebhookHandler(db)
 			protected.POST("/webhooks", webhookHandler.CreateWebhook)
@@ -176,6 +186,16 @@ func main() {
 			protected.POST("/admin/rate-limit/reset", middleware.RequireRole("admin"), middleware.AdminResetRateLimit(cfg))
 			protected.GET("/admin/rate-limit/view", middleware.RequireRole("admin"), middleware.AdminViewRateLimits(cfg))
 
+			// Payment request endpoints
+			emailService := services.NewEmailService(cfg.SMTPHost, cfg.SMTPPort, cfg.SMTPUser, cfg.SMTPPassword, cfg.SMTPFrom, cfg.EmailEnabled)
+			paymentRequestHandler := handlers.NewPaymentRequestHandler(db, feeService, emailService)
+			protected.POST("/payment-requests", paymentRequestHandler.CreatePaymentRequest)
+			protected.GET("/payment-requests", paymentRequestHandler.ListPaymentRequests)
+			protected.GET("/payment-requests/:id", paymentRequestHandler.GetPaymentRequest)
+			protected.POST("/payment-requests/:id/accept", paymentRequestHandler.AcceptPaymentRequest)
+			protected.POST("/payment-requests/:id/reject", paymentRequestHandler.RejectPaymentRequest)
+			protected.POST("/payment-requests/:id/cancel", paymentRequestHandler.CancelPaymentRequest)
+
 			webhookHandler := handlers.NewWebhookHandler(db)
 			protected.POST("/webhooks", webhookHandler.CreateWebhook)
 			protected.GET("/webhooks", webhookHandler.ListWebhooks)
@@ -202,6 +222,7 @@ func main() {
 	var wg sync.WaitGroup
 	workers.StartMonitor(baseCtx, &wg)
 	workers.StartWebhookRetryWorker(baseCtx, &wg, db)
+	workers.StartPaymentRequestExpiryWorker(baseCtx, &wg, db)
 
 	errCh := make(chan error, 1)
 	go func() {
