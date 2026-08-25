@@ -2,6 +2,7 @@ package config
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"os"
 	"time"
@@ -10,6 +11,7 @@ import (
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 
+	"github.com/yourusername/gpay-remit/logger"
 	"github.com/yourusername/gpay-remit/secrets"
 )
 
@@ -142,7 +144,49 @@ func InitDB(cfg *Config) (*gorm.DB, error) {
 	sqlDB.SetMaxOpenConns(cfg.DBMaxOpenConns)
 	sqlDB.SetConnMaxLifetime(cfg.DBConnMaxLifetime)
 
+	// Start monitoring connection pool periodically
+	go MonitorConnectionPool(sqlDB)
+
 	return db, nil
+}
+
+// MonitorConnectionPool monitors database connection pool stats and logs alerts
+func MonitorConnectionPool(db *sql.DB) {
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+
+	for range ticker.C {
+		stats := db.Stats()
+
+		// Log connection pool metrics
+		logger.Log.WithFields(map[string]interface{}{
+			"open_connections":  stats.OpenConnections,
+			"in_use":             stats.InUse,
+			"idle":               stats.Idle,
+			"wait_count":         stats.WaitCount,
+			"wait_duration_ms":   stats.WaitDuration.Milliseconds(),
+			"max_idle_closed":    stats.MaxIdleClosed,
+			"max_lifetime_closed": stats.MaxLifetimeClosed,
+		}).Debug("Database connection pool stats")
+
+		// Alert if connections are running low
+		if stats.OpenConnections >= 80 {
+			logger.Log.WithFields(map[string]interface{}{
+				"open_connections": stats.OpenConnections,
+				"in_use":           stats.InUse,
+				"threshold":        "80%",
+			}).Warn("Database connection pool nearing capacity")
+		}
+
+		// Alert if wait queue is building up
+		if stats.WaitCount > 0 {
+			logger.Log.WithFields(map[string]interface{}{
+				"wait_count":     stats.WaitCount,
+				"wait_duration":  stats.WaitDuration.Seconds(),
+				"connections":   stats.OpenConnections,
+			}).Warn("Queries waiting for database connections")
+		}
+	}
 }
 
 func getEnvOrDefault(key, defaultValue string) string {
