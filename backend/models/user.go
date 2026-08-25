@@ -11,6 +11,8 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/pquerna/otp"
+	"github.com/pquerna/otp/totp"
 	"golang.org/x/crypto/bcrypt"
 	"gorm.io/gorm"
 )
@@ -36,6 +38,9 @@ type User struct {
 	FailedLoginAttempts   int            `gorm:"default:0" json:"-"`
 	LockedUntil           *time.Time     `gorm:"index" json:"-"`
 	LastFailedLoginAt     *time.Time     `json:"-"`
+	TOTPSecret            string         `gorm:"size:255" json:"-"`
+	MFAEnabled            bool           `gorm:"default:false" json:"mfa_enabled"`
+	MFASetupCompletedAt   *time.Time     `json:"-"`
 }
 
 // TableName overrides the table name.
@@ -165,5 +170,45 @@ func (u *User) ResetFailedLoginAttempts(db *gorm.DB) error {
 	u.FailedLoginAttempts = 0
 	u.LastFailedLoginAt = nil
 	u.LockedUntil = nil
+	return db.Save(u).Error
+}
+
+// GenerateTOTPSecret creates a new TOTP secret for the user
+func (u *User) GenerateTOTPSecret() (string, string, error) {
+	key, err := totp.Generate(totp.GenerateOpts{
+		Issuer:      "GPay-Remit",
+		AccountName: u.Email,
+		Period:      30,
+		SecretSize:  32,
+	})
+	if err != nil {
+		return "", "", fmt.Errorf("failed to generate TOTP secret: %w", err)
+	}
+
+	u.TOTPSecret = key.Secret()
+	return key.Secret(), key.URL(), nil
+}
+
+// VerifyTOTP verifies a TOTP code against the user's secret
+func (u *User) VerifyTOTP(code string) bool {
+	if u.TOTPSecret == "" {
+		return false
+	}
+	return totp.Validate(code, u.TOTPSecret)
+}
+
+// EnableMFA enables MFA for the user
+func (u *User) EnableMFA(db *gorm.DB) error {
+	now := time.Now()
+	u.MFAEnabled = true
+	u.MFASetupCompletedAt = &now
+	return db.Save(u).Error
+}
+
+// DisableMFA disables MFA for the user
+func (u *User) DisableMFA(db *gorm.DB) error {
+	u.MFAEnabled = false
+	u.TOTPSecret = ""
+	u.MFASetupCompletedAt = nil
 	return db.Save(u).Error
 }
