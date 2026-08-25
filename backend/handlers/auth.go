@@ -47,6 +47,7 @@ type RegisterRequest struct {
 type LoginRequest struct {
 	Email    string `json:"email" binding:"required,email"`
 	Password string `json:"password" binding:"required"`
+	TOTPCode string `json:"totp_code"`
 }
 
 // RefreshTokenRequest is the request body for token refresh.
@@ -147,13 +148,13 @@ func (h *AuthHandler) Login(c *gin.Context) {
 				"user_id": user.ID,
 			}).Error("Failed to record failed login attempt")
 		}
-		
+
 		logger.Log.WithFields(logrus.Fields{
 			"user_id":  user.ID,
 			"endpoint": "/auth/login",
 			"attempts": user.FailedLoginAttempts,
 		}).Warn("Failed login attempt")
-		
+
 		// Check if account is now locked after recording the failed attempt
 		if user.FailedLoginAttempts >= 5 {
 			c.Error(errors.NewForbiddenError("Account locked due to multiple failed login attempts. Please try again in 30 minutes."))
@@ -161,6 +162,23 @@ func (h *AuthHandler) Login(c *gin.Context) {
 			c.Error(errors.NewUnauthorizedError("Invalid credentials"))
 		}
 		return
+	}
+
+	// Verify TOTP if MFA is enabled
+	if user.MFAEnabled {
+		if req.TOTPCode == "" {
+			c.Error(errors.NewValidationError("MFA is enabled. Please provide TOTP code", "totp_required"))
+			return
+		}
+
+		if !user.VerifyTOTP(req.TOTPCode) {
+			logger.Log.WithFields(logrus.Fields{
+				"user_id":  user.ID,
+				"endpoint": "/auth/login",
+			}).Warn("Invalid TOTP code")
+			c.Error(errors.NewUnauthorizedError("Invalid TOTP code"))
+			return
+		}
 	}
 
 	// Reset failed login attempts on successful login
@@ -292,14 +310,15 @@ func (h *AuthHandler) ForgotPassword(c *gin.Context) {
 		return
 	}
 
-	// Send password reset email
-	if err := h.EmailService.SendPasswordResetEmail(&user, token); err != nil {
-		logger.Log.WithFields(logrus.Fields{
-			"user_id":  user.ID,
-			"endpoint": "/auth/forgot-password",
-		}).Error("Failed to send password reset email")
-		// Don't fail the request if email fails - token is still valid
-	}
+	// Send password reset email asynchronously
+	go func() {
+		if err := h.EmailService.SendPasswordResetEmail(&user, token); err != nil {
+			logger.Log.WithFields(logrus.Fields{
+				"user_id":  user.ID,
+				"endpoint": "/auth/forgot-password",
+			}).Error("Failed to send password reset email")
+		}
+	}()
 
 	logger.Log.WithFields(logrus.Fields{
 		"user_id":  user.ID,
@@ -308,6 +327,144 @@ func (h *AuthHandler) ForgotPassword(c *gin.Context) {
 
 	c.JSON(http.StatusOK, gin.H{
 		"message": "If the email exists, a password reset link has been sent",
+	})
+}
+
+// SetupMFARequest is the request to initiate MFA setup
+type SetupMFARequest struct {
+	Password string `json:"password" binding:"required"`
+}
+
+// SetupMFAResponse returns the TOTP secret and QR code for setup
+type SetupMFAResponse struct {
+	Secret string `json:"secret"`
+	QRCode string `json:"qr_code"`
+}
+
+// VerifyMFARequest is the request to verify and enable MFA
+type VerifyMFARequest struct {
+	Code string `json:"code" binding:"required"`
+}
+
+// SetupMFA initiates MFA setup by generating a TOTP secret
+func (h *AuthHandler) SetupMFA(c *gin.Context) {
+	var req SetupMFARequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.Error(errors.NewValidationError("Invalid request body", err.Error()))
+		return
+	}
+
+	userID, exists := c.Get("userID")
+	if !exists {
+		c.Error(errors.NewUnauthorizedError("Unauthorized"))
+		return
+	}
+
+	var user models.User
+	if err := h.DB.First(&user, userID).Error; err != nil {
+		c.Error(errors.NewUnauthorizedError("User not found"))
+		return
+	}
+
+	if !models.ComparePassword(user.PasswordHash, req.Password) {
+		c.Error(errors.NewUnauthorizedError("Invalid password"))
+		return
+	}
+
+	secret, qrCode, err := user.GenerateTOTPSecret()
+	if err != nil {
+		c.Error(errors.NewInternalError("Failed to generate TOTP secret", err))
+		return
+	}
+
+	logger.Log.WithFields(logrus.Fields{
+		"user_id":  user.ID,
+		"endpoint": "/auth/mfa/setup",
+	}).Info("MFA setup initiated")
+
+	c.JSON(http.StatusOK, SetupMFAResponse{
+		Secret: secret,
+		QRCode: qrCode,
+	})
+}
+
+// VerifyMFA verifies and enables MFA
+func (h *AuthHandler) VerifyMFA(c *gin.Context) {
+	var req VerifyMFARequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.Error(errors.NewValidationError("Invalid request body", err.Error()))
+		return
+	}
+
+	userID, exists := c.Get("userID")
+	if !exists {
+		c.Error(errors.NewUnauthorizedError("Unauthorized"))
+		return
+	}
+
+	var user models.User
+	if err := h.DB.First(&user, userID).Error; err != nil {
+		c.Error(errors.NewUnauthorizedError("User not found"))
+		return
+	}
+
+	if !user.VerifyTOTP(req.Code) {
+		c.Error(errors.NewUnauthorizedError("Invalid TOTP code"))
+		return
+	}
+
+	if err := user.EnableMFA(h.DB); err != nil {
+		c.Error(errors.NewInternalError("Failed to enable MFA", err))
+		return
+	}
+
+	logger.Log.WithFields(logrus.Fields{
+		"user_id":  user.ID,
+		"endpoint": "/auth/mfa/verify",
+	}).Info("MFA enabled")
+
+	c.JSON(http.StatusOK, gin.H{
+		"message": "MFA enabled successfully",
+	})
+}
+
+// DisableMFA disables MFA for the user
+func (h *AuthHandler) DisableMFA(c *gin.Context) {
+	var req LoginRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.Error(errors.NewValidationError("Invalid request body", err.Error()))
+		return
+	}
+
+	userID, exists := c.Get("userID")
+	if !exists {
+		c.Error(errors.NewUnauthorizedError("Unauthorized"))
+		return
+	}
+
+	var user models.User
+	if err := h.DB.First(&user, userID).Error; err != nil {
+		c.Error(errors.NewUnauthorizedError("User not found"))
+		return
+	}
+
+	if !models.ComparePassword(user.PasswordHash, req.Password) {
+		c.Error(errors.NewUnauthorizedError("Invalid password"))
+		return
+	}
+
+	if err := user.DisableMFA(h.DB); err != nil {
+		c.Error(errors.NewInternalError("Failed to disable MFA", err))
+		return
+	}
+
+	logger.Log.WithFields(logrus.Fields{
+		"user_id":  user.ID,
+		"endpoint": "/auth/mfa/disable",
+	}).Info("MFA disabled")
+
+	c.JSON(http.StatusOK, gin.H{
+		"message": "MFA disabled successfully",
 	})
 }
 

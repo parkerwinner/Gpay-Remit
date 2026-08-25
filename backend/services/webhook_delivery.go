@@ -11,6 +11,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"syscall"
@@ -55,6 +56,20 @@ func NewWebhookDeliveryService(db *gorm.DB) *WebhookDeliveryService {
 	}
 }
 
+// normalizeAmounts converts numeric amount fields to strings to preserve precision
+func normalizeAmounts(data map[string]interface{}) {
+	for key, value := range data {
+		switch v := value.(type) {
+		case float64:
+			if key == "amount" || key == "fee" || key == "total" || strings.Contains(key, "amount") || strings.Contains(key, "fee") {
+				data[key] = strconv.FormatFloat(v, 'f', -1, 64)
+			}
+		case map[string]interface{}:
+			normalizeAmounts(v)
+		}
+	}
+}
+
 // TriggerWebhook triggers webhooks for a specific event
 func (s *WebhookDeliveryService) TriggerWebhook(event string, data map[string]interface{}) error {
 	// Find all active webhooks subscribed to this event
@@ -62,6 +77,9 @@ func (s *WebhookDeliveryService) TriggerWebhook(event string, data map[string]in
 	if err := s.db.Where("is_active = ?", true).Find(&webhooks).Error; err != nil {
 		return fmt.Errorf("failed to fetch webhooks: %w", err)
 	}
+
+	// Normalize amounts to strings to preserve precision
+	normalizeAmounts(data)
 
 	for _, webhook := range webhooks {
 		// Check if webhook is subscribed to this event
