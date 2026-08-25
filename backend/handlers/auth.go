@@ -292,14 +292,15 @@ func (h *AuthHandler) ForgotPassword(c *gin.Context) {
 		return
 	}
 
-	// Send password reset email
-	if err := h.EmailService.SendPasswordResetEmail(&user, token); err != nil {
-		logger.Log.WithFields(logrus.Fields{
-			"user_id":  user.ID,
-			"endpoint": "/auth/forgot-password",
-		}).Error("Failed to send password reset email")
-		// Don't fail the request if email fails - token is still valid
-	}
+	// Send password reset email asynchronously
+	go func() {
+		if err := h.EmailService.SendPasswordResetEmail(&user, token); err != nil {
+			logger.Log.WithFields(logrus.Fields{
+				"user_id":  user.ID,
+				"endpoint": "/auth/forgot-password",
+			}).Error("Failed to send password reset email")
+		}
+	}()
 
 	logger.Log.WithFields(logrus.Fields{
 		"user_id":  user.ID,
