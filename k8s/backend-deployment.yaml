@@ -1,0 +1,42 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gpay-remit-backend
+  labels:
+    app: gpay-remit-backend
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: gpay-remit-backend
+  template:
+    metadata:
+      labels:
+        app: gpay-remit-backend
+    spec:
+      containers:
+        - name: backend
+          image: gpay-remit-backend:latest
+          ports:
+            - containerPort: 8080
+          envFrom:
+            - secretRef:
+                name: gpay-remit-secrets
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: gpay-remit-backend
+spec:
+  selector:
+    app: gpay-remit-backend
+  ports:
+    - port: 8080
+      targetPort: 8080
