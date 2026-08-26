@@ -59,6 +59,12 @@ type Config struct {
 
 	// Exchange rate oracle/pricing provider
 	ExchangeRateAPIURL string
+
+	// Sandbox mode — when true the backend uses testnet defaults,
+	// reduced fee rates, and relaxed validation suitable for
+	// development and integration testing. Controlled by the
+	// SANDBOX_MODE environment variable.
+	SandboxMode bool
 }
 
 func LoadConfig() (*Config, error) {
@@ -92,21 +98,59 @@ func LoadConfig() (*Config, error) {
 		return nil, fmt.Errorf("JWT_REFRESH_SECRET must be at least 32 characters long")
 	}
 
+	sandbox := getEnvOrDefault("SANDBOX_MODE", "false") == "true"
+
+	// When sandbox mode is active, apply testnet-friendly defaults that
+	// differ from production. Individual env vars still take precedence
+	// so developers can override any single value.
+	stellarNetwork := getEnvOrDefault("STELLAR_NETWORK", "testnet")
+	horizonURL := getEnvOrDefault("HORIZON_URL", "https://horizon-testnet.stellar.org")
+	networkPassphrase := getEnvOrDefault("NETWORK_PASSPHRASE", "Test SDF Network ; September 2015")
+	platformFeeBps := getEnvAsInt("PLATFORM_FEE_BPS", 50)
+	forexFeeBps := getEnvAsInt("FOREX_FEE_BPS", 25)
+	complianceFeeBps := getEnvAsInt("COMPLIANCE_FEE_BPS", 10)
+	networkFeeBps := getEnvAsInt("NETWORK_FEE_BPS", 15)
+
+	if sandbox {
+		if !isEnvSet("STELLAR_NETWORK") {
+			stellarNetwork = "testnet"
+		}
+		if !isEnvSet("HORIZON_URL") {
+			horizonURL = "https://horizon-testnet.stellar.org"
+		}
+		if !isEnvSet("NETWORK_PASSPHRASE") {
+			networkPassphrase = "Test SDF Network ; September 2015"
+		}
+		// Reduced fee rates for sandbox — lower barrier for testing
+		if !isEnvSet("PLATFORM_FEE_BPS") {
+			platformFeeBps = 10
+		}
+		if !isEnvSet("FOREX_FEE_BPS") {
+			forexFeeBps = 5
+		}
+		if !isEnvSet("COMPLIANCE_FEE_BPS") {
+			complianceFeeBps = 0
+		}
+		if !isEnvSet("NETWORK_FEE_BPS") {
+			networkFeeBps = 0
+		}
+	}
+
 	return &Config{
 		Port:              os.Getenv("PORT"),
 		DatabaseURL:       os.Getenv("DATABASE_URL"),
-		StellarNetwork:    getEnvOrDefault("STELLAR_NETWORK", "testnet"),
-		HorizonURL:        getEnvOrDefault("HORIZON_URL", "https://horizon-testnet.stellar.org"),
+		StellarNetwork:    stellarNetwork,
+		HorizonURL:        horizonURL,
 		ContractID:        os.Getenv("CONTRACT_ID"),
 		EscrowContractID:  os.Getenv("ESCROW_CONTRACT_ID"),
-		NetworkPassphrase: getEnvOrDefault("NETWORK_PASSPHRASE", "Test SDF Network ; September 2015"),
+		NetworkPassphrase: networkPassphrase,
 		JWTSecret:         jwtSecret,
 		JWTRefreshSecret:  jwtRefreshSecret,
 
-		PlatformFeeBps:   getEnvAsInt("PLATFORM_FEE_BPS", 50),
-		ForexFeeBps:      getEnvAsInt("FOREX_FEE_BPS", 25),
-		ComplianceFeeBps: getEnvAsInt("COMPLIANCE_FEE_BPS", 10),
-		NetworkFeeBps:    getEnvAsInt("NETWORK_FEE_BPS", 15),
+		PlatformFeeBps:   platformFeeBps,
+		ForexFeeBps:      forexFeeBps,
+		ComplianceFeeBps: complianceFeeBps,
+		NetworkFeeBps:    networkFeeBps,
 		MinFee:           getEnvAsFloat("MIN_FEE", 0),
 		MaxFee:           getEnvAsFloat("MAX_FEE", 0),
 
@@ -126,6 +170,8 @@ func LoadConfig() (*Config, error) {
 		RedisDB:       getEnvAsInt("REDIS_DB", 0),
 
 		ExchangeRateAPIURL: getEnvOrDefault("EXCHANGE_RATE_API_URL", "https://open.er-api.com/v6/latest"),
+
+		SandboxMode: sandbox,
 	}, nil
 }
 
@@ -214,4 +260,27 @@ func getEnvAsFloat(key string, defaultValue float64) float64 {
 	var value float64
 	fmt.Sscanf(valueStr, "%f", &value)
 	return value
+}
+
+// isEnvSet returns true when the given environment variable is explicitly set
+// (even to an empty string). This distinguishes "not set" from "set to ''".
+func isEnvSet(key string) bool {
+	_, ok := os.LookupEnv(key)
+	return ok
+}
+
+// ResetSandbox reverts a Config instance to sandbox defaults in-place. This is
+// useful for tests or runtime switches that need to restore sandbox-friendly
+// values after a temporary override.
+func (c *Config) ResetSandbox() {
+	c.SandboxMode = true
+	c.StellarNetwork = "testnet"
+	c.HorizonURL = "https://horizon-testnet.stellar.org"
+	c.NetworkPassphrase = "Test SDF Network ; September 2015"
+	c.PlatformFeeBps = 10
+	c.ForexFeeBps = 5
+	c.ComplianceFeeBps = 0
+	c.NetworkFeeBps = 0
+	c.MinFee = 0
+	c.MaxFee = 0
 }
