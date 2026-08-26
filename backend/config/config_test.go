@@ -5,7 +5,24 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	gormlogger "gorm.io/gorm/logger"
 )
+
+func TestGormLogLevel_LogsQueriesOutsideProduction(t *testing.T) {
+	assert.Equal(t, gormlogger.Info, gormLogLevel("development"))
+	assert.Equal(t, gormlogger.Info, gormLogLevel(""))
+	assert.Equal(t, gormlogger.Info, gormLogLevel("staging"))
+}
+
+func TestGormLogLevel_OnlyLogsErrorsInProduction(t *testing.T) {
+	assert.Equal(t, gormlogger.Error, gormLogLevel("production"))
+	assert.Equal(t, gormlogger.Error, gormLogLevel("PRODUCTION"))
+}
+
+func TestNewGormLogger_ReturnsUsableLogger(t *testing.T) {
+	assert.NotNil(t, newGormLogger("development"))
+	assert.NotNil(t, newGormLogger("production"))
+}
 
 func clearJWTEnv(t *testing.T) {
 	t.Helper()
