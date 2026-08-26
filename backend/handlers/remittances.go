@@ -220,23 +220,28 @@ func (h *RemittanceHandler) CreateRemittance(c *gin.Context) {
 		Notes:            req.Notes,
 	}
 
-	// DB Save
-	if err := h.db.Create(&payment).Error; err != nil {
-		c.Error(errors.NewInternalError("Failed to create remittance record", err))
-		return
-	}
+	var xdr string
+	err := h.db.Transaction(func(tx *gorm.DB) error {
+		// DB Save
+		if err := tx.Create(&payment).Error; err != nil {
+			return err
+		}
 
-	// Stellar Integration: Build escrow transaction envelope
-	xdr, err := h.stellarClient.BuildEscrowTx(
-		ctx,
-		req.SenderAccount,
-		req.RecipientAccount,
-		req.AssetCode,
-		req.AssetIssuer,
-		fmt.Sprintf("%.7f", req.Amount),
-	)
+		// Stellar Integration: Build escrow transaction envelope
+		var stellarErr error
+		xdr, stellarErr = h.stellarClient.BuildEscrowTx(
+			ctx,
+			req.SenderAccount,
+			req.RecipientAccount,
+			req.AssetCode,
+			req.AssetIssuer,
+			fmt.Sprintf("%.7f", req.Amount),
+		)
+		return stellarErr
+	})
+
 	if err != nil {
-		c.Error(errors.NewInternalError("Failed to build Stellar transaction", err))
+		c.Error(errors.NewInternalError("Failed to create remittance or build transaction", err))
 		return
 	}
 

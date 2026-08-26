@@ -321,3 +321,40 @@ func generateSecret(length int) (string, error) {
 	}
 	return hex.EncodeToString(bytes), nil
 }
+
+type VerifySignatureRequest struct {
+	WebhookID uint   `json:"webhook_id" binding:"required"`
+	Payload   string `json:"payload" binding:"required"`
+	Signature string `json:"signature" binding:"required"`
+}
+
+// VerifyWebhookSignature allows webhook receivers to test their signature verification
+func (h *WebhookHandler) VerifyWebhookSignature(c *gin.Context) {
+	userID, exists := c.Get("userID")
+	if !exists {
+		c.Error(errors.NewUnauthorizedError("Unauthorized"))
+		return
+	}
+
+	var req VerifySignatureRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.Error(errors.NewValidationError("Invalid request body", err.Error()))
+		return
+	}
+
+	var webhook models.Webhook
+	if err := h.db.Where("id = ? AND user_id = ?", req.WebhookID, userID).First(&webhook).Error; err != nil {
+		if err == gorm.ErrRecordNotFound {
+			c.Error(errors.NewNotFoundError("Webhook not found"))
+		} else {
+			c.Error(errors.NewInternalError("Failed to fetch webhook", err))
+		}
+		return
+	}
+
+	isValid := services.VerifySignature(webhook.Secret, req.Payload, req.Signature)
+
+	c.JSON(http.StatusOK, gin.H{
+		"valid": isValid,
+	})
+}
