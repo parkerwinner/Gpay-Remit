@@ -308,7 +308,7 @@ func (h *WebhookHandler) RetryWebhookDelivery(c *gin.Context) {
 	}
 
 	// Trigger retry
-	go h.deliveryService.DeliverWebhook(&webhook, &delivery)
+	go h.deliveryService.DeliverWebhook(&webhook, &delivery, c.GetString("requestID"))
 
 	c.JSON(http.StatusOK, gin.H{"message": "Webhook delivery retry initiated"})
 }
