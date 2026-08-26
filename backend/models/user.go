@@ -11,7 +11,6 @@ import (
 	"time"
 	"unicode"
 
-	"github.com/pquerna/otp"
 	"github.com/pquerna/otp/totp"
 	"golang.org/x/crypto/bcrypt"
 	"gorm.io/gorm"

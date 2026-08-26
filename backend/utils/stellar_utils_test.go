@@ -63,13 +63,13 @@ func TestSignTx(t *testing.T) {
 	})
 
 	t.Run("Invalid secret key", func(t *testing.T) {
-		signedXDR, err := SignTx(envelopeXDR, "invalid_key", network.TestNetworkPassphrase)
+		signedXDR, err := SignTx(context.Background(), envelopeXDR, "invalid_key", network.TestNetworkPassphrase)
 		assert.Error(t, err)
 		assert.Equal(t, envelopeXDR, signedXDR) // Should return original XDR on error
 	})
 
 	t.Run("Invalid XDR", func(t *testing.T) {
-		signedXDR, err := SignTx("invalid_xdr", secret, network.TestNetworkPassphrase)
+		signedXDR, err := SignTx(context.Background(), "invalid_xdr", secret, network.TestNetworkPassphrase)
 		assert.Error(t, err)
 		assert.Equal(t, "invalid_xdr", signedXDR)
 	})

@@ -1,0 +1,36 @@
+name: OpenAPI Spec Validation
+
+on:
+  push:
+    branches: [ main, dev ]
+    paths:
+      - 'docs/api/openapi.yaml'
+      - 'backend/openapi_validation_test.go'
+      - 'backend/main.go'
+      - 'backend/handlers/**'
+  pull_request:
+    branches: [ main, dev ]
+    paths:
+      - 'docs/api/openapi.yaml'
+      - 'backend/openapi_validation_test.go'
+      - 'backend/main.go'
+      - 'backend/handlers/**'
+
+jobs:
+  validate-openapi:
+    name: Validate OpenAPI Specification
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+          cache-dependency-path: backend/go.sum
+
+      - name: Validate OpenAPI Specification
+        run: |
+          ./scripts/validate_openapi.sh

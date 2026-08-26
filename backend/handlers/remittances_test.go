@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"bytes"
 	"encoding/json"
 	"net/http"
@@ -11,6 +12,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/yourusername/gpay-remit/config"
+	"github.com/yourusername/gpay-remit/middleware"
 	"github.com/yourusername/gpay-remit/models"
 	"github.com/yourusername/gpay-remit/services"
 	"github.com/stellar/go/txnbuild"
@@ -32,26 +34,40 @@ type MockStellarClient struct {
 	SignTxFunc          func(envelopeXDR string, secretKey string) (string, error)
 }
 
-func (m *MockStellarClient) ValidateAccount(accountID string) error {
-	return m.ValidateAccountFunc(accountID)
+func (m *MockStellarClient) ValidateAccount(ctx context.Context, accountID string) error {
+	if m.ValidateAccountFunc != nil {
+		return m.ValidateAccountFunc(accountID)
+	}
+	return nil
 }
 
-func (m *MockStellarClient) BuildEscrowTx(sender, recipient, assetCode, issuer, amount string) (string, error) {
-	return m.BuildEscrowTxFunc(sender, recipient, assetCode, issuer, amount)
+func (m *MockStellarClient) BuildEscrowTx(ctx context.Context, sender, recipient, assetCode, issuer, amount string) (string, error) {
+	if m.BuildEscrowTxFunc != nil {
+		return m.BuildEscrowTxFunc(sender, recipient, assetCode, issuer, amount)
+	}
+	return "", nil
 }
 
-func (m *MockStellarClient) SubmitPayment(sourceSecret, destination, assetCode, issuer, amount string) (string, error) {
-	return m.SubmitPaymentFunc(sourceSecret, destination, assetCode, issuer, amount)
+func (m *MockStellarClient) SubmitPayment(ctx context.Context, sourceSecret, destination, assetCode, issuer, amount string) (string, error) {
+	if m.SubmitPaymentFunc != nil {
+		return m.SubmitPaymentFunc(sourceSecret, destination, assetCode, issuer, amount)
+	}
+	return "", nil
 }
 
-func (m *MockStellarClient) BuildPaymentTx(sourceAccount txnbuild.Account, destination string, assetCode string, issuer string, amount string) (*txnbuild.Transaction, error) {
-	return m.BuildPaymentTxFunc(sourceAccount, destination, assetCode, issuer, amount)
+func (m *MockStellarClient) BuildPaymentTx(ctx context.Context, sourceAccount txnbuild.Account, destination string, assetCode string, issuer string, amount string) (*txnbuild.Transaction, error) {
+	if m.BuildPaymentTxFunc != nil {
+		return m.BuildPaymentTxFunc(sourceAccount, destination, assetCode, issuer, amount)
+	}
+	return nil, nil
 }
 
-func (m *MockStellarClient) SignTx(envelopeXDR string, secretKey string) (string, error) {
-	return m.SignTxFunc(envelopeXDR, secretKey)
+func (m *MockStellarClient) SignTx(ctx context.Context, envelopeXDR string, secretKey string) (string, error) {
+	if m.SignTxFunc != nil {
+		return m.SignTxFunc(envelopeXDR, secretKey)
+	}
+	return "", nil
 }
-
 
 func TestCreateRemittance(t *testing.T) {
 	gin.SetMode(gin.TestMode)
@@ -69,6 +85,7 @@ func TestCreateRemittance(t *testing.T) {
 	}
 
 	router := gin.Default()
+	router.Use(middleware.ErrorHandler())
 	router.Use(func(c *gin.Context) {
 		c.Set("userID", uint(1))
 		c.Next()
@@ -155,6 +172,7 @@ func TestCreateRemittance(t *testing.T) {
 			},
 		}
 		failRouter := gin.New()
+		failRouter.Use(middleware.ErrorHandler())
 		failRouter.Use(func(c *gin.Context) {
 			c.Set("userID", uint(1))
 			c.Next()
@@ -218,6 +236,7 @@ func TestPaginationOverflow(t *testing.T) {
 	}
 
 	router := gin.Default()
+	router.Use(middleware.ErrorHandler())
 	router.GET("/remittances", handler.ListRemittances)
 
 	t.Run("Valid MaxPage", func(t *testing.T) {
@@ -283,6 +302,7 @@ func TestCursorPagination(t *testing.T) {
 	}
 
 	router := gin.Default()
+	router.Use(middleware.ErrorHandler())
 	router.GET("/remittances", handler.ListRemittances)
 
 	t.Run("Valid Cursor", func(t *testing.T) {
