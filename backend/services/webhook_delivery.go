@@ -72,6 +72,11 @@ func normalizeAmounts(data map[string]interface{}) {
 
 // TriggerWebhook triggers webhooks for a specific event
 func (s *WebhookDeliveryService) TriggerWebhook(event string, data map[string]interface{}) error {
+	return s.TriggerWebhookWithContext(event, data, "")
+}
+
+// TriggerWebhookWithContext triggers webhooks with a request ID for correlation
+func (s *WebhookDeliveryService) TriggerWebhookWithContext(event string, data map[string]interface{}, requestID string) error {
 	// Find all active webhooks subscribed to this event
 	var webhooks []models.Webhook
 	if err := s.db.Where("is_active = ?", true).Find(&webhooks).Error; err != nil {
@@ -123,7 +128,7 @@ func (s *WebhookDeliveryService) TriggerWebhook(event string, data map[string]in
 		}
 
 		// Deliver asynchronously
-		go s.DeliverWebhook(&webhook, &delivery)
+		go s.DeliverWebhook(&webhook, &delivery, requestID)
 	}
 
 	return nil
@@ -203,11 +208,11 @@ func getRetryPolicy(errorType ErrorClassification) (maxRetries int, baseDelay ti
 	}
 }
 // DeliverWebhook delivers a webhook with per-error-type retry logic (#197)
-func (s *WebhookDeliveryService) DeliverWebhook(webhook *models.Webhook, delivery *models.WebhookDelivery) {
+func (s *WebhookDeliveryService) DeliverWebhook(webhook *models.Webhook, delivery *models.WebhookDelivery, requestID string) {
 	for {
 		delivery.AttemptCount++
 		
-		success, responseCode, responseBody, errMsg, err := s.sendWebhookRequest(webhook, delivery.Payload)
+		success, responseCode, responseBody, errMsg, err := s.sendWebhookRequest(webhook, delivery.Payload, requestID)
 		
 		delivery.ResponseCode = responseCode
 		delivery.ResponseBody = responseBody
@@ -277,7 +282,7 @@ func (s *WebhookDeliveryService) DeliverWebhook(webhook *models.Webhook, deliver
 }
 
 // sendWebhookRequest sends the HTTP request to the webhook URL
-func (s *WebhookDeliveryService) sendWebhookRequest(webhook *models.Webhook, payload string) (success bool, responseCode int, responseBody string, errorMsg string, err error) {
+func (s *WebhookDeliveryService) sendWebhookRequest(webhook *models.Webhook, payload string, requestID string) (success bool, responseCode int, responseBody string, errorMsg string, err error) {
 	// Create signature
 	signature := s.generateSignature(webhook.Secret, payload)
 
@@ -290,6 +295,9 @@ func (s *WebhookDeliveryService) sendWebhookRequest(webhook *models.Webhook, pay
 	req.Header.Set("X-Webhook-Signature", signature)
 	req.Header.Set("X-Webhook-ID", fmt.Sprintf("%d", webhook.ID))
 	req.Header.Set("User-Agent", "GPay-Remit-Webhook/1.0")
+	if requestID != "" {
+		req.Header.Set("X-Request-ID", requestID)
+	}
 
 	resp, err := s.httpClient.Do(req)
 	if err != nil {
@@ -354,7 +362,7 @@ func (s *WebhookDeliveryService) RetryFailedDeliveries() error {
 			continue
 		}
 
-		go s.DeliverWebhook(&webhook, &delivery)
+		go s.DeliverWebhook(&webhook, &delivery, "")
 	}
 
 	return nil

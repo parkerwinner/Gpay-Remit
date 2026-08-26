@@ -353,9 +353,12 @@ func (h *RemittanceHandler) GetRemittance(c *gin.Context) {
 type ListRemittancesResponse struct {
 	Data       []models.Payment `json:"data"`
 	Page       int              `json:"page,omitempty"`       // Deprecated: use cursor instead
-	PageSize   int              `json:"page_size,omitempty"`  // Deprecated: use limit instead  
+	PageSize   int              `json:"page_size,omitempty"`  // Deprecated: use limit instead
 	NextCursor string           `json:"next_cursor,omitempty"`
 	HasMore    bool             `json:"has_more"`
+	TotalCount *int64           `json:"total_count,omitempty"`
+	HasNext    *bool            `json:"has_next,omitempty"`
+	HasPrevious *bool           `json:"has_previous,omitempty"`
 }
 
 func (h *RemittanceHandler) ListRemittances(c *gin.Context) {
@@ -417,15 +420,35 @@ func (h *RemittanceHandler) ListRemittances(c *gin.Context) {
 	}
 
 	// Legacy offset-based pagination for backward compatibility
+	page := 1
+	pageSize := 20
+	fmt.Sscanf(c.Query("page"), "%d", &page)
+	fmt.Sscanf(c.Query("page_size"), "%d", &pageSize)
+	if page <= 0 {
+		page = 1
+	}
+	if pageSize <= 0 || pageSize > 100 {
+		pageSize = 20
+	}
+
 	// Cache key based on query params
-	cacheKey := fmt.Sprintf("payments:list:%s:%s", c.Query("page"), c.Query("page_size"))
-	
+	cacheKey := fmt.Sprintf("payments:list:%d:%d", page, pageSize)
+
 	// Try cache
 	if found, _ := utils.GetCached(cacheKey, &payments); found {
 		c.Header("X-Cache", "HIT")
-		c.JSON(http.StatusOK, payments)
+		c.JSON(http.StatusOK, ListRemittancesResponse{
+			Data:     payments,
+			Page:     page,
+			PageSize: pageSize,
+			HasMore:  len(payments) == pageSize,
+		})
 		return
 	}
+
+	// Count total records for metadata
+	var totalCount int64
+	h.db.Model(&models.Payment{}).Count(&totalCount)
 
 	// DB query with pagination - check for pagination error from MaxPage validation
 	if err := h.db.Scopes(Paginate(c)).Order("created_at DESC").Find(&payments).Error; err != nil {
@@ -442,8 +465,19 @@ func (h *RemittanceHandler) ListRemittances(c *gin.Context) {
 	// Set cache for 30 seconds
 	utils.SetCached(cacheKey, payments, 30*time.Second)
 
+	hasNext := int64(page*pageSize) < totalCount
+	hasPrevious := page > 1
+
 	c.Header("X-Cache", "MISS")
-	c.JSON(http.StatusOK, payments)
+	c.JSON(http.StatusOK, ListRemittancesResponse{
+		Data:        payments,
+		Page:        page,
+		PageSize:    pageSize,
+		HasMore:     len(payments) == pageSize,
+		TotalCount:  &totalCount,
+		HasNext:     &hasNext,
+		HasPrevious: &hasPrevious,
+	})
 }
 
 func (h *RemittanceHandler) CompleteRemittance(c *gin.Context) {
@@ -558,7 +592,6 @@ func (h *RemittanceHandler) ListInvoices(c *gin.Context) {
 	}
 
 	query := h.db.Model(&models.Invoice{}).
-		Preload("Payment").
 		Where("issuer_id = ? OR recipient_id = ?", userID, userID)
 
 	if status := c.Query("status"); status != "" {
@@ -586,6 +619,28 @@ func (h *RemittanceHandler) ListInvoices(c *gin.Context) {
 		Find(&invoices).Error; err != nil {
 		c.Error(errors.NewInternalError("Failed to fetch invoices", err))
 		return
+	}
+
+	// Batch-load associated payments in a single query (fixes N+1)
+	if len(invoices) > 0 {
+		paymentIDs := make([]uint, len(invoices))
+		for i, inv := range invoices {
+			paymentIDs[i] = inv.PaymentID
+		}
+		var payments []models.Payment
+		if err := h.db.Where("id IN ?", paymentIDs).Find(&payments).Error; err != nil {
+			c.Error(errors.NewInternalError("Failed to fetch payments for invoices", err))
+			return
+		}
+		paymentMap := make(map[uint]models.Payment, len(payments))
+		for _, p := range payments {
+			paymentMap[p.ID] = p
+		}
+		for i := range invoices {
+			if p, ok := paymentMap[invoices[i].PaymentID]; ok {
+				invoices[i].Payment = p
+			}
+		}
 	}
 
 	c.JSON(http.StatusOK, ListInvoicesResponse{

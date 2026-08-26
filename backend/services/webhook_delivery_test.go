@@ -174,7 +174,7 @@ func TestWebhookDeliveryErrorHandling(t *testing.T) {
 		db.Create(delivery)
 
 		// This would normally run in a goroutine, but we'll call it directly for testing
-		service.DeliverWebhook(webhook, delivery)
+		service.DeliverWebhook(webhook, delivery, "")
 
 		// Check that delivery was marked as successful
 		db.First(delivery)
@@ -208,7 +208,7 @@ func TestWebhookDeliveryErrorHandling(t *testing.T) {
 		}
 		db.Create(delivery)
 
-		service.DeliverWebhook(webhook, delivery)
+		service.DeliverWebhook(webhook, delivery, "")
 
 		// Check that delivery was marked as permanently failed
 		db.First(delivery)
