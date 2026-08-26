@@ -13,6 +13,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/yourusername/gpay-remit/config"
+	"github.com/yourusername/gpay-remit/graphql"
 	"github.com/yourusername/gpay-remit/handlers"
 	"github.com/yourusername/gpay-remit/logger"
 	"github.com/yourusername/gpay-remit/middleware"
@@ -74,9 +75,16 @@ func main() {
 	router.GET("/api/docs", handlers.DocsUI)
 	router.GET("/api/docs/openapi.yaml", handlers.DocsSpec)
 
+		gqlServer := graphql.NewServer(db, cfg)
+	router.GET("/playground", gqlServer.PlaygroundHandler())
+	router.GET("/graphql/playground", gqlServer.PlaygroundHandler())
+	router.POST("/graphql", gqlServer.QueryHandler())
+	router.GET("/graphql", gqlServer.PlaygroundHandler())
+
 	api := router.Group("/api/v1")
 	{
-		authHandler := handlers.NewAuthHandler(db, cfg)
+		emailService := services.NewEmailService(cfg.SMTPHost, cfg.SMTPPort, cfg.SMTPUser, cfg.SMTPPassword, cfg.SMTPFrom, cfg.EmailEnabled)
+		authHandler := handlers.NewAuthHandler(db, cfg, emailService)
 		api.POST("/auth/register", authHandler.Register)
 		api.POST("/auth/login", authHandler.Login)
 		api.POST("/auth/refresh", authHandler.Refresh)
@@ -136,18 +144,21 @@ func main() {
 			protected.GET("/webhooks/:id/deliveries", webhookHandler.GetWebhookDeliveries)
 			protected.POST("/webhooks/deliveries/:delivery_id/retry", webhookHandler.RetryWebhookDelivery)
 
+			
 			analyticsHandler := handlers.NewAnalyticsHandler(db)
 			protected.GET("/analytics/volume", middleware.RequireRole("admin"), analyticsHandler.GetVolumeMetrics)
 			protected.GET("/analytics/fees", middleware.RequireRole("admin"), analyticsHandler.GetFeeMetrics)
 			protected.GET("/analytics/success-rate", middleware.RequireRole("admin"), analyticsHandler.GetSuccessRate)
 			protected.GET("/analytics/top-corridors", middleware.RequireRole("admin"), analyticsHandler.GetTopCorridors)
+
 		}
 	}
 
 	api2 := router.Group("/api/v2")
 	api2.Use(middleware.RequireVersion("v2"))
 	{
-		authHandler := handlers.NewAuthHandler(db, cfg)
+		emailService := services.NewEmailService(cfg.SMTPHost, cfg.SMTPPort, cfg.SMTPUser, cfg.SMTPPassword, cfg.SMTPFrom, cfg.EmailEnabled)
+		authHandler := handlers.NewAuthHandler(db, cfg, emailService)
 		api2.POST("/auth/register", authHandler.Register)
 		api2.POST("/auth/login", authHandler.Login)
 		api2.POST("/auth/refresh", authHandler.Refresh)
@@ -205,11 +216,13 @@ func main() {
 			protected.GET("/webhooks/:id/deliveries", webhookHandler.GetWebhookDeliveries)
 			protected.POST("/webhooks/deliveries/:delivery_id/retry", webhookHandler.RetryWebhookDelivery)
 
+			
 			analyticsHandler := handlers.NewAnalyticsHandler(db)
 			protected.GET("/analytics/volume", middleware.RequireRole("admin"), analyticsHandler.GetVolumeMetrics)
 			protected.GET("/analytics/fees", middleware.RequireRole("admin"), analyticsHandler.GetFeeMetrics)
 			protected.GET("/analytics/success-rate", middleware.RequireRole("admin"), analyticsHandler.GetSuccessRate)
 			protected.GET("/analytics/top-corridors", middleware.RequireRole("admin"), analyticsHandler.GetTopCorridors)
+
 		}
 	}
 

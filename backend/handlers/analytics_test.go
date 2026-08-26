@@ -9,6 +9,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
+	"github.com/yourusername/gpay-remit/middleware"
 	"github.com/yourusername/gpay-remit/models"
 	"github.com/yourusername/gpay-remit/services"
 	"gorm.io/driver/sqlite"
@@ -116,6 +117,7 @@ func TestGetVolumeMetrics(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			router := gin.New()
+	router.Use(middleware.ErrorHandler())
 			router.GET("/analytics/volume", handler.GetVolumeMetrics)
 
 			req := httptest.NewRequest(http.MethodGet, "/analytics/volume"+tt.queryParams, nil)
@@ -138,6 +140,7 @@ func TestGetFeeMetrics(t *testing.T) {
 	handler := NewAnalyticsHandler(db)
 
 	router := gin.New()
+	router.Use(middleware.ErrorHandler())
 	router.GET("/analytics/fees", handler.GetFeeMetrics)
 
 	req := httptest.NewRequest(http.MethodGet, "/analytics/fees?period=daily", nil)
@@ -165,6 +168,7 @@ func TestGetSuccessRate(t *testing.T) {
 	handler := NewAnalyticsHandler(db)
 
 	router := gin.New()
+	router.Use(middleware.ErrorHandler())
 	router.GET("/analytics/success-rate", handler.GetSuccessRate)
 
 	req := httptest.NewRequest(http.MethodGet, "/analytics/success-rate?period=daily", nil)
@@ -234,6 +238,7 @@ func TestGetTopCorridors(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			router := gin.New()
+	router.Use(middleware.ErrorHandler())
 			router.GET("/analytics/top-corridors", handler.GetTopCorridors)
 
 			req := httptest.NewRequest(http.MethodGet, "/analytics/top-corridors"+tt.queryParams, nil)

@@ -39,6 +39,8 @@ tags:
     description: Transaction analytics (admin only)
   - name: Audit
     description: Audit log access (admin only)
+  - name: Contacts
+    description: Address book and recipient management
   - name: Health
     description: Service health and readiness probes
 
@@ -99,6 +101,72 @@ components:
           example: "eyJhbGciOiJIUzI1NiIs..."
         user:
           $ref: '#/components/schemas/User'
+
+    Contact:
+      type: object
+      properties:
+        id:
+          type: integer
+          example: 1
+        user_id:
+          type: integer
+          example: 42
+        nickname:
+          type: string
+          example: Alice Personal
+        stellar_address:
+          type: string
+          example: GBZC6YRFWINCGYH6FFIK3VY4KF3WZJQR7CD3S5Y4GVNIKU5RM3JY7YEX
+        currency:
+          type: string
+          example: USDC
+        email:
+          type: string
+          example: alice@example.com
+        notes:
+          type: string
+          example: Friend in London
+        verification_status:
+          type: string
+          enum: [pending, verified, failed]
+          example: verified
+        is_verified:
+          type: boolean
+          example: true
+
+    CreateContactRequest:
+      type: object
+      required: [nickname, stellar_address]
+      properties:
+        nickname:
+          type: string
+          example: Alice Personal
+        stellar_address:
+          type: string
+          example: GBZC6YRFWINCGYH6FFIK3VY4KF3WZJQR7CD3S5Y4GVNIKU5RM3JY7YEX
+        currency:
+          type: string
+          example: USDC
+        email:
+          type: string
+          example: alice@example.com
+        notes:
+          type: string
+          example: Friend in London
+
+    UpdateContactRequest:
+      type: object
+      properties:
+        nickname:
+          type: string
+        stellar_address:
+          type: string
+        currency:
+          type: string
+        email:
+          type: string
+        notes:
+          type: string
 
     User:
       type: object
@@ -893,6 +961,116 @@ paths:
         '403':
           description: Admin role required
 
+  /contacts:
+    get:
+      tags: [Contacts]
+      summary: List address book contacts
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: List of contacts
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Contact'
+    post:
+      tags: [Contacts]
+      summary: Create new contact in address book
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateContactRequest'
+      responses:
+        '201':
+          description: Contact created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Contact'
+
+  /contacts/{id}:
+    get:
+      tags: [Contacts]
+      summary: Get contact by ID
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Contact details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Contact'
+        '404':
+          description: Contact not found
+    put:
+      tags: [Contacts]
+      summary: Update contact
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateContactRequest'
+      responses:
+        '200':
+          description: Contact updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Contact'
+    delete:
+      tags: [Contacts]
+      summary: Delete contact
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Contact deleted
+
+  /contacts/{id}/verify:
+    post:
+      tags: [Contacts]
+      summary: Verify contact on Stellar network
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Contact verification result
+
   /transactions/export:
     get:
       tags: [Audit]
@@ -907,7 +1085,7 @@ paths:
               schema:
                 type: string
 
-/health:
+  /health:
     get:
       tags: [Health]
       summary: Full health check with dependency status

@@ -15,7 +15,7 @@ import (
 // production 5-minute/1-hour defaults.
 
 func TestRateLimiter_CleanupRemovesStaleEntries(t *testing.T) {
-	rl := newRateLimiter(&config.Config{}, 20*time.Millisecond, 30*time.Millisecond)
+	rl := newRateLimiter(&config.Config{}, 20*time.Millisecond, 60*time.Millisecond)
 	defer rl.Stop()
 
 	rl.IncrementAndCheck("stale-key", 10, time.Minute)
@@ -41,16 +41,16 @@ func TestRateLimiter_CleanupKeepsRecentlyAccessedEntries(t *testing.T) {
 }
 
 func TestRateLimiter_CleanupOnlyRemovesTheStaleEntry(t *testing.T) {
-	rl := newRateLimiter(&config.Config{}, 20*time.Millisecond, 30*time.Millisecond)
+	rl := newRateLimiter(&config.Config{}, 20*time.Millisecond, 60*time.Millisecond)
 	defer rl.Stop()
 
 	rl.IncrementAndCheck("will-go-stale", 10, time.Minute)
 
 	// Give "will-go-stale" time to become stale, then touch a second key
 	// right before the assertion so it's fresh.
-	time.Sleep(50 * time.Millisecond)
+	time.Sleep(70 * time.Millisecond)
 	rl.IncrementAndCheck("stays-fresh", 10, time.Minute)
-	time.Sleep(30 * time.Millisecond)
+	time.Sleep(20 * time.Millisecond)
 
 	assert.Nil(t, rl.GetLimit("will-go-stale"), "the genuinely stale key should be removed")
 	assert.NotNil(t, rl.GetLimit("stays-fresh"), "a key accessed just before the sweep must survive it")

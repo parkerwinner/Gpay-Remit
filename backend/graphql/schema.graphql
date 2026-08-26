@@ -1,0 +1,72 @@
+type User {
+    id: ID!
+    email: String!
+    name: String!
+    stellarAddress: String!
+    role: String!
+    country: String
+    isActive: Boolean!
+}
+
+type Contact {
+    id: ID!
+    userId: ID!
+    nickname: String!
+    stellarAddress: String!
+    currency: String!
+    email: String
+    notes: String
+    verificationStatus: String!
+    isVerified: Boolean!
+}
+
+type Payment {
+    id: ID!
+    senderId: ID!
+    senderAccount: String!
+    recipientId: ID!
+    recipientAccount: String!
+    amount: Float!
+    currency: String!
+    status: String!
+    txHash: String
+    fee: Float
+    createdAt: String!
+}
+
+type ExchangeRate {
+    base: String!
+    target: String!
+    rate: Float!
+    timestamp: String!
+}
+
+input CreateContactInput {
+    nickname: String!
+    stellarAddress: String!
+    currency: String
+    email: String
+    notes: String
+}
+
+input CreatePaymentInput {
+    senderAccount: String!
+    recipientAccount: String!
+    amount: Float!
+    currency: String!
+}
+
+type Query {
+    me: User
+    contacts: [Contact!]!
+    contact(id: ID!): Contact
+    payments(limit: Int, offset: Int): [Payment!]!
+    payment(id: ID!): Payment
+    exchangeRate(base: String!, target: String!): ExchangeRate
+}
+
+type Mutation {
+    createContact(input: CreateContactInput!): Contact!
+    deleteContact(id: ID!): Boolean!
+    createPayment(input: CreatePaymentInput!): Payment!
+}

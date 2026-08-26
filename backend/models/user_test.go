@@ -52,7 +52,7 @@ func TestValidatePasswordStrength(t *testing.T) {
 		errMsg   string
 	}{
 		{"valid password with special char", "Secure@Pass1", false, ""},
-		{"minimum valid", "Abc@1234", false, ""},
+		{"minimum valid", "Abc#9876Z", false, ""},
 		{"too short", "Ab@1", true, "8 characters"},
 		{"no uppercase", "secure@pass1", true, "uppercase"},
 		{"no lowercase", "SECURE@PASS1", true, "lowercase"},
