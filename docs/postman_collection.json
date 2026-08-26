@@ -1,0 +1,295 @@
+{
+  "info": {
+    "name": "Gpay-Remit API v2",
+    "description": "Complete API collection for the Gpay-Remit cross-border payment platform.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": {
+    "type": "bearer",
+    "bearer": [
+      { "key": "token", "value": "{{auth_token}}", "type": "string" }
+    ]
+  },
+  "variable": [
+    { "key": "base_url", "value": "http://localhost:8080" },
+    { "key": "auth_token", "value": "" }
+  ],
+  "item": [
+    {
+      "name": "Health",
+      "item": [
+        {
+          "name": "Health Check",
+          "request": { "method": "GET", "url": { "raw": "{{base_url}}/health", "host": ["{{base_url}}"], "path": ["health"] } }
+        },
+        {
+          "name": "Readiness",
+          "request": { "method": "GET", "url": { "raw": "{{base_url}}/health/ready", "host": ["{{base_url}}"], "path": ["health", "ready"] } }
+        },
+        {
+          "name": "Liveness",
+          "request": { "method": "GET", "url": { "raw": "{{base_url}}/health/live", "host": ["{{base_url}}"], "path": ["health", "live"] } }
+        }
+      ]
+    },
+    {
+      "name": "Auth",
+      "item": [
+        {
+          "name": "Register",
+          "request": {
+            "method": "POST",
+            "url": { "raw": "{{base_url}}/api/v2/auth/register", "host": ["{{base_url}}"], "path": ["api", "v2", "auth", "register"] },
+            "body": { "mode": "raw", "raw": "{\n  \"email\": \"user@example.com\",\n  \"password\": \"securepassword\",\n  \"username\": \"johndoe\"\n}", "options": { "raw": { "language": "json" } } }
+          }
+        },
+        {
+          "name": "Login",
+          "event": [
+            {
+              "listen": "test",
+              "script": { "exec": ["var json = pm.response.json();", "if (json.token) { pm.collectionVariables.set('auth_token', json.token); }"] }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "url": { "raw": "{{base_url}}/api/v2/auth/login", "host": ["{{base_url}}"], "path": ["api", "v2", "auth", "login"] },
+            "body": { "mode": "raw", "raw": "{\n  \"email\": \"user@example.com\",\n  \"password\": \"securepassword\"\n}", "options": { "raw": { "language": "json" } } }
+          }
+        },
+        {
+          "name": "Refresh Token",
+          "request": {
+            "method": "POST",
+            "url": { "raw": "{{base_url}}/api/v2/auth/refresh", "host": ["{{base_url}}"], "path": ["api", "v2", "auth", "refresh"] }
+          }
+        },
+        {
+          "name": "Logout",
+          "request": {
+            "method": "POST",
+            "url": { "raw": "{{base_url}}/api/v2/auth/logout", "host": ["{{base_url}}"], "path": ["api", "v2", "auth", "logout"] }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Remittances",
+      "item": [
+        {
+          "name": "Create Remittance (Escrow)",
+          "request": {
+            "method": "POST",
+            "url": { "raw": "{{base_url}}/api/v2/remittances/create", "host": ["{{base_url}}"], "path": ["api", "v2", "remittances", "create"] },
+            "body": { "mode": "raw", "raw": "{\n  \"recipient_address\": \"G...\",\n  \"amount\": 100.00,\n  \"currency\": \"USDC\",\n  \"deadline\": \"2025-12-31T23:59:59Z\"\n}", "options": { "raw": { "language": "json" } } }
+          }
+        },
+        {
+          "name": "Send Remittance (Simple)",
+          "request": {
+            "method": "POST",
+            "url": { "raw": "{{base_url}}/api/v2/remittances", "host": ["{{base_url}}"], "path": ["api", "v2", "remittances"] },
+            "body": { "mode": "raw", "raw": "{\n  \"recipient_address\": \"G...\",\n  \"amount\": 50.00,\n  \"currency\": \"USDC\"\n}", "options": { "raw": { "language": "json" } } }
+          }
+        },
+        {
+          "name": "Get Remittance",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{base_url}}/api/v2/remittances/{{remittance_id}}", "host": ["{{base_url}}"], "path": ["api", "v2", "remittances", "{{remittance_id}}"] }
+          }
+        },
+        {
+          "name": "List Remittances",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{base_url}}/api/v2/remittances?page=1&limit=20", "host": ["{{base_url}}"], "path": ["api", "v2", "remittances"], "query": [{ "key": "page", "value": "1" }, { "key": "limit", "value": "20" }] }
+          }
+        },
+        {
+          "name": "Complete Remittance (Admin)",
+          "request": {
+            "method": "POST",
+            "url": { "raw": "{{base_url}}/api/v2/remittances/{{remittance_id}}/complete", "host": ["{{base_url}}"], "path": ["api", "v2", "remittances", "{{remittance_id}}", "complete"] }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Invoices",
+      "item": [
+        {
+          "name": "Create Invoice",
+          "request": {
+            "method": "POST",
+            "url": { "raw": "{{base_url}}/api/v2/invoices", "host": ["{{base_url}}"], "path": ["api", "v2", "invoices"] },
+            "body": { "mode": "raw", "raw": "{\n  \"amount\": 200.00,\n  \"currency\": \"USDC\",\n  \"due_date\": \"2025-06-30\",\n  \"description\": \"Invoice for services\"\n}", "options": { "raw": { "language": "json" } } }
+          }
+        },
+        {
+          "name": "List Invoices",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{base_url}}/api/v2/invoices?page=1&limit=20", "host": ["{{base_url}}"], "path": ["api", "v2", "invoices"], "query": [{ "key": "page", "value": "1" }, { "key": "limit", "value": "20" }] }
+          }
+        },
+        {
+          "name": "Get Invoice",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{base_url}}/api/v2/invoices/{{invoice_id}}", "host": ["{{base_url}}"], "path": ["api", "v2", "invoices", "{{invoice_id}}"] }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Fees",
+      "item": [
+        {
+          "name": "Calculate Fee",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{base_url}}/api/v2/fees/calculate?amount=100&currency=USDC", "host": ["{{base_url}}"], "path": ["api", "v2", "fees", "calculate"], "query": [{ "key": "amount", "value": "100" }, { "key": "currency", "value": "USDC" }] }
+          }
+        },
+        {
+          "name": "Get Exchange Rate",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{base_url}}/api/v2/exchange-rates?from=USDC&to=NGN", "host": ["{{base_url}}"], "path": ["api", "v2", "exchange-rates"], "query": [{ "key": "from", "value": "USDC" }, { "key": "to", "value": "NGN" }] }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Payment Requests",
+      "item": [
+        {
+          "name": "Create Payment Request",
+          "request": {
+            "method": "POST",
+            "url": { "raw": "{{base_url}}/api/v2/payment-requests", "host": ["{{base_url}}"], "path": ["api", "v2", "payment-requests"] },
+            "body": { "mode": "raw", "raw": "{\n  \"amount\": 75.00,\n  \"currency\": \"USDC\",\n  \"description\": \"Service payment\"\n}", "options": { "raw": { "language": "json" } } }
+          }
+        },
+        {
+          "name": "List Payment Requests",
+          "request": { "method": "GET", "url": { "raw": "{{base_url}}/api/v2/payment-requests", "host": ["{{base_url}}"], "path": ["api", "v2", "payment-requests"] } }
+        },
+        {
+          "name": "Get Payment Request",
+          "request": { "method": "GET", "url": { "raw": "{{base_url}}/api/v2/payment-requests/{{request_id}}", "host": ["{{base_url}}"], "path": ["api", "v2", "payment-requests", "{{request_id}}"] } }
+        },
+        {
+          "name": "Accept Payment Request",
+          "request": { "method": "POST", "url": { "raw": "{{base_url}}/api/v2/payment-requests/{{request_id}}/accept", "host": ["{{base_url}}"], "path": ["api", "v2", "payment-requests", "{{request_id}}", "accept"] } }
+        },
+        {
+          "name": "Reject Payment Request",
+          "request": { "method": "POST", "url": { "raw": "{{base_url}}/api/v2/payment-requests/{{request_id}}/reject", "host": ["{{base_url}}"], "path": ["api", "v2", "payment-requests", "{{request_id}}", "reject"] } }
+        },
+        {
+          "name": "Cancel Payment Request",
+          "request": { "method": "POST", "url": { "raw": "{{base_url}}/api/v2/payment-requests/{{request_id}}/cancel", "host": ["{{base_url}}"], "path": ["api", "v2", "payment-requests", "{{request_id}}", "cancel"] } }
+        }
+      ]
+    },
+    {
+      "name": "Webhooks",
+      "item": [
+        {
+          "name": "Create Webhook",
+          "request": {
+            "method": "POST",
+            "url": { "raw": "{{base_url}}/api/v2/webhooks", "host": ["{{base_url}}"], "path": ["api", "v2", "webhooks"] },
+            "body": { "mode": "raw", "raw": "{\n  \"url\": \"https://your-server.com/webhook\",\n  \"events\": [\"payment.completed\", \"payment.failed\"],\n  \"description\": \"Payment notifications\"\n}", "options": { "raw": { "language": "json" } } }
+          }
+        },
+        {
+          "name": "List Webhooks",
+          "request": { "method": "GET", "url": { "raw": "{{base_url}}/api/v2/webhooks", "host": ["{{base_url}}"], "path": ["api", "v2", "webhooks"] } }
+        },
+        {
+          "name": "Get Webhook",
+          "request": { "method": "GET", "url": { "raw": "{{base_url}}/api/v2/webhooks/{{webhook_id}}", "host": ["{{base_url}}"], "path": ["api", "v2", "webhooks", "{{webhook_id}}"] } }
+        },
+        {
+          "name": "Update Webhook",
+          "request": {
+            "method": "PUT",
+            "url": { "raw": "{{base_url}}/api/v2/webhooks/{{webhook_id}}", "host": ["{{base_url}}"], "path": ["api", "v2", "webhooks", "{{webhook_id}}"] },
+            "body": { "mode": "raw", "raw": "{\n  \"events\": [\"payment.completed\"],\n  \"is_active\": true\n}", "options": { "raw": { "language": "json" } } }
+          }
+        },
+        {
+          "name": "Delete Webhook",
+          "request": { "method": "DELETE", "url": { "raw": "{{base_url}}/api/v2/webhooks/{{webhook_id}}", "host": ["{{base_url}}"], "path": ["api", "v2", "webhooks", "{{webhook_id}}"] } }
+        },
+        {
+          "name": "Get Webhook Deliveries",
+          "request": { "method": "GET", "url": { "raw": "{{base_url}}/api/v2/webhooks/{{webhook_id}}/deliveries", "host": ["{{base_url}}"], "path": ["api", "v2", "webhooks", "{{webhook_id}}", "deliveries"] } }
+        },
+        {
+          "name": "Retry Webhook Delivery",
+          "request": { "method": "POST", "url": { "raw": "{{base_url}}/api/v2/webhooks/deliveries/{{delivery_id}}/retry", "host": ["{{base_url}}"], "path": ["api", "v2", "webhooks", "deliveries", "{{delivery_id}}", "retry"] } }
+        }
+      ]
+    },
+    {
+      "name": "Analytics",
+      "item": [
+        {
+          "name": "Volume Metrics",
+          "request": { "method": "GET", "url": { "raw": "{{base_url}}/api/v2/analytics/volume", "host": ["{{base_url}}"], "path": ["api", "v2", "analytics", "volume"] } }
+        },
+        {
+          "name": "Fee Metrics",
+          "request": { "method": "GET", "url": { "raw": "{{base_url}}/api/v2/analytics/fees", "host": ["{{base_url}}"], "path": ["api", "v2", "analytics", "fees"] } }
+        },
+        {
+          "name": "Success Rate",
+          "request": { "method": "GET", "url": { "raw": "{{base_url}}/api/v2/analytics/success-rate", "host": ["{{base_url}}"], "path": ["api", "v2", "analytics", "success-rate"] } }
+        },
+        {
+          "name": "Top Corridors",
+          "request": { "method": "GET", "url": { "raw": "{{base_url}}/api/v2/analytics/top-corridors", "host": ["{{base_url}}"], "path": ["api", "v2", "analytics", "top-corridors"] } }
+        }
+      ]
+    },
+    {
+      "name": "Audit",
+      "item": [
+        {
+          "name": "List Audit Logs",
+          "request": { "method": "GET", "url": { "raw": "{{base_url}}/api/v2/audit/logs?page=1&limit=50", "host": ["{{base_url}}"], "path": ["api", "v2", "audit", "logs"], "query": [{ "key": "page", "value": "1" }, { "key": "limit", "value": "50" }] } }
+        }
+      ]
+    },
+    {
+      "name": "Admin",
+      "item": [
+        {
+          "name": "View Rate Limit",
+          "request": { "method": "GET", "url": { "raw": "{{base_url}}/api/v2/admin/rate-limit/view", "host": ["{{base_url}}"], "path": ["api", "v2", "admin", "rate-limit", "view"] } }
+        },
+        {
+          "name": "Reset Rate Limit",
+          "request": {
+            "method": "POST",
+            "url": { "raw": "{{base_url}}/api/v2/admin/rate-limit/reset", "host": ["{{base_url}}"], "path": ["api", "v2", "admin", "rate-limit", "reset"] },
+            "body": { "mode": "raw", "raw": "{\n  \"ip\": \"127.0.0.1\"\n}", "options": { "raw": { "language": "json" } } }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Transactions",
+      "item": [
+        {
+          "name": "Export Transactions (CSV)",
+          "request": { "method": "GET", "url": { "raw": "{{base_url}}/api/v2/transactions/export?format=csv", "host": ["{{base_url}}"], "path": ["api", "v2", "transactions", "export"], "query": [{ "key": "format", "value": "csv" }] } }
+        }
+      ]
+    }
+  ]
+}
