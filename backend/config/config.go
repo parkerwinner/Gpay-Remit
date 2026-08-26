@@ -4,12 +4,15 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"log"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/joho/godotenv"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
+	gormlogger "gorm.io/gorm/logger"
 
 	"github.com/yourusername/gpay-remit/logger"
 	"github.com/yourusername/gpay-remit/secrets"
@@ -17,6 +20,7 @@ import (
 
 type Config struct {
 	Port              string
+	Environment       string
 	DatabaseURL       string
 	StellarNetwork    string
 	HorizonURL        string
@@ -138,6 +142,7 @@ func LoadConfig() (*Config, error) {
 
 	return &Config{
 		Port:              os.Getenv("PORT"),
+		Environment:       getEnvOrDefault("APP_ENV", "development"),
 		DatabaseURL:       os.Getenv("DATABASE_URL"),
 		StellarNetwork:    stellarNetwork,
 		HorizonURL:        horizonURL,
@@ -175,8 +180,34 @@ func LoadConfig() (*Config, error) {
 	}, nil
 }
 
+// gormLogLevel picks the GORM log verbosity for the given environment. Every
+// non-production environment gets Info, which logs every executed query
+// (including bound params) plus its execution time. Production only logs
+// errors, to avoid leaking query data and flooding logs.
+func gormLogLevel(env string) gormlogger.LogLevel {
+	if strings.ToLower(env) == "production" {
+		return gormlogger.Error
+	}
+	return gormlogger.Info
+}
+
+// newGormLogger builds the GORM logger for the given environment.
+func newGormLogger(env string) gormlogger.Interface {
+	return gormlogger.New(
+		log.New(os.Stdout, "\r\n", log.LstdFlags),
+		gormlogger.Config{
+			SlowThreshold:             200 * time.Millisecond,
+			LogLevel:                  gormLogLevel(env),
+			IgnoreRecordNotFoundError: true,
+			Colorful:                  true,
+		},
+	)
+}
+
 func InitDB(cfg *Config) (*gorm.DB, error) {
-	db, err := gorm.Open(postgres.Open(cfg.DatabaseURL), &gorm.Config{})
+	db, err := gorm.Open(postgres.Open(cfg.DatabaseURL), &gorm.Config{
+		Logger: newGormLogger(cfg.Environment),
+	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to database: %w", err)
 	}
