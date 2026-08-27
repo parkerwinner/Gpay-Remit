@@ -1,0 +1,45 @@
+# Codecov configuration.
+#
+# Coverage is reported per component so a change to the backend is not masked
+# by frontend coverage moving in the opposite direction.
+
+coverage:
+  status:
+    project:
+      default:
+        # A baseline rather than a cliff: the build should not go red the first
+        # time someone adds a large, partly-covered file. Ratcheting the target
+        # up as coverage grows is the intended path.
+        target: auto
+        threshold: 1%
+    patch:
+      default:
+        # New code is held to a higher bar than the existing average — that is
+        # how the overall number improves without a big-bang backfill.
+        target: 70%
+        threshold: 5%
+
+flags:
+  backend:
+    paths:
+      - backend/
+    carryforward: true
+  frontend:
+    paths:
+      - frontend/
+    carryforward: true
+
+ignore:
+  - "backend/migrations/**"
+  - "backend/testdata/**"   # test scaffolding, not shipped code
+  - "backend/chaos/**"      # fault-injection harness, exercised by its own tests
+  - "**/*_test.go"
+  - "**/mock_*.go"
+  - "frontend/build/**"
+  - "sdks/**"
+  - "contracts/**"          # covered by cargo test, reported separately
+
+comment:
+  layout: "reach, diff, flags, files"
+  behavior: default
+  require_changes: true
