@@ -154,6 +154,7 @@ func main() {
 			protected.GET("/analytics/fees", middleware.RequireRole("admin"), analyticsHandler.GetFeeMetrics)
 			protected.GET("/analytics/success-rate", middleware.RequireRole("admin"), analyticsHandler.GetSuccessRate)
 			protected.GET("/analytics/top-corridors", middleware.RequireRole("admin"), analyticsHandler.GetTopCorridors)
+			protected.GET("/analytics/sla", middleware.RequireRole("admin"), analyticsHandler.GetSLAMetrics)
 
 		}
 	}
@@ -226,6 +227,7 @@ func main() {
 			protected.GET("/analytics/fees", middleware.RequireRole("admin"), analyticsHandler.GetFeeMetrics)
 			protected.GET("/analytics/success-rate", middleware.RequireRole("admin"), analyticsHandler.GetSuccessRate)
 			protected.GET("/analytics/top-corridors", middleware.RequireRole("admin"), analyticsHandler.GetTopCorridors)
+			protected.GET("/analytics/sla", middleware.RequireRole("admin"), analyticsHandler.GetSLAMetrics)
 
 		}
 	}
