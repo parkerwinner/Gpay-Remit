@@ -16,6 +16,7 @@ import (
 	"github.com/yourusername/gpay-remit/graphql"
 	"github.com/yourusername/gpay-remit/handlers"
 	"github.com/yourusername/gpay-remit/logger"
+	"github.com/yourusername/gpay-remit/metrics"
 	"github.com/yourusername/gpay-remit/middleware"
 	"github.com/yourusername/gpay-remit/services"
 	"github.com/yourusername/gpay-remit/utils"
@@ -49,12 +50,15 @@ func main() {
 
 	router := gin.New()
 	router.Use(gin.Recovery())
+	router.Use(middleware.PrometheusMetrics())
 	router.Use(middleware.RequestIDMiddleware())
 	router.Use(middleware.RequestLogger())
 	router.Use(middleware.ErrorHandler())
 	router.Use(middleware.VersionMiddleware())
 	router.Use(middleware.TLSMiddleware())
 	router.Use(middleware.CSRFProtection())
+
+	router.GET("/metrics", gin.WrapH(metrics.Handler()))
 
 	router.Use(func(c *gin.Context) {
 		c.Writer.Header().Set("Access-Control-Allow-Origin", "*")
