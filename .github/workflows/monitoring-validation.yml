@@ -1,0 +1,130 @@
+name: Validate Monitoring Config
+
+on:
+  push:
+    branches: [main, develop, "infra/*"]
+    paths:
+      - "monitoring/**"
+      - "scripts/setup_monitoring.sh"
+      - ".github/workflows/monitoring-validation.yml"
+  pull_request:
+    branches: [main, develop]
+    paths:
+      - "monitoring/**"
+      - "scripts/setup_monitoring.sh"
+      - ".github/workflows/monitoring-validation.yml"
+
+jobs:
+  validate-yaml:
+    name: Validate Monitoring YAML
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install yamllint
+        run: pip install yamllint
+
+      - name: Lint uptimerobot.yml
+        run: |
+          yamllint -d '{extends: default, rules: {line-length: {max: 120}}}' \
+            monitoring/uptimerobot.yml
+
+      - name: Lint alerting.yml
+        run: |
+          yamllint -d '{extends: default, rules: {line-length: {max: 120}}}' \
+            monitoring/alerting.yml
+
+  validate-content:
+    name: Validate Monitor Content
+    runs-on: ubuntu-latest
+    needs: validate-yaml
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install yq
+        run: |
+          wget -qO /usr/local/bin/yq \
+            https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
+          chmod +x /usr/local/bin/yq
+
+      - name: Check all monitors have 5-minute intervals
+        run: |
+          echo "Checking monitor intervals..."
+          WRONG=$(yq '.monitors[] | select(.interval != 300) | .friendly_name' monitoring/uptimerobot.yml)
+          if [[ -n "${WRONG}" ]]; then
+            echo "ERROR: The following monitors do not use a 5-minute (300s) interval:"
+            echo "${WRONG}"
+            exit 1
+          fi
+          echo "All monitors use 5-minute intervals ✓"
+
+      - name: Check all monitors have alert contacts
+        run: |
+          echo "Checking alert contacts..."
+          MISSING=$(yq '.monitors[] | select((.alert_contacts | length) == 0) | .friendly_name' monitoring/uptimerobot.yml)
+          if [[ -n "${MISSING}" ]]; then
+            echo "ERROR: The following monitors have no alert contacts:"
+            echo "${MISSING}"
+            exit 1
+          fi
+          echo "All monitors have alert contacts ✓"
+
+      - name: Check critical endpoints are monitored
+        run: |
+          echo "Checking critical endpoint coverage..."
+          REQUIRED=(
+            "/health"
+            "/health/ready"
+            "/health/live"
+            "/api/v1/auth/login"
+            "/api/v1/remittances"
+            "/api/v1/fees/calculate"
+            "/api/v1/exchange-rates"
+          )
+          ALL_URLS=$(yq '.monitors[].url' monitoring/uptimerobot.yml)
+          FAILED=0
+          for endpoint in "${REQUIRED[@]}"; do
+            if ! echo "${ALL_URLS}" | grep -q "${endpoint}"; then
+              echo "ERROR: Required endpoint not monitored: ${endpoint}"
+              FAILED=1
+            else
+              echo "  ${endpoint} ✓"
+            fi
+          done
+          [[ "${FAILED}" -eq 0 ]] || exit 1
+          echo "All critical endpoints are monitored ✓"
+
+      - name: Verify production host is set correctly
+        run: |
+          HOST=$(yq '.settings.production_host' monitoring/uptimerobot.yml)
+          echo "Production host: ${HOST}"
+          if [[ "${HOST}" != "https://gpay-remit.example.com" ]]; then
+            echo "ERROR: Unexpected production host: ${HOST}"
+            exit 1
+          fi
+          echo "Production host is correct ✓"
+
+  validate-script:
+    name: Validate Setup Script
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check script is executable
+        run: |
+          [[ -x scripts/setup_monitoring.sh ]] || {
+            echo "ERROR: scripts/setup_monitoring.sh is not executable"
+            exit 1
+          }
+          echo "Script is executable ✓"
+
+      - name: Shellcheck
+        run: |
+          sudo apt-get install -y shellcheck
+          shellcheck scripts/setup_monitoring.sh
+
+      - name: Dry-run setup script
+        env:
+          UPTIMEROBOT_API_KEY: "test-key-dry-run"
+          DRY_RUN: "true"
+        run: bash scripts/setup_monitoring.sh

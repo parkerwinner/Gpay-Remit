@@ -1,0 +1,236 @@
+# UptimeRobot Monitoring Configuration
+# Gpay-Remit — Issue #280
+#
+# All critical endpoints monitored every 5 minutes.
+# Provision via: scripts/setup_monitoring.sh
+#
+# UptimeRobot monitor types:
+#   1 = HTTP(s)
+#   2 = Keyword
+#   3 = Ping
+#   4 = Port
+#
+# Alert contact IDs are placeholders — replace with real IDs from:
+#   https://api.uptimerobot.com/v2/getAlertContacts
+
+settings:
+  default_interval: 300        # 5 minutes (seconds)
+  default_timeout: 30          # seconds before a check is considered down
+  production_host: https://gpay-remit.example.com
+
+# ---------------------------------------------------------------------------
+# Alert contacts — referenced by monitors below
+# ---------------------------------------------------------------------------
+alert_contacts:
+  - id: &email_ops    "REPLACE_WITH_EMAIL_CONTACT_ID"
+    type: email
+    friendly_name: "Ops Team Email"
+
+  - id: &slack_ops    "REPLACE_WITH_SLACK_CONTACT_ID"
+    type: slack
+    friendly_name: "Ops Slack Channel (#alerts)"
+
+  - id: &webhook_ops  "REPLACE_WITH_WEBHOOK_CONTACT_ID"
+    type: webhook
+    friendly_name: "PagerDuty Webhook"
+
+  - id: &sms_oncall   "REPLACE_WITH_SMS_CONTACT_ID"
+    type: sms
+    friendly_name: "On-call SMS"
+
+# ---------------------------------------------------------------------------
+# Monitors
+# ---------------------------------------------------------------------------
+monitors:
+
+  # ── Health endpoints ──────────────────────────────────────────────────────
+
+  - friendly_name: "[Gpay-Remit] Health Check"
+    url: https://gpay-remit.example.com/health
+    type: 1
+    interval: 300
+    timeout: 30
+    http_method: GET
+    keyword_type: 2               # keyword must NOT exist (absence of error)
+    keyword_value: "\"status\":\"error\""
+    alert_contacts:
+      - *email_ops
+      - *slack_ops
+      - *webhook_ops
+      - *sms_oncall
+    alert_threshold: 1
+    alert_reminder: 30
+    tags:
+      - health
+      - critical
+
+  - friendly_name: "[Gpay-Remit] Readiness Probe"
+    url: https://gpay-remit.example.com/health/ready
+    type: 1
+    interval: 300
+    timeout: 30
+    http_method: GET
+    expected_status_code: 200
+    alert_contacts:
+      - *email_ops
+      - *slack_ops
+      - *webhook_ops
+    alert_threshold: 1
+    alert_reminder: 30
+    tags:
+      - health
+      - critical
+
+  - friendly_name: "[Gpay-Remit] Liveness Probe"
+    url: https://gpay-remit.example.com/health/live
+    type: 1
+    interval: 300
+    timeout: 30
+    http_method: GET
+    expected_status_code: 200
+    alert_contacts:
+      - *email_ops
+      - *slack_ops
+      - *webhook_ops
+    alert_threshold: 1
+    alert_reminder: 30
+    tags:
+      - health
+      - critical
+
+  # ── Authentication ────────────────────────────────────────────────────────
+
+  - friendly_name: "[Gpay-Remit] Auth Login Endpoint"
+    url: https://gpay-remit.example.com/api/v1/auth/login
+    type: 1
+    interval: 300
+    timeout: 30
+    http_method: POST
+    # A POST with no body should return 400 (Bad Request), NOT 502/503/504.
+    # We check the endpoint is reachable, not that auth succeeds.
+    expected_status_codes:
+      - 400
+      - 422
+    alert_contacts:
+      - *email_ops
+      - *slack_ops
+      - *webhook_ops
+      - *sms_oncall
+    alert_threshold: 1
+    alert_reminder: 30
+    tags:
+      - auth
+      - critical
+
+  # ── Core API endpoints ────────────────────────────────────────────────────
+
+  - friendly_name: "[Gpay-Remit] Remittances API"
+    url: https://gpay-remit.example.com/api/v1/remittances
+    type: 1
+    interval: 300
+    timeout: 30
+    http_method: GET
+    # Protected endpoint returns 401 when not authenticated — that means the
+    # service is up and running.
+    expected_status_codes:
+      - 401
+    alert_contacts:
+      - *email_ops
+      - *slack_ops
+      - *webhook_ops
+      - *sms_oncall
+    alert_threshold: 1
+    alert_reminder: 30
+    tags:
+      - api
+      - critical
+
+  - friendly_name: "[Gpay-Remit] Fee Calculator API"
+    url: https://gpay-remit.example.com/api/v1/fees/calculate
+    type: 1
+    interval: 300
+    timeout: 30
+    http_method: GET
+    expected_status_codes:
+      - 401
+    alert_contacts:
+      - *email_ops
+      - *slack_ops
+      - *webhook_ops
+    alert_threshold: 1
+    alert_reminder: 30
+    tags:
+      - api
+      - critical
+
+  - friendly_name: "[Gpay-Remit] Exchange Rates API"
+    url: https://gpay-remit.example.com/api/v1/exchange-rates
+    type: 1
+    interval: 300
+    timeout: 30
+    http_method: GET
+    expected_status_codes:
+      - 401
+    alert_contacts:
+      - *email_ops
+      - *slack_ops
+      - *webhook_ops
+    alert_threshold: 1
+    alert_reminder: 30
+    tags:
+      - api
+      - critical
+
+  # ── Documentation ─────────────────────────────────────────────────────────
+
+  - friendly_name: "[Gpay-Remit] API Documentation"
+    url: https://gpay-remit.example.com/api/docs
+    type: 1
+    interval: 300
+    timeout: 30
+    http_method: GET
+    expected_status_code: 200
+    alert_contacts:
+      - *email_ops
+      - *slack_ops
+    alert_threshold: 2            # docs going down is less critical
+    alert_reminder: 60
+    tags:
+      - docs
+
+  - friendly_name: "[Gpay-Remit] OpenAPI Spec"
+    url: https://gpay-remit.example.com/api/docs/openapi.yaml
+    type: 1
+    interval: 300
+    timeout: 30
+    http_method: GET
+    expected_status_code: 200
+    keyword_type: 1               # keyword MUST exist
+    keyword_value: "openapi:"
+    alert_contacts:
+      - *email_ops
+      - *slack_ops
+    alert_threshold: 2
+    alert_reminder: 60
+    tags:
+      - docs
+
+  # ── Frontend ──────────────────────────────────────────────────────────────
+
+  - friendly_name: "[Gpay-Remit] Frontend"
+    url: https://gpay-remit.example.com/
+    type: 1
+    interval: 300
+    timeout: 30
+    http_method: GET
+    expected_status_code: 200
+    alert_contacts:
+      - *email_ops
+      - *slack_ops
+      - *webhook_ops
+      - *sms_oncall
+    alert_threshold: 1
+    alert_reminder: 30
+    tags:
+      - frontend
+      - critical

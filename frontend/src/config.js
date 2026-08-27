@@ -9,7 +9,8 @@
  */
 
 const DEV_FALLBACK_URL = "http://localhost:8080/api/v1";
-const IS_DEV = process.env.NODE_ENV === "development";
+const IS_DEV_OR_TEST =
+  process.env.NODE_ENV === "development" || process.env.NODE_ENV === "test";
 
 function isValidUrl(str) {
   try {
@@ -24,7 +25,7 @@ function resolveApiUrl() {
   const raw = process.env.REACT_APP_API_URL;
 
   if (!raw || raw.trim() === "") {
-    if (IS_DEV) {
+    if (IS_DEV_OR_TEST) {
       console.warn(
         `[Gpay-Remit] REACT_APP_API_URL is not set. Using development fallback: ${DEV_FALLBACK_URL}`
       );
@@ -37,7 +38,7 @@ function resolveApiUrl() {
   }
 
   if (!isValidUrl(raw)) {
-    if (IS_DEV) {
+    if (IS_DEV_OR_TEST) {
       console.warn(
         `[Gpay-Remit] REACT_APP_API_URL "${raw}" is not a valid http/https URL. ` +
           `Using development fallback: ${DEV_FALLBACK_URL}`

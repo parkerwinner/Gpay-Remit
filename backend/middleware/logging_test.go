@@ -103,17 +103,20 @@ func TestRequestLogger_RequestBodyReachesHandler(t *testing.T) {
 }
 
 func TestRequestLogger_SanitizesSensitiveRequestFields(t *testing.T) {
-	// We verify sanitisation via logger.SanitizeBody directly (unit) and via an
-	// integration smoke-test that the handler still receives the original values.
-	sensitive := map[string]interface{}{
+	// We verify sanitisation via logger.SanitizeBody directly (unit).
+	// email, password, and token are all classified as sensitive PII/secrets
+	// and must be redacted. Non-sensitive fields (e.g. "amount") pass through.
+	body := map[string]interface{}{
+		"amount":   100,
 		"email":    "user@example.com",
 		"password": "s3cr3t",
 		"token":    "tok_abc123",
 	}
 
-	sanitized := logger.SanitizeBody(sensitive).(map[string]interface{})
+	sanitized := logger.SanitizeBody(body).(map[string]interface{})
 
-	assert.Equal(t, "user@example.com", sanitized["email"], "non-sensitive field must pass through")
+	assert.Equal(t, 100, sanitized["amount"], "non-sensitive field must pass through")
+	assert.Equal(t, "[REDACTED]", sanitized["email"], "email is PII and must be redacted")
 	assert.Equal(t, "[REDACTED]", sanitized["password"])
 	assert.Equal(t, "[REDACTED]", sanitized["token"])
 }
