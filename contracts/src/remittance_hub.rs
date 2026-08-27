@@ -988,6 +988,7 @@ impl RemittanceHubContract {
         requests: soroban_sdk::Vec<EscrowRequest>,
     ) -> Result<soroban_sdk::Vec<u64>, RemittanceError> {
         sender.require_auth();
+        Self::enforce_rate_limit(&env, &sender, FunctionType::Batch)?;
 
         let max_batch = Self::get_max_batch_size(env.clone());
         if requests.len() > max_batch {
@@ -1064,6 +1065,7 @@ impl RemittanceHubContract {
         token_address: Address,
     ) -> Result<(), RemittanceError> {
         sender.require_auth();
+        Self::enforce_rate_limit(&env, &sender, FunctionType::Batch)?;
 
         let max_batch = Self::get_max_batch_size(env.clone());
         if escrow_ids.len() > max_batch {
@@ -1141,6 +1143,7 @@ impl RemittanceHubContract {
         token_address: Address,
     ) -> Result<(), RemittanceError> {
         caller.require_auth();
+        Self::enforce_rate_limit(&env, &caller, FunctionType::Batch)?;
 
         let max_batch = Self::get_max_batch_size(env.clone());
         if escrow_ids.len() > max_batch {
