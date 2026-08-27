@@ -23,37 +23,43 @@ func setupAnalyticsTestDB(t *testing.T) *gorm.DB {
 	err = db.AutoMigrate(&models.Payment{})
 	assert.NoError(t, err)
 
+	// Use times anchored to the start of today (local time, matching
+	// CalculateDateRange which uses now.Location()) so all payments fall within
+	// the daily date range regardless of what hour the tests run. Subtracting
+	// hours from time.Now() can cross midnight when tests run early in the day,
+	// which causes the analytics queries to miss records.
 	now := time.Now()
+	todayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
 	testPayments := []models.Payment{
 		{
-			SenderID:         1,
-			RecipientID:      2,
-			Amount:           1000.00,
-			Currency:         "USD",
-			TargetCurrency:   "EUR",
-			ConvertedAmount:  950.00,
-			Status:           "completed",
-			Fee:              10.00,
-			PlatformFee:      5.00,
-			ForexFee:         2.50,
-			ComplianceFee:    1.00,
-			NetworkFee:       1.50,
-			CreatedAt:        now.Add(-1 * time.Hour),
+			SenderID:        1,
+			RecipientID:     2,
+			Amount:          1000.00,
+			Currency:        "USD",
+			TargetCurrency:  "EUR",
+			ConvertedAmount: 950.00,
+			Status:          "completed",
+			Fee:             10.00,
+			PlatformFee:     5.00,
+			ForexFee:        2.50,
+			ComplianceFee:   1.00,
+			NetworkFee:      1.50,
+			CreatedAt:       todayStart.Add(1 * time.Hour),
 		},
 		{
-			SenderID:         1,
-			RecipientID:      3,
-			Amount:           2000.00,
-			Currency:         "USD",
-			TargetCurrency:   "GBP",
-			ConvertedAmount:  1600.00,
-			Status:           "completed",
-			Fee:              20.00,
-			PlatformFee:      10.00,
-			ForexFee:         5.00,
-			ComplianceFee:    2.00,
-			NetworkFee:       3.00,
-			CreatedAt:        now.Add(-2 * time.Hour),
+			SenderID:        1,
+			RecipientID:     3,
+			Amount:          2000.00,
+			Currency:        "USD",
+			TargetCurrency:  "GBP",
+			ConvertedAmount: 1600.00,
+			Status:          "completed",
+			Fee:             20.00,
+			PlatformFee:     10.00,
+			ForexFee:        5.00,
+			ComplianceFee:   2.00,
+			NetworkFee:      3.00,
+			CreatedAt:       todayStart.Add(2 * time.Hour),
 		},
 		{
 			SenderID:    2,
@@ -61,7 +67,7 @@ func setupAnalyticsTestDB(t *testing.T) *gorm.DB {
 			Amount:      500.00,
 			Currency:    "USD",
 			Status:      "failed",
-			CreatedAt:   now.Add(-3 * time.Hour),
+			CreatedAt:   todayStart.Add(3 * time.Hour),
 		},
 		{
 			SenderID:    3,
@@ -69,7 +75,7 @@ func setupAnalyticsTestDB(t *testing.T) *gorm.DB {
 			Amount:      750.00,
 			Currency:    "USD",
 			Status:      "pending",
-			CreatedAt:   now.Add(-30 * time.Minute),
+			CreatedAt:   todayStart.Add(4 * time.Hour),
 		},
 	}
 
