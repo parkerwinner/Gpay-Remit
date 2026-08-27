@@ -12,6 +12,7 @@ import (
 	"unicode"
 
 	"github.com/pquerna/otp/totp"
+	"github.com/yourusername/gpay-remit/encryption"
 	"golang.org/x/crypto/bcrypt"
 	"gorm.io/gorm"
 )
@@ -41,6 +42,11 @@ type User struct {
 	TOTPSecret            string         `gorm:"size:255" json:"-"`
 	MFAEnabled            bool           `gorm:"default:false" json:"mfa_enabled"`
 	MFASetupCompletedAt   *time.Time     `json:"-"`
+
+	// Sensitive PII & banking fields encrypted at rest (#275)
+	SSN                   encryption.EncryptedString `gorm:"size:512" json:"-"`
+	BankAccountNumber     encryption.EncryptedString `gorm:"size:512" json:"-"`
+	TaxID                 encryption.EncryptedString `gorm:"size:512" json:"-"`
 }
 
 // TableName overrides the table name.

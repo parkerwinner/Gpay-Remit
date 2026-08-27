@@ -220,6 +220,55 @@ func (h *AnalyticsHandler) GetTopCorridors(c *gin.Context) {
 	})
 }
 
+// GetSLAMetrics handles GET /analytics/sla requests (#285)
+func (h *AnalyticsHandler) GetSLAMetrics(c *gin.Context) {
+	period := c.DefaultQuery("period", "daily")
+
+	if !isValidPeriod(period) {
+		c.Error(errors.NewValidationError("Invalid period", "Valid values are: daily, weekly, monthly, yearly"))
+		return
+	}
+
+	startDate, endDate, customRange := parseDateRange(c, period)
+	if customRange {
+		cacheKey := fmt.Sprintf("analytics:sla:%s:%s", startDate.Format("2006-01-02"), endDate.Format("2006-01-02"))
+
+		var cachedMetrics services.SLAMetrics
+		found, err := utils.GetCached(cacheKey, &cachedMetrics)
+		if err == nil && found {
+			c.JSON(http.StatusOK, cachedMetrics)
+			return
+		}
+	} else {
+		var err error
+		startDate, endDate, err = h.service.CalculateDateRange(period)
+		if err != nil {
+			c.Error(errors.NewValidationError("Invalid date range", err.Error()))
+			return
+		}
+
+		cacheKey := fmt.Sprintf("analytics:sla:%s:%s", period, time.Now().Format("2006-01-02"))
+
+		var cachedMetrics services.SLAMetrics
+		found, err := utils.GetCached(cacheKey, &cachedMetrics)
+		if err == nil && found {
+			c.JSON(http.StatusOK, cachedMetrics)
+			return
+		}
+	}
+
+	metrics, err := h.service.GetSLAMetrics(period, startDate, endDate)
+	if err != nil {
+		c.Error(errors.NewInternalError("Failed to retrieve SLA metrics", err))
+		return
+	}
+
+	cacheKey := fmt.Sprintf("analytics:sla:%s:%s", period, time.Now().Format("2006-01-02"))
+	utils.SetCached(cacheKey, metrics, getCacheDuration(period))
+
+	c.JSON(http.StatusOK, metrics)
+}
+
 func isValidPeriod(period string) bool {
 	validPeriods := map[string]bool{
 		"daily":   true,

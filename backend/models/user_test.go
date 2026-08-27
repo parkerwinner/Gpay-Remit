@@ -75,3 +75,28 @@ func TestValidatePasswordStrength(t *testing.T) {
 		})
 	}
 }
+
+func TestUser_EncryptedSensitiveFields(t *testing.T) {
+	u := User{
+		Email:             "alice@example.com",
+		Name:              "Alice",
+		SSN:               "123-45-6789",
+		BankAccountNumber: "US9876543210123456",
+		TaxID:             "TAX-998877",
+	}
+
+	assert.Equal(t, "123-45-6789", u.SSN.String())
+	assert.Equal(t, "US9876543210123456", u.BankAccountNumber.String())
+	assert.Equal(t, "TAX-998877", u.TaxID.String())
+
+	// Value() -> encrypted for database storage
+	ssnVal, err := u.SSN.Value()
+	require.NoError(t, err)
+	assert.NotEqual(t, "123-45-6789", ssnVal)
+	assert.NotEmpty(t, ssnVal)
+
+	bankVal, err := u.BankAccountNumber.Value()
+	require.NoError(t, err)
+	assert.NotEqual(t, "US9876543210123456", bankVal)
+	assert.NotEmpty(t, bankVal)
+}

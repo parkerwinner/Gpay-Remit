@@ -300,3 +300,32 @@ func TestGetCacheDuration(t *testing.T) {
 		})
 	}
 }
+
+func TestAnalyticsHandler_GetSLAMetrics(t *testing.T) {
+	db := setupAnalyticsTestDB(t)
+	handler := NewAnalyticsHandler(db)
+
+	router := gin.New()
+	router.Use(middleware.ErrorHandler())
+	router.GET("/analytics/sla", handler.GetSLAMetrics)
+
+	req := httptest.NewRequest(http.MethodGet, "/analytics/sla?period=daily", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	var response services.SLAMetrics
+	err := json.Unmarshal(w.Body.Bytes(), &response)
+	assert.NoError(t, err)
+	assert.Equal(t, "daily", response.Period)
+	assert.Equal(t, 99.9, response.TargetUptimePercent)
+	assert.Equal(t, 500.0, response.TargetP95LatencyMs)
+	assert.Equal(t, int64(4), response.TotalRequests)
+	assert.Equal(t, int64(3), response.SuccessfulRequests)
+	assert.Equal(t, int64(1), response.FailedRequests)
+	assert.Equal(t, 75.0, response.ActualUptimePercent)
+	assert.False(t, response.UptimeSLAMet)
+	assert.True(t, response.LatencySLAMet)
+	assert.False(t, response.OverallSLAMet)
+}

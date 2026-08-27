@@ -9,8 +9,33 @@
   color: white;
 }
 
+.header-brand-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 16px;
+}
+
 .App-header h1 {
-  margin: 0 0 20px 0;
+  margin: 0;
+}
+
+.tour-nav-btn {
+  background: rgba(97, 218, 251, 0.15);
+  border: 1px solid rgba(97, 218, 251, 0.4);
+  color: #61dafb;
+  font-size: 0.85rem;
+  font-weight: 600;
+  padding: 6px 14px;
+  border-radius: 20px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.tour-nav-btn:hover {
+  background: rgba(97, 218, 251, 0.28);
+  border-color: #61dafb;
+  transform: translateY(-1px);
 }
 
 .App-header nav {
