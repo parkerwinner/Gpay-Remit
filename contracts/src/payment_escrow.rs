@@ -551,6 +551,17 @@ impl PaymentEscrowContract {
         env.storage()
             .instance()
             .set(&DataKey::SupportedAssets, &assets);
+
+        events::emit(
+            &env,
+            symbol_short!("escrow"),
+            symbol_short!("asset_add"),
+            0,
+            &admin,
+            0,
+            symbol_short!("na"),
+            EventData::AdminAction(symbol_short!("asset_add")),
+        );
     }
 
     pub fn set_platform_fee(env: Env, admin: Address, fee_percentage: i128) -> Result<(), Error> {
@@ -751,19 +762,23 @@ impl PaymentEscrowContract {
         Ok(())
     }
 
+    /// Enforces the rate limit for `caller` and returns the admin address
+    /// looked up along the way, so callers that also need the admin (e.g.
+    /// for an authorization check) can reuse it instead of reading
+    /// `DataKey::Admin` from storage a second time.
     fn enforce_rate_limit(
         env: &Env,
         caller: &Address,
         function_type: FunctionType,
-    ) -> Result<(), Error> {
+    ) -> Result<Option<Address>, Error> {
         let admin_opt: Option<Address> = env.storage().instance().get(&DataKey::Admin);
         let admin = match admin_opt {
             Some(a) => a,
-            None => return Ok(()),
+            None => return Ok(None),
         };
         let allowed = rate_limit::check_rate_limit(env, caller, function_type, &admin);
         if allowed {
-            Ok(())
+            Ok(Some(admin))
         } else {
             Err(Error::RateLimitExceeded)
         }
@@ -994,6 +1009,18 @@ impl PaymentEscrowContract {
             .unwrap_or_else(|| Vec::new(&env));
         rules.push_back(rule);
         env.storage().instance().set(&DataKey::ComplianceRules, &rules);
+
+        events::emit(
+            &env,
+            symbol_short!("escrow"),
+            symbol_short!("rule_add"),
+            0,
+            &admin,
+            0,
+            symbol_short!("na"),
+            EventData::AdminAction(symbol_short!("rule_add")),
+        );
+
         Ok(())
     }
 
@@ -1004,7 +1031,19 @@ impl PaymentEscrowContract {
             return Err(Error::Unauthorized);
         }
 
-        env.storage().instance().set(&DataKey::UserJurisdiction(user), &country);
+        env.storage().instance().set(&DataKey::UserJurisdiction(user.clone()), &country);
+
+        events::emit(
+            &env,
+            symbol_short!("escrow"),
+            symbol_short!("juris_set"),
+            0,
+            &admin,
+            country,
+            symbol_short!("na"),
+            EventData::AddressAction(symbol_short!("juris_set"), user),
+        );
+
         Ok(())
     }
 
@@ -1056,6 +1095,18 @@ impl PaymentEscrowContract {
         escrow.compliant = true;
         env.storage().instance().set(&DataKey::Escrow(escrow_id), &escrow);
         env.storage().instance().set(&DataKey::EscrowComplianceOverride(escrow_id), &true);
+
+        events::emit(
+            &env,
+            symbol_short!("escrow"),
+            symbol_short!("cmpl_ovr"),
+            escrow_id,
+            &admin,
+            0,
+            symbol_short!("na"),
+            EventData::AdminAction(symbol_short!("cmpl_ovr")),
+        );
+
         Ok(())
     }
 
@@ -2070,6 +2121,17 @@ impl PaymentEscrowContract {
             &Vec::<RecurringPayment>::new(&env),
         );
 
+        events::emit(
+            &env,
+            symbol_short!("escrow"),
+            symbol_short!("rec_new"),
+            counter,
+            &sender,
+            recurring.config.amount,
+            symbol_short!("created"),
+            EventData::AdminAction(symbol_short!("rec_new")),
+        );
+
         Ok(counter)
     }
 
@@ -2174,6 +2236,18 @@ impl PaymentEscrowContract {
         env.storage()
             .instance()
             .set(&DataKey::Recurring(recurring_id), &recurring);
+
+        events::emit(
+            &env,
+            symbol_short!("escrow"),
+            symbol_short!("rec_cncl"),
+            recurring_id,
+            &caller,
+            0,
+            symbol_short!("cancelled"),
+            EventData::AdminAction(symbol_short!("rec_cncl")),
+        );
+
         Ok(())
     }
 
@@ -2284,7 +2358,7 @@ impl PaymentEscrowContract {
         token_address: Address,
     ) -> Result<(), Error> {
         caller.require_auth();
-        Self::enforce_rate_limit(&env, &caller, FunctionType::Release)?;
+        let rate_limit_admin = Self::enforce_rate_limit(&env, &caller, FunctionType::Release)?;
 
         let guard: bool = env
             .storage()
@@ -2367,7 +2441,10 @@ impl PaymentEscrowContract {
             return Err(Error::Expired);
         }
 
-        let stored_admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
+        let stored_admin: Address = match rate_limit_admin {
+            Some(a) => a,
+            None => env.storage().instance().get(&DataKey::Admin).unwrap(),
+        };
         if caller != escrow.recipient && caller != stored_admin {
             env.storage()
                 .instance()
@@ -2491,7 +2568,7 @@ impl PaymentEscrowContract {
         token_address: Address,
     ) -> Result<(), Error> {
         caller.require_auth();
-        Self::enforce_rate_limit(&env, &caller, FunctionType::Release)?;
+        let rate_limit_admin = Self::enforce_rate_limit(&env, &caller, FunctionType::Release)?;
 
         let mut escrow: Escrow = env
             .storage()
@@ -2512,7 +2589,10 @@ impl PaymentEscrowContract {
             return Err(Error::Expired);
         }
 
-        let stored_admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
+        let stored_admin: Address = match rate_limit_admin {
+            Some(a) => a,
+            None => env.storage().instance().get(&DataKey::Admin).unwrap(),
+        };
         if caller != escrow.recipient && caller != stored_admin && caller != escrow.sender {
             return Err(Error::UnauthorizedCaller);
         }
@@ -2608,7 +2688,7 @@ impl PaymentEscrowContract {
             return Err(Error::ContractPaused);
         }
         caller.require_auth();
-        Self::enforce_rate_limit(&env, &caller, FunctionType::Release)?;
+        let rate_limit_admin = Self::enforce_rate_limit(&env, &caller, FunctionType::Release)?;
 
         if release_amount <= 0 {
             return Err(Error::InvalidAmount);
@@ -2691,7 +2771,10 @@ impl PaymentEscrowContract {
             return Err(Error::Expired);
         }
 
-        let stored_admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
+        let stored_admin: Address = match rate_limit_admin {
+            Some(a) => a,
+            None => env.storage().instance().get(&DataKey::Admin).unwrap(),
+        };
         if caller != escrow.recipient && caller != stored_admin {
             env.storage()
                 .instance()
@@ -3084,7 +3167,7 @@ impl PaymentEscrowContract {
             return Err(Error::ContractPaused);
         }
         caller.require_auth();
-        Self::enforce_rate_limit(&env, &caller, FunctionType::Refund)?;
+        let rate_limit_admin = Self::enforce_rate_limit(&env, &caller, FunctionType::Refund)?;
 
         let guard: bool = env
             .storage()
@@ -3104,7 +3187,10 @@ impl PaymentEscrowContract {
             .get(&DataKey::Escrow(escrow_id))
             .ok_or(Error::EscrowNotFound)?;
 
-        let stored_admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
+        let stored_admin: Address = match rate_limit_admin {
+            Some(a) => a,
+            None => env.storage().instance().get(&DataKey::Admin).unwrap(),
+        };
         if caller != escrow.sender && caller != stored_admin {
             env.storage()
                 .instance()
@@ -3287,7 +3373,7 @@ impl PaymentEscrowContract {
             return Err(Error::ContractPaused);
         }
         caller.require_auth();
-        Self::enforce_rate_limit(&env, &caller, FunctionType::Refund)?;
+        let rate_limit_admin = Self::enforce_rate_limit(&env, &caller, FunctionType::Refund)?;
 
         let mut escrow: Escrow = env
             .storage()
@@ -3295,7 +3381,10 @@ impl PaymentEscrowContract {
             .get(&DataKey::Escrow(escrow_id))
             .ok_or(Error::EscrowNotFound)?;
 
-        let stored_admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
+        let stored_admin: Address = match rate_limit_admin {
+            Some(a) => a,
+            None => env.storage().instance().get(&DataKey::Admin).unwrap(),
+        };
         if caller != escrow.sender && caller != stored_admin {
             return Err(Error::UnauthorizedRefund);
         }
@@ -3425,7 +3514,7 @@ impl PaymentEscrowContract {
             return Err(Error::ContractPaused);
         }
         caller.require_auth();
-        Self::enforce_rate_limit(&env, &caller, FunctionType::Refund)?;
+        let rate_limit_admin = Self::enforce_rate_limit(&env, &caller, FunctionType::Refund)?;
 
         if refund_amount <= 0 {
             return Err(Error::InvalidRefundAmount);
@@ -3449,7 +3538,10 @@ impl PaymentEscrowContract {
             .get(&DataKey::Escrow(escrow_id))
             .ok_or(Error::EscrowNotFound)?;
 
-        let stored_admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
+        let stored_admin: Address = match rate_limit_admin {
+            Some(a) => a,
+            None => env.storage().instance().get(&DataKey::Admin).unwrap(),
+        };
         if caller != escrow.sender && caller != stored_admin {
             env.storage()
                 .instance()
@@ -3868,8 +3960,16 @@ impl PaymentEscrowContract {
             .instance()
             .set(&DataKey::EscrowApprovals(escrow_id), &config);
 
-        env.events()
-            .publish((symbol_short!("appr_add"), escrow_id), new_approver);
+        events::emit(
+            &env,
+            symbol_short!("escrow"),
+            symbol_short!("appr_add"),
+            escrow_id,
+            &caller,
+            0,
+            symbol_short!("na"),
+            EventData::AddressAction(symbol_short!("appr_add"), new_approver),
+        );
 
         Ok(())
     }
@@ -3928,8 +4028,16 @@ impl PaymentEscrowContract {
             .instance()
             .set(&DataKey::EscrowApprovals(escrow_id), &config);
 
-        env.events()
-            .publish((symbol_short!("appr_rem"), escrow_id), approver);
+        events::emit(
+            &env,
+            symbol_short!("escrow"),
+            symbol_short!("appr_rem"),
+            escrow_id,
+            &caller,
+            0,
+            symbol_short!("na"),
+            EventData::AddressAction(symbol_short!("appr_rem"), approver),
+        );
 
         Ok(())
     }
@@ -4045,8 +4153,16 @@ impl PaymentEscrowContract {
             .instance()
             .set(&DataKey::EscrowApprovals(escrow_id), &config);
 
-        env.events()
-            .publish((symbol_short!("mp_revok"), escrow_id), approver);
+        events::emit(
+            &env,
+            symbol_short!("escrow"),
+            symbol_short!("mp_revok"),
+            escrow_id,
+            &approver,
+            0,
+            symbol_short!("na"),
+            EventData::AdminAction(symbol_short!("mp_revok")),
+        );
 
         Ok(())
     }
@@ -4111,8 +4227,16 @@ impl PaymentEscrowContract {
             .instance()
             .set(&DataKey::Escrow(escrow_id), &escrow);
 
-        env.events()
-            .publish((symbol_short!("disp_rais"), escrow_id), (disputer, reason));
+        events::emit(
+            &env,
+            symbol_short!("escrow"),
+            symbol_short!("disp_rais"),
+            escrow_id,
+            &disputer,
+            0,
+            symbol_short!("open"),
+            EventData::AdminAction(symbol_short!("disp_rais")),
+        );
 
         Ok(())
     }
@@ -4195,8 +4319,16 @@ impl PaymentEscrowContract {
                 .set(&DataKey::Dispute(escrow_id), &dispute);
         }
 
-        env.events()
-            .publish((symbol_short!("disp_vote"), escrow_id), (voter, outcome));
+        events::emit(
+            &env,
+            symbol_short!("escrow"),
+            symbol_short!("disp_vote"),
+            escrow_id,
+            &voter,
+            0,
+            symbol_short!("na"),
+            EventData::AdminAction(symbol_short!("disp_vote")),
+        );
 
         Ok(())
     }
@@ -4255,8 +4387,16 @@ impl PaymentEscrowContract {
             .instance()
             .set(&DataKey::Escrow(escrow.escrow_id), &*escrow);
 
-        env.events()
-            .publish((symbol_short!("disp_res"), escrow.escrow_id), outcome);
+        events::emit(
+            env,
+            symbol_short!("escrow"),
+            symbol_short!("disp_res"),
+            escrow.escrow_id,
+            &dispute.disputer,
+            0,
+            symbol_short!("resolved"),
+            EventData::AdminAction(symbol_short!("disp_res")),
+        );
 
         Ok(())
     }
