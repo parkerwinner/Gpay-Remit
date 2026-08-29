@@ -770,6 +770,7 @@ impl RemittanceHubContract {
                     code: invoice.asset.code.clone(),
                     issuer: invoice.asset.issuer.clone(),
                 },
+                amount,
                 total_due,
             ),
         );
@@ -2638,7 +2639,7 @@ mod test {
         let client = RemittanceHubContractClient::new(&env, &contract_id);
 
         let token_admin = Address::generate(&env);
-        let token_id = env.register_stellar_asset_contract(token_admin.clone());
+        let token_id = env.register_stellar_asset_contract_v2(token_admin.clone()).address();
         let token_client = soroban_sdk::token::StellarAssetClient::new(&env, &token_id);
 
         let sender = Address::generate(&env);

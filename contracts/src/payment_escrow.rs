@@ -498,8 +498,6 @@ Recurring(u64),
     NotificationHooks(u64),
     NotificationHistory(u64),
     RecurringCounter,
-    Recurring(u64),
-    RecurringHistory(u64),
 }
 
 #[contract]

@@ -145,7 +145,7 @@ pub fn add_signer(
         .set(&PauseStorageKey::Config, &config);
 
     env.events().publish(
-        (symbol_short!("pause"), symbol_short!("signer_add")),
+        (symbol_short!("pause"), symbol_short!("sig_add")),
         signer.clone(),
     );
 
