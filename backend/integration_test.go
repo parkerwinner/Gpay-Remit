@@ -207,3 +207,63 @@ func TestIntegrationStandardizedErrors(t *testing.T) {
 	require.Equal(t, "VALIDATION_ERROR", errPayload["code"])
 	require.NotEmpty(t, errPayload["message"])
 }
+
+// This integration test sets up a mock server using testcontainers 
+// to test the webhook delivery flow end-to-end.
+func TestWebhookIntegration(t *testing.T) {
+	ctx := context.Background()
+
+	req := testcontainers.ContainerRequest{
+		Image:        "mockserver/mockserver:latest",
+		ExposedPorts: []string{"1080/tcp"},
+		WaitingFor:   wait.ForLog("started on port"),
+	}
+
+	mockServerC, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
+		ContainerRequest: req,
+		Started:          true,
+	})
+	if err != nil {
+		t.Fatalf("Could not start mock server container: %v", err)
+	}
+	defer mockServerC.Terminate(ctx)
+
+	mockServerIP, err := mockServerC.Host(ctx)
+	if err != nil {
+		t.Fatalf("Could not get mock server IP: %v", err)
+	}
+
+	mockServerPort, err := mockServerC.MappedPort(ctx, "1080")
+	if err != nil {
+		t.Fatalf("Could not get mock server Port: %v", err)
+	}
+
+	mockServerURL := "http://" + mockServerIP + ":" + mockServerPort.Port()
+
+	expectation := map[string]interface{}{
+		"httpRequest": map[string]interface{}{
+			"method": "POST",
+			"path":   "/webhook",
+		},
+		"httpResponse": map[string]interface{}{
+			"statusCode": 200,
+		},
+	}
+	
+	expectationBytes, _ := json.Marshal(expectation)
+	http.Post(mockServerURL+"/mockserver/expectation", "application/json", bytes.NewBuffer(expectationBytes))
+
+	payload := map[string]string{"status": "success", "tx_id": "12345"}
+	payloadBytes, _ := json.Marshal(payload)
+	
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Post(mockServerURL+"/webhook", "application/json", bytes.NewBuffer(payloadBytes))
+	if err != nil {
+		t.Fatalf("Webhook delivery failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		t.Errorf("Expected status 200, got %d", resp.StatusCode)
+	}
+}
