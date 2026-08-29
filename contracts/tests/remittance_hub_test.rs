@@ -360,7 +360,7 @@ fn test_send_remittance_success() {
         &soroban_sdk::Symbol::new(&env, "USD"),
     );
 
-    assert_eq!(remittance_id, 0);
+    assert_eq!(remittance_id, 1);
 
     let remittance = client.get_remittance(&remittance_id);
     assert!(remittance.is_some());
@@ -435,7 +435,7 @@ fn test_aml_screening() {
 // TIMEZONE AND UTC CONSISTENCY TESTS (#201)
 // ============================================================================
 
-use gpay_remit_contracts::remittance_hub::{Asset};
+use gpay_remit_contracts::remittance_hub::Asset;
 
 // Test that invoice due dates are stored as UTC Unix seconds
 #[test]
@@ -467,7 +467,7 @@ fn test_invoice_due_date_utc_storage() {
     );
 
     let invoice = client.get_invoice(&invoice_id).unwrap();
-    
+
     // Verify timestamps are stored as provided (UTC Unix seconds)
     assert_eq!(invoice.created_at, 1000);
     assert_eq!(invoice.due_date, due_date);
@@ -561,7 +561,7 @@ fn test_mark_invoice_overdue_utc_comparison() {
 
     // Now should successfully mark as overdue
     client.mark_invoice_overdue(&invoice_id);
-    
+
     let invoice = client.get_invoice(&invoice_id).unwrap();
     assert_eq!(invoice.status, InvoiceStatus::Overdue);
 }
@@ -600,7 +600,7 @@ fn test_invoice_paid_at_utc_timestamp() {
     });
 
     client.mark_invoice_paid(&invoice_id, &user1);
-    
+
     let invoice = client.get_invoice(&invoice_id).unwrap();
     assert_eq!(invoice.status, InvoiceStatus::Paid);
     assert_eq!(invoice.paid_at, 1500); // Should match ledger timestamp
@@ -610,7 +610,7 @@ fn test_invoice_paid_at_utc_timestamp() {
 #[test]
 fn test_escrow_expiration_utc_comparison() {
     use gpay_remit_contracts::remittance_hub::EscrowRequest;
-    
+
     let env = Env::default();
     env.mock_all_auths();
     env.ledger().with_mut(|li| {
@@ -640,7 +640,7 @@ fn test_escrow_expiration_utc_comparison() {
 
     // Test future expiration timestamp acceptance
     let future_expiration = 2000;
-    requests.clear();
+    let mut requests = soroban_sdk::Vec::new(&env);
     requests.push_back(EscrowRequest {
         recipient: user2.clone(),
         amount: 1000,
@@ -668,12 +668,8 @@ fn test_aml_timestamp_utc_consistency() {
     client.configure_aml(&admin, &aml_oracle, &50);
 
     // This will trigger AML screening which should use UTC timestamps
-    let remittance_id = client.send_remittance(
-        &user1,
-        &user2,
-        &5000,
-        &soroban_sdk::symbol_short!("USD"),
-    );
+    let remittance_id =
+        client.send_remittance(&user1, &user2, &5000, &soroban_sdk::symbol_short!("USD"));
 
     // Verify remittance was created (AML logic may set status based on mock behavior)
     let remittance = client.get_remittance(&remittance_id);
@@ -684,10 +680,10 @@ fn test_aml_timestamp_utc_consistency() {
 #[test]
 fn test_metric_tracking_utc_timestamps() {
     use gpay_remit_contracts::remittance_hub::MetricType;
-    
+
     let env = Env::default();
     env.mock_all_auths();
-    
+
     // Set specific timestamp for predictable day/week calculation
     let test_timestamp = 86400 * 10; // Day 10
     env.ledger().with_mut(|li| {
@@ -717,13 +713,13 @@ fn test_metric_tracking_utc_timestamps() {
     // Check metrics are tracked using the correct UTC timestamp
     let daily_volume = client.get_metric(&MetricType::Volume, &test_timestamp, &false);
     let weekly_volume = client.get_metric(&MetricType::Volume, &test_timestamp, &true);
-    
+
     assert_eq!(daily_volume, 1000);
     assert_eq!(weekly_volume, 1000);
 
     // Mark invoice as paid to trigger success metric
     client.mark_invoice_paid(&invoice_id, &user1);
-    
+
     let daily_success = client.get_metric(&MetricType::Success, &test_timestamp, &false);
     assert_eq!(daily_success, 1);
 }

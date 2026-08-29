@@ -76,7 +76,10 @@ fn test_extend_escrow_by_sender() {
     assert!(result.is_ok());
 
     let escrow = client.get_escrow(&escrow_id).unwrap();
-    assert_eq!(escrow.release_conditions.expiration_timestamp, new_expiration);
+    assert_eq!(
+        escrow.release_conditions.expiration_timestamp,
+        new_expiration
+    );
 }
 
 #[test]
@@ -105,7 +108,10 @@ fn test_extend_escrow_by_recipient() {
     assert!(result.is_ok());
 
     let escrow = client.get_escrow(&escrow_id).unwrap();
-    assert_eq!(escrow.release_conditions.expiration_timestamp, new_expiration);
+    assert_eq!(
+        escrow.release_conditions.expiration_timestamp,
+        new_expiration
+    );
 }
 
 #[test]

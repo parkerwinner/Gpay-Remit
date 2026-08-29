@@ -493,13 +493,11 @@ pub enum DataKey {
     EscrowComplianceOverride(u64),
     UserJurisdiction(Address),
     EscrowCancellationConfig(u64),
-Recurring(u64),
+    Recurring(u64),
     RecurringHistory(u64),
     NotificationHooks(u64),
     NotificationHistory(u64),
     RecurringCounter,
-    Recurring(u64),
-    RecurringHistory(u64),
 }
 
 #[contract]
@@ -980,7 +978,11 @@ impl PaymentEscrowContract {
         Ok(())
     }
 
-    pub fn register_compliance_rule(env: Env, admin: Address, rule: ComplianceRule) -> Result<(), Error> {
+    pub fn register_compliance_rule(
+        env: Env,
+        admin: Address,
+        rule: ComplianceRule,
+    ) -> Result<(), Error> {
         admin.require_auth();
         let stored_admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
         if admin != stored_admin {
@@ -993,28 +995,42 @@ impl PaymentEscrowContract {
             .get(&DataKey::ComplianceRules)
             .unwrap_or_else(|| Vec::new(&env));
         rules.push_back(rule);
-        env.storage().instance().set(&DataKey::ComplianceRules, &rules);
+        env.storage()
+            .instance()
+            .set(&DataKey::ComplianceRules, &rules);
         Ok(())
     }
 
-    pub fn set_user_jurisdiction(env: Env, admin: Address, user: Address, country: i128) -> Result<(), Error> {
+    pub fn set_user_jurisdiction(
+        env: Env,
+        admin: Address,
+        user: Address,
+        country: i128,
+    ) -> Result<(), Error> {
         admin.require_auth();
         let stored_admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
         if admin != stored_admin {
             return Err(Error::Unauthorized);
         }
 
-        env.storage().instance().set(&DataKey::UserJurisdiction(user), &country);
+        env.storage()
+            .instance()
+            .set(&DataKey::UserJurisdiction(user), &country);
         Ok(())
     }
 
     pub fn check_compliance(env: Env, escrow: Escrow) -> bool {
-        let override_exists: bool = env.storage().instance().get(&DataKey::EscrowComplianceOverride(escrow.escrow_id)).unwrap_or(false);
+        let override_exists: bool = env
+            .storage()
+            .instance()
+            .get(&DataKey::EscrowComplianceOverride(escrow.escrow_id))
+            .unwrap_or(false);
         if override_exists {
             return true;
         }
 
-        let rules_opt: Option<Vec<ComplianceRule>> = env.storage().instance().get(&DataKey::ComplianceRules);
+        let rules_opt: Option<Vec<ComplianceRule>> =
+            env.storage().instance().get(&DataKey::ComplianceRules);
         let rules = match rules_opt {
             Some(r) => r,
             None => return true,
@@ -1022,12 +1038,18 @@ impl PaymentEscrowContract {
 
         for rule in rules.iter() {
             let rule_passed = match rule.rule_type {
-                ComplianceRuleType::AmountThreshold => {
-                    escrow.amount < rule.threshold
-                }
+                ComplianceRuleType::AmountThreshold => escrow.amount < rule.threshold,
                 ComplianceRuleType::Jurisdiction => {
-                    let sender_country: i128 = env.storage().instance().get(&DataKey::UserJurisdiction(escrow.sender.clone())).unwrap_or(0);
-                    let recipient_country: i128 = env.storage().instance().get(&DataKey::UserJurisdiction(escrow.recipient.clone())).unwrap_or(0);
+                    let sender_country: i128 = env
+                        .storage()
+                        .instance()
+                        .get(&DataKey::UserJurisdiction(escrow.sender.clone()))
+                        .unwrap_or(0);
+                    let recipient_country: i128 = env
+                        .storage()
+                        .instance()
+                        .get(&DataKey::UserJurisdiction(escrow.recipient.clone()))
+                        .unwrap_or(0);
                     sender_country != rule.threshold && recipient_country != rule.threshold
                 }
                 ComplianceRuleType::RegulatoryRequirement => {
@@ -1045,17 +1067,29 @@ impl PaymentEscrowContract {
         true
     }
 
-    pub fn admin_override_compliance(env: Env, admin: Address, escrow_id: u64) -> Result<(), Error> {
+    pub fn admin_override_compliance(
+        env: Env,
+        admin: Address,
+        escrow_id: u64,
+    ) -> Result<(), Error> {
         admin.require_auth();
         let stored_admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
         if admin != stored_admin {
             return Err(Error::Unauthorized);
         }
 
-        let mut escrow: Escrow = env.storage().instance().get(&DataKey::Escrow(escrow_id)).ok_or(Error::EscrowNotFound)?;
+        let mut escrow: Escrow = env
+            .storage()
+            .instance()
+            .get(&DataKey::Escrow(escrow_id))
+            .ok_or(Error::EscrowNotFound)?;
         escrow.compliant = true;
-        env.storage().instance().set(&DataKey::Escrow(escrow_id), &escrow);
-        env.storage().instance().set(&DataKey::EscrowComplianceOverride(escrow_id), &true);
+        env.storage()
+            .instance()
+            .set(&DataKey::Escrow(escrow_id), &escrow);
+        env.storage()
+            .instance()
+            .set(&DataKey::EscrowComplianceOverride(escrow_id), &true);
         Ok(())
     }
 
@@ -1402,16 +1436,23 @@ impl PaymentEscrowContract {
         };
 
         // Auto-check compliance on creation
-        let rules_opt: Option<Vec<ComplianceRule>> = env.storage().instance().get(&DataKey::ComplianceRules);
+        let rules_opt: Option<Vec<ComplianceRule>> =
+            env.storage().instance().get(&DataKey::ComplianceRules);
         if let Some(rules) = rules_opt {
             for rule in rules.iter() {
                 let rule_passed = match rule.rule_type {
-                    ComplianceRuleType::AmountThreshold => {
-                        escrow.amount < rule.threshold
-                    }
+                    ComplianceRuleType::AmountThreshold => escrow.amount < rule.threshold,
                     ComplianceRuleType::Jurisdiction => {
-                        let sender_country: i128 = env.storage().instance().get(&DataKey::UserJurisdiction(escrow.sender.clone())).unwrap_or(0);
-                        let recipient_country: i128 = env.storage().instance().get(&DataKey::UserJurisdiction(escrow.recipient.clone())).unwrap_or(0);
+                        let sender_country: i128 = env
+                            .storage()
+                            .instance()
+                            .get(&DataKey::UserJurisdiction(escrow.sender.clone()))
+                            .unwrap_or(0);
+                        let recipient_country: i128 = env
+                            .storage()
+                            .instance()
+                            .get(&DataKey::UserJurisdiction(escrow.recipient.clone()))
+                            .unwrap_or(0);
                         sender_country != rule.threshold && recipient_country != rule.threshold
                     }
                     ComplianceRuleType::RegulatoryRequirement => {
@@ -4363,9 +4404,7 @@ impl PaymentEscrowContract {
             delegated_at: env.ledger().timestamp(),
         };
 
-        env.storage()
-            .instance()
-            .set(&delegation_key, &entry);
+        env.storage().instance().set(&delegation_key, &entry);
 
         let mut history: Vec<DelegationEntry> = env
             .storage()
@@ -4431,11 +4470,7 @@ impl PaymentEscrowContract {
         Ok(())
     }
 
-    pub fn get_delegation(
-        env: Env,
-        escrow_id: u64,
-        delegate: Address,
-    ) -> Option<DelegationEntry> {
+    pub fn get_delegation(env: Env, escrow_id: u64, delegate: Address) -> Option<DelegationEntry> {
         env.storage()
             .instance()
             .get(&DataKey::EscrowDelegation(escrow_id, delegate))
@@ -4455,7 +4490,11 @@ impl PaymentEscrowContract {
         permission_check: fn(&DelegationPermissions) -> bool,
     ) -> Result<bool, Error> {
         let delegation_key = DataKey::EscrowDelegation(escrow_id, caller.clone());
-        if let Some(entry) = env.storage().instance().get::<_, DelegationEntry>(&delegation_key) {
+        if let Some(entry) = env
+            .storage()
+            .instance()
+            .get::<_, DelegationEntry>(&delegation_key)
+        {
             Ok(permission_check(&entry.permissions))
         } else {
             Ok(false)
@@ -4498,11 +4537,7 @@ impl PaymentEscrowContract {
         env.storage().instance().get(&DataKey::InsuranceConfig)
     }
 
-    pub fn insure_escrow(
-        env: Env,
-        escrow_id: u64,
-        caller: Address,
-    ) -> Result<(), Error> {
+    pub fn insure_escrow(env: Env, escrow_id: u64, caller: Address) -> Result<(), Error> {
         caller.require_auth();
 
         let mut escrow: Escrow = env
@@ -4515,7 +4550,11 @@ impl PaymentEscrowContract {
             return Err(Error::Unauthorized);
         }
 
-        if env.storage().instance().has(&DataKey::EscrowInsurance(escrow_id)) {
+        if env
+            .storage()
+            .instance()
+            .has(&DataKey::EscrowInsurance(escrow_id))
+        {
             return Err(Error::AlreadyApproved);
         }
 
@@ -4622,7 +4661,9 @@ impl PaymentEscrowContract {
     }
 
     pub fn get_escrow_insurance(env: Env, escrow_id: u64) -> Option<EscrowInsurance> {
-        env.storage().instance().get(&DataKey::EscrowInsurance(escrow_id))
+        env.storage()
+            .instance()
+            .get(&DataKey::EscrowInsurance(escrow_id))
     }
 
     // ── Milestone Functions (#129) ─────────────────────────────────────
@@ -4815,7 +4856,11 @@ impl PaymentEscrowContract {
             .get(&DataKey::EscrowCounter)
             .unwrap_or(0);
         for i in 1..=counter {
-            if let Some(escrow) = env.storage().instance().get::<_, Escrow>(&DataKey::Escrow(i)) {
+            if let Some(escrow) = env
+                .storage()
+                .instance()
+                .get::<_, Escrow>(&DataKey::Escrow(i))
+            {
                 total = total.checked_add(escrow.amount).unwrap_or(total);
             }
         }
@@ -4833,7 +4878,11 @@ impl PaymentEscrowContract {
             .get(&DataKey::EscrowCounter)
             .unwrap_or(0);
         for i in 1..=counter {
-            if let Some(escrow) = env.storage().instance().get::<_, Escrow>(&DataKey::Escrow(i)) {
+            if let Some(escrow) = env
+                .storage()
+                .instance()
+                .get::<_, Escrow>(&DataKey::Escrow(i))
+            {
                 if escrow.status == status {
                     count += 1;
                 }
@@ -4853,7 +4902,11 @@ impl PaymentEscrowContract {
         }
         let mut total: i128 = 0;
         for i in 1..=counter {
-            if let Some(escrow) = env.storage().instance().get::<_, Escrow>(&DataKey::Escrow(i)) {
+            if let Some(escrow) = env
+                .storage()
+                .instance()
+                .get::<_, Escrow>(&DataKey::Escrow(i))
+            {
                 total = total.checked_add(escrow.amount).unwrap_or(total);
             }
         }
@@ -4871,7 +4924,11 @@ impl PaymentEscrowContract {
         }
         let mut completed: u64 = 0;
         for i in 1..=counter {
-            if let Some(escrow) = env.storage().instance().get::<_, Escrow>(&DataKey::Escrow(i)) {
+            if let Some(escrow) = env
+                .storage()
+                .instance()
+                .get::<_, Escrow>(&DataKey::Escrow(i))
+            {
                 if escrow.status == EscrowStatus::Released {
                     completed += 1;
                 }
@@ -4893,10 +4950,16 @@ impl PaymentEscrowContract {
         let mut disputed: u64 = 0;
 
         for i in 1..=counter {
-            if let Some(escrow) = env.storage().instance().get::<_, Escrow>(&DataKey::Escrow(i)) {
+            if let Some(escrow) = env
+                .storage()
+                .instance()
+                .get::<_, Escrow>(&DataKey::Escrow(i))
+            {
                 if escrow.sender == user || escrow.recipient == user {
                     total_escrows += 1;
-                    total_volume = total_volume.checked_add(escrow.amount).unwrap_or(total_volume);
+                    total_volume = total_volume
+                        .checked_add(escrow.amount)
+                        .unwrap_or(total_volume);
                     match escrow.status {
                         EscrowStatus::Released => completed += 1,
                         EscrowStatus::Refunded | EscrowStatus::Expired => refunded += 1,
