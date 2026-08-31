@@ -30,4 +30,24 @@ export class LedgerWalletService {
       this.str = null;
     }
   }
+
+  async signTransaction(transactionXdr: string): Promise<string> {
+    if (!this.str) {
+      throw new Error("Ledger is not connected");
+    }
+
+    try {
+      // The transaction is passed as base64 XDR string.
+      // Ledger expects a signature for the transaction buffer.
+      const result = await this.str.signTransaction("44'/148'/0'", transactionXdr);
+      
+      if (result && result.signature) {
+        return result.signature.toString("base64");
+      }
+      throw new Error("Failed to get a valid signature from Ledger");
+    } catch (error: any) {
+      console.error("Ledger signing failed:", error);
+      throw new Error(`Failed to sign transaction: ${error.message || 'Unknown error'}`);
+    }
+  }
 }
