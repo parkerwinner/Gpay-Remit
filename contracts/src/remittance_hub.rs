@@ -128,6 +128,14 @@ pub struct EscrowRequest {
     pub expiration_timestamp: u64,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[contracttype]
+pub struct FeeConfig {
+    pub percentage: i128,
+    pub min_fee: i128,
+    pub max_fee: i128,
+}
+
 #[derive(Clone)]
 #[contracttype]
 pub struct EscrowData {
@@ -151,6 +159,7 @@ pub enum DataKey {
     MetricDaily(MetricType, u64),
     MetricWeekly(MetricType, u64),
     MaxBatchSize,
+    FeeConfig,
 }
 
 #[derive(Clone)]
@@ -321,6 +330,41 @@ impl RemittanceHubContract {
 
     pub fn get_oracle_config(env: Env) -> Option<OracleConfig> {
         env.storage().persistent().get(&HubOracleKey::OracleConfig)
+    }
+
+    pub fn set_fee_config(env: Env, admin: Address, config: FeeConfig) -> Result<(), RemittanceError> {
+        admin.require_auth();
+        let stored_admin: Address = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Admin)
+            .ok_or(RemittanceError::Unauthorized)?;
+        if admin != stored_admin {
+            return Err(RemittanceError::Unauthorized);
+        }
+
+        if config.percentage < 0 || config.percentage > 10000 || config.min_fee < 0 || config.max_fee < config.min_fee {
+            return Err(RemittanceError::InvalidAmount);
+        }
+
+        env.storage().persistent().set(&DataKey::FeeConfig, &config);
+
+        events::emit(
+            &env,
+            symbol_short!("hub"),
+            symbol_short!("fee_cfg"),
+            0,
+            &admin,
+            config.percentage,
+            symbol_short!("na"),
+            EventData::AdminAction(symbol_short!("fee_cfg")),
+        );
+
+        Ok(())
+    }
+
+    pub fn get_fee_config(env: Env) -> Option<FeeConfig> {
+        env.storage().persistent().get(&DataKey::FeeConfig)
     }
 
     pub fn configure_aml(
