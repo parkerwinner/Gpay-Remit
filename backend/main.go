@@ -269,6 +269,7 @@ func main() {
 
 	baseCtx, cancelWorkers := context.WithCancel(context.Background())
 	var wg sync.WaitGroup
+	middleware.StartIdempotencyCleanupScheduler(baseCtx, &wg, db, time.Hour)
 	workers.StartMonitor(baseCtx, &wg)
 	workers.StartWebhookRetryWorker(baseCtx, &wg, db)
 	workers.StartPaymentRequestExpiryWorker(baseCtx, &wg, db)
