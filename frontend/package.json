@@ -3,6 +3,8 @@
   "version": "0.1.0",
   "private": true,
   "dependencies": {
+    "@ledgerhq/hw-app-stellar": "^6.28.1",
+    "@ledgerhq/hw-transport-webusb": "^6.28.1",
     "@stellar/stellar-sdk": "^11.2.2",
     "axios": "^1.6.5",
     "react": "^18.2.0",
