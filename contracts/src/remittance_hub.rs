@@ -128,6 +128,14 @@ pub struct EscrowRequest {
     pub expiration_timestamp: u64,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[contracttype]
+pub struct FeeConfig {
+    pub percentage: i128,
+    pub min_fee: i128,
+    pub max_fee: i128,
+}
+
 #[derive(Clone)]
 #[contracttype]
 pub struct EscrowData {
@@ -151,6 +159,7 @@ pub enum DataKey {
     MetricDaily(MetricType, u64),
     MetricWeekly(MetricType, u64),
     MaxBatchSize,
+    FeeConfig,
 }
 
 #[derive(Clone)]
@@ -321,6 +330,63 @@ impl RemittanceHubContract {
 
     pub fn get_oracle_config(env: Env) -> Option<OracleConfig> {
         env.storage().persistent().get(&HubOracleKey::OracleConfig)
+    }
+
+    pub fn set_fee_config(env: Env, admin: Address, config: FeeConfig) -> Result<(), RemittanceError> {
+        admin.require_auth();
+        let stored_admin: Address = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Admin)
+            .ok_or(RemittanceError::Unauthorized)?;
+        if admin != stored_admin {
+            return Err(RemittanceError::Unauthorized);
+        }
+
+        if config.percentage < 0 || config.percentage > 10000 || config.min_fee < 0 || config.max_fee < config.min_fee {
+            return Err(RemittanceError::InvalidAmount);
+        }
+
+        env.storage().persistent().set(&DataKey::FeeConfig, &config);
+
+        events::emit(
+            &env,
+            symbol_short!("hub"),
+            symbol_short!("fee_cfg"),
+            0,
+            &admin,
+            config.percentage,
+            symbol_short!("na"),
+            EventData::AdminAction(symbol_short!("fee_cfg")),
+        );
+
+        Ok(())
+    }
+
+    pub fn get_fee_config(env: Env) -> Option<FeeConfig> {
+        env.storage().persistent().get(&DataKey::FeeConfig)
+    }
+
+    fn calculate_fee(env: &Env, amount: i128) -> i128 {
+        let config: FeeConfig = env.storage().persistent().get(&DataKey::FeeConfig).unwrap_or(FeeConfig {
+            percentage: 250,
+            min_fee: 0,
+            max_fee: i128::MAX,
+        });
+
+        let mut fees = amount
+            .checked_mul(config.percentage)
+            .unwrap_or(0)
+            .checked_div(10000)
+            .unwrap_or(0);
+
+        if fees < config.min_fee {
+            fees = config.min_fee;
+        } else if fees > config.max_fee {
+            fees = config.max_fee;
+        }
+
+        fees
     }
 
     pub fn configure_aml(
@@ -710,12 +776,7 @@ impl RemittanceHubContract {
 
         let converted_amount = Self::convert_with_oracle(&env, amount, &asset.code);
 
-        let fee_percentage = 250;
-        let fees = amount
-            .checked_mul(fee_percentage)
-            .unwrap_or(0)
-            .checked_div(10000)
-            .unwrap_or(0);
+        let fees = Self::calculate_fee(&env, amount);
 
         let total_due = amount.checked_add(fees).unwrap_or(amount);
 
@@ -944,12 +1005,7 @@ impl RemittanceHubContract {
             return Err(RemittanceError::InvalidInvoiceStatus);
         }
 
-        let fee_percentage = 250;
-        let fees = new_amount
-            .checked_mul(fee_percentage)
-            .unwrap_or(0)
-            .checked_div(10000)
-            .unwrap_or(0);
+        let fees = Self::calculate_fee(&env, new_amount);
 
         let _old_amount = invoice.amount;
         invoice.amount = new_amount;
@@ -1075,7 +1131,6 @@ impl RemittanceHubContract {
 
         let mut total_amount: i128 = 0;
         let mut total_fees: i128 = 0;
-        let fee_percentage = 250;
 
         for id in escrow_ids.iter() {
             let mut escrow: EscrowData = env
@@ -1091,12 +1146,7 @@ impl RemittanceHubContract {
                 return Err(RemittanceError::InvalidStatus);
             }
 
-            let fees = escrow
-                .amount
-                .checked_mul(fee_percentage)
-                .unwrap_or(0)
-                .checked_div(10000)
-                .unwrap_or(0);
+            let fees = Self::calculate_fee(&env, escrow.amount);
 
             total_amount = total_amount
                 .checked_add(escrow.amount)
@@ -2739,9 +2789,31 @@ mod test {
             client.get_metric(&MetricType::Volume, &env.ledger().timestamp(), &false);
         assert_eq!(reset_volume, 0);
 
-        // Weekly should still be there
         let weekly_volume_after =
             client.get_metric(&MetricType::Volume, &env.ledger().timestamp(), &true);
         assert_eq!(weekly_volume_after, 1000);
+    }
+
+    #[test]
+    fn test_fee_config() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let contract_id = env.register_contract(None, RemittanceHubContract);
+        let client = RemittanceHubContractClient::new(&env, &contract_id);
+        let admin = Address::generate(&env);
+        client.init_hub(&admin);
+
+        let config = FeeConfig {
+            percentage: 300,
+            min_fee: 10,
+            max_fee: 1000,
+        };
+        client.set_fee_config(&admin, &config);
+
+        let stored_config = client.get_fee_config().unwrap();
+        assert_eq!(stored_config.percentage, 300);
+        assert_eq!(stored_config.min_fee, 10);
+        assert_eq!(stored_config.max_fee, 1000);
     }
 }

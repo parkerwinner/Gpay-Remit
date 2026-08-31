@@ -204,8 +204,8 @@ pub struct FeeBreakdown {
 pub struct FeeStructure {
     pub platform_percentage: i128,
     pub forex_percentage: i128,
-    pub compliance_flat: i128,
-    pub network_flat: i128,
+    pub compliance_percentage: i128,
+    pub network_percentage: i128,
     pub min_fee: i128,
     pub max_fee: i128,
 }
@@ -472,8 +472,8 @@ pub enum DataKey {
     FeeStructure,
     FeeWallet,
     ForexFeePercentage,
-    ComplianceFlatFee,
-    NetworkFlatFee,
+    ComplianceFeePercentage,
+    NetworkFeePercentage,
     MinFee,
     MaxFee,
     EscrowApprovals(u64),
@@ -696,7 +696,7 @@ impl PaymentEscrowContract {
         Ok(())
     }
 
-    pub fn set_compliance_fee(env: Env, admin: Address, flat_fee: i128) -> Result<(), Error> {
+    pub fn set_compliance_fee(env: Env, admin: Address, fee_percentage: i128) -> Result<(), Error> {
         admin.require_auth();
 
         let stored_admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
@@ -704,13 +704,13 @@ impl PaymentEscrowContract {
             return Err(Error::Unauthorized);
         }
 
-        if flat_fee < 0 {
+        if fee_percentage < 0 || fee_percentage > 10000 {
             return Err(Error::InvalidAmount);
         }
 
         env.storage()
             .instance()
-            .set(&DataKey::ComplianceFlatFee, &flat_fee);
+            .set(&DataKey::ComplianceFeePercentage, &fee_percentage);
 
         events::emit(
             &env,
@@ -718,7 +718,7 @@ impl PaymentEscrowContract {
             symbol_short!("comp_fee"),
             0,
             &admin,
-            flat_fee,
+            fee_percentage,
             symbol_short!("na"),
             EventData::AdminAction(symbol_short!("comp_fee")),
         );
@@ -888,15 +888,15 @@ impl PaymentEscrowContract {
             .instance()
             .get(&DataKey::ForexFeePercentage)
             .unwrap_or(0i128);
-        let compliance_flat = env
+        let compliance_percentage = env
             .storage()
             .instance()
-            .get(&DataKey::ComplianceFlatFee)
+            .get(&DataKey::ComplianceFeePercentage)
             .unwrap_or(0i128);
-        let network_flat = env
+        let network_percentage = env
             .storage()
             .instance()
-            .get(&DataKey::NetworkFlatFee)
+            .get(&DataKey::NetworkFeePercentage)
             .unwrap_or(0i128);
 
         let platform_fee = amount
@@ -911,12 +911,24 @@ impl PaymentEscrowContract {
             .checked_div(10000)
             .ok_or(Error::ArithmeticOverflow)?;
 
+        let compliance_fee = amount
+            .checked_mul(compliance_percentage)
+            .ok_or(Error::ArithmeticOverflow)?
+            .checked_div(10000)
+            .ok_or(Error::ArithmeticOverflow)?;
+
+        let network_fee = amount
+            .checked_mul(network_percentage)
+            .ok_or(Error::ArithmeticOverflow)?
+            .checked_div(10000)
+            .ok_or(Error::ArithmeticOverflow)?;
+
         let mut total_fee = platform_fee
             .checked_add(forex_fee)
             .ok_or(Error::ArithmeticOverflow)?
-            .checked_add(compliance_flat)
+            .checked_add(compliance_fee)
             .ok_or(Error::ArithmeticOverflow)?
-            .checked_add(network_flat)
+            .checked_add(network_fee)
             .ok_or(Error::ArithmeticOverflow)?;
 
         let min_fee = env
@@ -944,8 +956,8 @@ impl PaymentEscrowContract {
         Ok(FeeBreakdown {
             platform_fee,
             forex_fee,
-            compliance_fee: compliance_flat,
-            network_fee: network_flat,
+            compliance_fee,
+            network_fee,
             total_fee,
         })
     }
@@ -6304,7 +6316,7 @@ mod test {
     }
 
     #[test]
-    fn test_compliance_flat_fee() {
+    fn test_compliance_fee_percentage() {
         let env = Env::default();
         env.mock_all_auths();
 
@@ -6314,10 +6326,11 @@ mod test {
         let admin = Address::generate(&env);
         client.init_escrow(&admin);
 
-        client.set_compliance_fee(&admin, &25);
+        client.set_compliance_fee(&admin, &250);
 
         let breakdown = client.get_fee_breakdown(&1000);
-        assert_eq!(breakdown.compliance_fee, 25);
+        let expected_compliance = 1000 * 250 / 10000;
+        assert_eq!(breakdown.compliance_fee, expected_compliance);
     }
 
     // === Multi-Party Approval Tests ===
