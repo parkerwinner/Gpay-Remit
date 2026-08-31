@@ -377,6 +377,15 @@ func (h *AuthHandler) SetupMFA(c *gin.Context) {
 		return
 	}
 
+	// Persist the generated secret so subsequent VerifyMFA can validate against it.
+	// The secret is stored before MFA is marked enabled; only VerifyMFA flips MFAEnabled.
+	if err := h.DB.Model(&user).Updates(map[string]interface{}{
+		"totp_secret": user.TOTPSecret,
+	}).Error; err != nil {
+		c.Error(errors.NewInternalError("Failed to save TOTP secret", err))
+		return
+	}
+
 	logger.Log.WithFields(logrus.Fields{
 		"user_id":  user.ID,
 		"endpoint": "/auth/mfa/setup",
@@ -430,7 +439,7 @@ func (h *AuthHandler) VerifyMFA(c *gin.Context) {
 
 // DisableMFA disables MFA for the user
 func (h *AuthHandler) DisableMFA(c *gin.Context) {
-	var req LoginRequest
+	var req SetupMFARequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.Error(errors.NewValidationError("Invalid request body", err.Error()))
 		return
