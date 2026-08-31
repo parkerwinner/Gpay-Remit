@@ -228,7 +228,7 @@ func TestCalculateDateRange(t *testing.T) {
 			period:      "yearly",
 			expectError: false,
 			validateRange: func(t *testing.T, start, end time.Time) {
-				assert.Equal(t, 1, start.Month())
+				assert.Equal(t, 1, int(start.Month()))
 				assert.Equal(t, 1, start.Day())
 				assert.NotEqual(t, start.Year(), end.Year())
 			},
@@ -295,4 +295,74 @@ func TestGetTopCorridors_WithLimit(t *testing.T) {
 	assert.Equal(t, 1, len(corridors))
 	assert.Equal(t, "USD", corridors[0].SourceCurrency)
 	assert.Equal(t, "EUR", corridors[0].DestinationCurrency)
+}
+
+func TestGetSLAMetrics_WithSeedData(t *testing.T) {
+	db := setupTestDB(t)
+	seedTestData(t, db)
+
+	service := NewAnalyticsService(db)
+
+	now := time.Now()
+	startDate := now.Add(-24 * time.Hour)
+	endDate := now.Add(1 * time.Hour)
+
+	metrics, err := service.GetSLAMetrics("daily", startDate, endDate)
+	assert.NoError(t, err)
+	assert.NotNil(t, metrics)
+	assert.Equal(t, "daily", metrics.Period)
+	assert.Equal(t, 99.9, metrics.TargetUptimePercent)
+	assert.Equal(t, 500.0, metrics.TargetP95LatencyMs)
+	assert.Equal(t, int64(5), metrics.TotalRequests)
+	assert.Equal(t, int64(4), metrics.SuccessfulRequests)
+	assert.Equal(t, int64(1), metrics.FailedRequests)
+	assert.Equal(t, 80.0, metrics.ActualUptimePercent)
+	assert.False(t, metrics.UptimeSLAMet)
+	assert.True(t, metrics.LatencySLAMet)
+	assert.False(t, metrics.OverallSLAMet)
+}
+
+func TestGetSLAMetrics_HighAvailability(t *testing.T) {
+	db := setupTestDB(t)
+	// Seed 1000 completed payments
+	now := time.Now()
+	for i := 0; i < 100; i++ {
+		db.Create(&models.Payment{
+			SenderID:    1,
+			RecipientID: 2,
+			Amount:      100.0,
+			Currency:    "USD",
+			Status:      "completed",
+			CreatedAt:   now.Add(-10 * time.Minute),
+		})
+	}
+
+	service := NewAnalyticsService(db)
+	startDate := now.Add(-24 * time.Hour)
+	endDate := now.Add(1 * time.Hour)
+
+	metrics, err := service.GetSLAMetrics("daily", startDate, endDate)
+	assert.NoError(t, err)
+	assert.NotNil(t, metrics)
+	assert.Equal(t, 100.0, metrics.ActualUptimePercent)
+	assert.True(t, metrics.UptimeSLAMet)
+	assert.True(t, metrics.LatencySLAMet)
+	assert.True(t, metrics.OverallSLAMet)
+}
+
+func TestGetSLAMetrics_EmptyData(t *testing.T) {
+	db := setupTestDB(t)
+	service := NewAnalyticsService(db)
+
+	now := time.Now()
+	startDate := now.Add(-24 * time.Hour)
+	endDate := now.Add(1 * time.Hour)
+
+	metrics, err := service.GetSLAMetrics("daily", startDate, endDate)
+	assert.NoError(t, err)
+	assert.NotNil(t, metrics)
+	assert.Equal(t, 100.0, metrics.ActualUptimePercent)
+	assert.True(t, metrics.UptimeSLAMet)
+	assert.True(t, metrics.LatencySLAMet)
+	assert.True(t, metrics.OverallSLAMet)
 }

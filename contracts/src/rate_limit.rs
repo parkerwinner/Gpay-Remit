@@ -14,6 +14,7 @@ pub enum FunctionType {
     Refund,
     Remittance,
     Invoice,
+    Batch,
 }
 
 #[derive(Clone, Debug)]

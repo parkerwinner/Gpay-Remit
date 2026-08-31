@@ -1,0 +1,146 @@
+# Gpay-Remit — Multi-Channel Alerting Configuration
+# Issue #280: External Uptime Monitoring
+#
+# Supported channels:
+#   • Email  (SMTP via UptimeRobot + direct SMTP fallback)
+#   • Slack  (Incoming Webhook)
+#   • Webhook / PagerDuty
+#   • SMS    (Twilio via UptimeRobot)
+#
+# All values marked REPLACE_WITH_* must be set as GitHub Actions secrets
+# and/or environment variables before running setup_monitoring.sh.
+
+# ---------------------------------------------------------------------------
+# Global alert behaviour
+# ---------------------------------------------------------------------------
+alert_settings:
+  # Number of consecutive failures before an alert is sent
+  failure_threshold: 1
+  # How often (minutes) to re-send an alert while a monitor is still down
+  reminder_interval: 30
+  # Send a "back up" notification when the monitor recovers
+  send_recovery_alert: true
+
+# ---------------------------------------------------------------------------
+# Channel: Email
+# ---------------------------------------------------------------------------
+email:
+  enabled: true
+  # Primary operations team distribution list
+  recipients:
+    - ops-team@your-company.com          # REPLACE with real address
+    - oncall@your-company.com            # REPLACE with real address
+  # Used for direct SMTP alerts (outside UptimeRobot) if needed
+  smtp:
+    host: smtp.your-company.com          # REPLACE or use env SMTP_HOST
+    port: 587
+    username: monitoring@your-company.com # REPLACE or env SMTP_USER
+    # Password supplied via env SMTP_PASSWORD (never commit plaintext)
+    from: "Gpay-Remit Monitoring <monitoring@your-company.com>"
+    tls: true
+  # Alert templates
+  subjects:
+    down: "[DOWN] Gpay-Remit: {monitor_friendly_name} is unreachable"
+    up:   "[UP]   Gpay-Remit: {monitor_friendly_name} has recovered"
+  # Escalation: if still down after 15 min, also email on-call manager
+  escalation:
+    enabled: true
+    delay_minutes: 15
+    recipients:
+      - oncall-manager@your-company.com  # REPLACE with real address
+
+# ---------------------------------------------------------------------------
+# Channel: Slack
+# ---------------------------------------------------------------------------
+slack:
+  enabled: true
+  # Incoming webhook URL — store as GitHub secret SLACK_WEBHOOK_URL
+  webhook_url: "${SLACK_WEBHOOK_URL}"
+  channel: "#infra-alerts"
+  username: "UptimeRobot"
+  icon_emoji: ":rotating_light:"
+  # Severity routing: critical monitors also ping #incidents
+  routing:
+    critical_tags:
+      - critical
+    critical_channel: "#incidents"
+  message_template:
+    down: |
+      :red_circle: *DOWN* — `{monitor_friendly_name}`
+      *URL:* {monitor_url}
+      *Time:* {alert_datetime}
+      *Duration down:* {duration}
+    up: |
+      :large_green_circle: *UP* — `{monitor_friendly_name}` has recovered
+      *URL:* {monitor_url}
+      *Downtime:* {duration}
+
+# ---------------------------------------------------------------------------
+# Channel: Webhook (PagerDuty / custom)
+# ---------------------------------------------------------------------------
+webhook:
+  enabled: true
+  # Primary webhook — PagerDuty Events API v2
+  pagerduty:
+    enabled: true
+    # Integration key stored as GitHub secret PAGERDUTY_INTEGRATION_KEY
+    integration_key: "${PAGERDUTY_INTEGRATION_KEY}"
+    endpoint: "https://events.pagerduty.com/v2/enqueue"
+    severity_map:
+      critical: "critical"
+      warning:  "warning"
+      info:     "info"
+    # Auto-resolve the incident when monitor comes back up
+    auto_resolve: true
+  # Custom internal webhook (optional)
+  custom:
+    enabled: false
+    url: "${CUSTOM_WEBHOOK_URL}"       # REPLACE or leave disabled
+    method: POST
+    headers:
+      Content-Type: "application/json"
+      Authorization: "Bearer ${CUSTOM_WEBHOOK_TOKEN}"
+    payload_template: |
+      {
+        "event": "{alert_type}",
+        "monitor": "{monitor_friendly_name}",
+        "url": "{monitor_url}",
+        "timestamp": "{alert_datetime}",
+        "details": "{alert_details}"
+      }
+
+# ---------------------------------------------------------------------------
+# Channel: SMS (Twilio via UptimeRobot)
+# ---------------------------------------------------------------------------
+sms:
+  enabled: true
+  # UptimeRobot handles SMS delivery — configure the phone numbers in the
+  # UptimeRobot dashboard and reference the contact ID in uptimerobot.yml.
+  # The entries below are for documentation / IaC reference only.
+  recipients:
+    - name: "On-call Engineer"
+      phone: "+1XXXXXXXXXX"            # REPLACE with real number
+    - name: "Backup On-call"
+      phone: "+1XXXXXXXXXX"            # REPLACE with real number
+  # Only send SMS for monitors tagged "critical" to avoid alert fatigue
+  filter_tags:
+    - critical
+  # SMS is only triggered after the failure_threshold above is exceeded
+  # AND the monitor has been down for at least sms_delay_minutes
+  sms_delay_minutes: 5
+
+# ---------------------------------------------------------------------------
+# Status page (optional — UptimeRobot public status page)
+# ---------------------------------------------------------------------------
+status_page:
+  enabled: true
+  # Public status page URL after creation in UptimeRobot dashboard
+  url: "https://status.gpay-remit.example.com"  # REPLACE with real URL
+  custom_domain: true
+  show_monitors:
+    - "[Gpay-Remit] Health Check"
+    - "[Gpay-Remit] Frontend"
+    - "[Gpay-Remit] Auth Login Endpoint"
+    - "[Gpay-Remit] Remittances API"
+    - "[Gpay-Remit] Fee Calculator API"
+    - "[Gpay-Remit] Exchange Rates API"

@@ -13,10 +13,14 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/yourusername/gpay-remit/config"
+	"github.com/yourusername/gpay-remit/graphql"
 	"github.com/yourusername/gpay-remit/handlers"
+	"github.com/yourusername/gpay-remit/models"
 	"github.com/yourusername/gpay-remit/logger"
+	"github.com/yourusername/gpay-remit/metrics"
 	"github.com/yourusername/gpay-remit/middleware"
 	"github.com/yourusername/gpay-remit/services"
+	"github.com/yourusername/gpay-remit/utils"
 	"github.com/yourusername/gpay-remit/workers"
 )
 
@@ -37,12 +41,25 @@ func main() {
 		logger.Log.WithField("error", err).Fatal("Failed to connect to database")
 	}
 
+	// Initialize Redis — non-fatal: the app runs without Redis but cache and
+	// some health-check fields will be degraded.
+	if err := utils.InitRedis(cfg.RedisAddr, cfg.RedisPassword, cfg.RedisDB); err != nil {
+		logger.Log.WithField("error", err).Warn("Redis unavailable — continuing without cache")
+	} else {
+		logger.Log.WithField("addr", cfg.RedisAddr).Info("Redis connected")
+	}
+
 	router := gin.New()
 	router.Use(gin.Recovery())
+	router.Use(middleware.PrometheusMetrics())
 	router.Use(middleware.RequestIDMiddleware())
 	router.Use(middleware.RequestLogger())
 	router.Use(middleware.ErrorHandler())
 	router.Use(middleware.VersionMiddleware())
+	router.Use(middleware.TLSMiddleware())
+	router.Use(middleware.CSRFProtection())
+
+	router.GET("/metrics", gin.WrapH(metrics.Handler()))
 
 	router.Use(func(c *gin.Context) {
 		c.Writer.Header().Set("Access-Control-Allow-Origin", "*")
@@ -55,7 +72,7 @@ func main() {
 		c.Next()
 	})
 
-	healthHandler := handlers.NewHealthHandler(db, cfg)
+	healthHandler := handlers.NewHealthHandlerWithRedis(db, cfg, utils.RedisClient)
 	router.GET("/health", healthHandler.Health)
 	router.GET("/health/ready", healthHandler.Ready)
 	router.GET("/health/live", healthHandler.Live)
@@ -63,12 +80,21 @@ func main() {
 	router.GET("/api/docs", handlers.DocsUI)
 	router.GET("/api/docs/openapi.yaml", handlers.DocsSpec)
 
+		gqlServer := graphql.NewServer(db, cfg)
+	router.GET("/playground", gqlServer.PlaygroundHandler())
+	router.GET("/graphql/playground", gqlServer.PlaygroundHandler())
+	router.POST("/graphql", gqlServer.QueryHandler())
+	router.GET("/graphql", gqlServer.PlaygroundHandler())
+
 	api := router.Group("/api/v1")
 	{
-		authHandler := handlers.NewAuthHandler(db, cfg)
+		emailService := services.NewEmailService(cfg.SMTPHost, cfg.SMTPPort, cfg.SMTPUser, cfg.SMTPPassword, cfg.SMTPFrom, cfg.EmailEnabled)
+		authHandler := handlers.NewAuthHandler(db, cfg, emailService)
 		api.POST("/auth/register", authHandler.Register)
 		api.POST("/auth/login", authHandler.Login)
 		api.POST("/auth/refresh", authHandler.Refresh)
+		api.POST("/auth/forgot-password", authHandler.ForgotPassword)
+		api.POST("/auth/reset-password", authHandler.ResetPassword)
 
 		api.POST("/users", authHandler.Register)
 
@@ -76,6 +102,20 @@ func main() {
 		protected.Use(middleware.JwtAuthMiddleware(cfg))
 		protected.Use(middleware.AuditTrail(db))
 		{
+			protected.POST("/auth/logout", authHandler.Logout)
+			// 2FA endpoints — pquerna/otp based TOTP
+			protected.POST("/auth/mfa/setup", authHandler.SetupMFA)
+			protected.POST("/auth/mfa/verify", authHandler.VerifyMFA)
+			protected.POST("/auth/mfa/disable", authHandler.DisableMFA)
+			protected.GET("/auth/mfa/status", func(c *gin.Context) {
+				userID, _ := c.Get("userID")
+				var user models.User
+				if err := db.First(&user, userID).Error; err != nil {
+					c.JSON(404, gin.H{"error": "User not found"})
+					return
+				}
+				c.JSON(200, gin.H{"mfa_enabled": user.MFAEnabled})
+			})
 			remittanceHandler := handlers.NewRemittanceHandler(db, cfg)
 			protected.POST("/remittances/create", remittanceHandler.CreateRemittance)
 			protected.POST("/remittances", remittanceHandler.SendRemittance)
@@ -90,6 +130,9 @@ func main() {
 			feeService := services.NewFeeService(cfg)
 			feeHandler := handlers.NewFeeHandler(feeService)
 			protected.GET("/fees/calculate", feeHandler.Calculate)
+
+			exchangeRateHandler := handlers.NewExchangeRateHandler(cfg)
+			protected.GET("/exchange-rates", middleware.RateLimitMiddleware(cfg), exchangeRateHandler.GetRate)
 
 			auditHandler := handlers.NewAuditLogHandler(db)
 			protected.GET("/audit/logs", middleware.RequireRole("admin"), auditHandler.List)
@@ -101,6 +144,16 @@ func main() {
 			protected.POST("/admin/rate-limit/reset", middleware.RequireRole("admin"), middleware.AdminResetRateLimit(cfg))
 			protected.GET("/admin/rate-limit/view", middleware.RequireRole("admin"), middleware.AdminViewRateLimits(cfg))
 
+			// Payment request endpoints
+			emailService := services.NewEmailService(cfg.SMTPHost, cfg.SMTPPort, cfg.SMTPUser, cfg.SMTPPassword, cfg.SMTPFrom, cfg.EmailEnabled)
+			paymentRequestHandler := handlers.NewPaymentRequestHandler(db, feeService, emailService)
+			protected.POST("/payment-requests", paymentRequestHandler.CreatePaymentRequest)
+			protected.GET("/payment-requests", paymentRequestHandler.ListPaymentRequests)
+			protected.GET("/payment-requests/:id", paymentRequestHandler.GetPaymentRequest)
+			protected.POST("/payment-requests/:id/accept", paymentRequestHandler.AcceptPaymentRequest)
+			protected.POST("/payment-requests/:id/reject", paymentRequestHandler.RejectPaymentRequest)
+			protected.POST("/payment-requests/:id/cancel", paymentRequestHandler.CancelPaymentRequest)
+
 			// Webhook endpoints
 			webhookHandler := handlers.NewWebhookHandler(db)
 			protected.POST("/webhooks", webhookHandler.CreateWebhook)
@@ -111,21 +164,27 @@ func main() {
 			protected.GET("/webhooks/:id/deliveries", webhookHandler.GetWebhookDeliveries)
 			protected.POST("/webhooks/deliveries/:delivery_id/retry", webhookHandler.RetryWebhookDelivery)
 
+			
 			analyticsHandler := handlers.NewAnalyticsHandler(db)
 			protected.GET("/analytics/volume", middleware.RequireRole("admin"), analyticsHandler.GetVolumeMetrics)
 			protected.GET("/analytics/fees", middleware.RequireRole("admin"), analyticsHandler.GetFeeMetrics)
 			protected.GET("/analytics/success-rate", middleware.RequireRole("admin"), analyticsHandler.GetSuccessRate)
 			protected.GET("/analytics/top-corridors", middleware.RequireRole("admin"), analyticsHandler.GetTopCorridors)
+			protected.GET("/analytics/sla", middleware.RequireRole("admin"), analyticsHandler.GetSLAMetrics)
+
 		}
 	}
 
 	api2 := router.Group("/api/v2")
 	api2.Use(middleware.RequireVersion("v2"))
 	{
-		authHandler := handlers.NewAuthHandler(db, cfg)
+		emailService := services.NewEmailService(cfg.SMTPHost, cfg.SMTPPort, cfg.SMTPUser, cfg.SMTPPassword, cfg.SMTPFrom, cfg.EmailEnabled)
+		authHandler := handlers.NewAuthHandler(db, cfg, emailService)
 		api2.POST("/auth/register", authHandler.Register)
 		api2.POST("/auth/login", authHandler.Login)
 		api2.POST("/auth/refresh", authHandler.Refresh)
+		api2.POST("/auth/forgot-password", authHandler.ForgotPassword)
+		api2.POST("/auth/reset-password", authHandler.ResetPassword)
 
 		api2.POST("/users", authHandler.Register)
 
@@ -133,6 +192,19 @@ func main() {
 		protected.Use(middleware.JwtAuthMiddleware(cfg))
 		protected.Use(middleware.AuditTrail(db))
 		{
+			protected.POST("/auth/logout", authHandler.Logout)
+			protected.POST("/auth/mfa/setup", authHandler.SetupMFA)
+			protected.POST("/auth/mfa/verify", authHandler.VerifyMFA)
+			protected.POST("/auth/mfa/disable", authHandler.DisableMFA)
+			protected.GET("/auth/mfa/status", func(c *gin.Context) {
+				userID, _ := c.Get("userID")
+				var user models.User
+				if err := db.First(&user, userID).Error; err != nil {
+					c.JSON(404, gin.H{"error": "User not found"})
+					return
+				}
+				c.JSON(200, gin.H{"mfa_enabled": user.MFAEnabled})
+			})
 			remittanceHandler := handlers.NewRemittanceHandler(db, cfg)
 			protected.POST("/remittances/create", remittanceHandler.CreateRemittance)
 			protected.POST("/remittances", remittanceHandler.SendRemittance)
@@ -148,6 +220,9 @@ func main() {
 			feeHandler := handlers.NewFeeHandler(feeService)
 			protected.GET("/fees/calculate", feeHandler.Calculate)
 
+			exchangeRateHandler := handlers.NewExchangeRateHandler(cfg)
+			protected.GET("/exchange-rates", middleware.RateLimitMiddleware(cfg), exchangeRateHandler.GetRate)
+
 			auditHandler := handlers.NewAuditLogHandler(db)
 			protected.GET("/audit/logs", middleware.RequireRole("admin"), auditHandler.List)
 
@@ -156,6 +231,16 @@ func main() {
 
 			protected.POST("/admin/rate-limit/reset", middleware.RequireRole("admin"), middleware.AdminResetRateLimit(cfg))
 			protected.GET("/admin/rate-limit/view", middleware.RequireRole("admin"), middleware.AdminViewRateLimits(cfg))
+
+			// Payment request endpoints
+			emailService := services.NewEmailService(cfg.SMTPHost, cfg.SMTPPort, cfg.SMTPUser, cfg.SMTPPassword, cfg.SMTPFrom, cfg.EmailEnabled)
+			paymentRequestHandler := handlers.NewPaymentRequestHandler(db, feeService, emailService)
+			protected.POST("/payment-requests", paymentRequestHandler.CreatePaymentRequest)
+			protected.GET("/payment-requests", paymentRequestHandler.ListPaymentRequests)
+			protected.GET("/payment-requests/:id", paymentRequestHandler.GetPaymentRequest)
+			protected.POST("/payment-requests/:id/accept", paymentRequestHandler.AcceptPaymentRequest)
+			protected.POST("/payment-requests/:id/reject", paymentRequestHandler.RejectPaymentRequest)
+			protected.POST("/payment-requests/:id/cancel", paymentRequestHandler.CancelPaymentRequest)
 
 			webhookHandler := handlers.NewWebhookHandler(db)
 			protected.POST("/webhooks", webhookHandler.CreateWebhook)
@@ -166,11 +251,14 @@ func main() {
 			protected.GET("/webhooks/:id/deliveries", webhookHandler.GetWebhookDeliveries)
 			protected.POST("/webhooks/deliveries/:delivery_id/retry", webhookHandler.RetryWebhookDelivery)
 
+			
 			analyticsHandler := handlers.NewAnalyticsHandler(db)
 			protected.GET("/analytics/volume", middleware.RequireRole("admin"), analyticsHandler.GetVolumeMetrics)
 			protected.GET("/analytics/fees", middleware.RequireRole("admin"), analyticsHandler.GetFeeMetrics)
 			protected.GET("/analytics/success-rate", middleware.RequireRole("admin"), analyticsHandler.GetSuccessRate)
 			protected.GET("/analytics/top-corridors", middleware.RequireRole("admin"), analyticsHandler.GetTopCorridors)
+			protected.GET("/analytics/sla", middleware.RequireRole("admin"), analyticsHandler.GetSLAMetrics)
+
 		}
 	}
 
@@ -183,6 +271,8 @@ func main() {
 	var wg sync.WaitGroup
 	middleware.StartIdempotencyCleanupScheduler(baseCtx, &wg, db, time.Hour)
 	workers.StartMonitor(baseCtx, &wg)
+	workers.StartWebhookRetryWorker(baseCtx, &wg, db)
+	workers.StartPaymentRequestExpiryWorker(baseCtx, &wg, db)
 
 	errCh := make(chan error, 1)
 	go func() {

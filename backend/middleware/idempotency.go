@@ -1,7 +1,6 @@
 package middleware
 
 import (
-	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -83,52 +82,16 @@ func IdempotencyMiddleware(db *gorm.DB, config ...IdempotencyConfig) gin.Handler
 		// Calculate request hash
 		requestHash := calculateRequestHash(bodyBytes)
 
-		// Check for existing idempotency record
+		// Check for existing idempotency record. This is an optimization
+		// for the common repeat-request case (avoids attempting a Create
+		// — and the "processing" status flap it would cause — for a key
+		// we already know about); it is NOT what makes this race-safe.
+		// See the unique-constraint-violation handling below for that.
 		var existingRecord models.IdempotencyRecord
 		result := db.Where("idempotency_key = ?", idempotencyKey).First(&existingRecord)
 
 		if result.Error == nil {
-			// Record exists - check if it's the same request
-			if existingRecord.RequestHash != requestHash {
-				// Different request body with same key - return 409
-				c.AbortWithStatusJSON(http.StatusConflict, gin.H{
-					"error":         "Idempotency key already used with different request body",
-					"existing_hash": existingRecord.RequestHash,
-					"new_hash":      requestHash,
-				})
-				return
-			}
-
-			// Same request - check if response is still being processed
-			if existingRecord.Status == "processing" {
-				// Handle concurrent request - wait for response
-				handleConcurrentRequest(c, idempotencyKey, &existingRecord, db)
-				return
-			}
-
-			// Return cached response
-			c.Header("X-Idempotent-Replayed", "true")
-			c.Header("X-Idempotency-Key", idempotencyKey)
-
-			if existingRecord.ResponseStatus > 0 {
-				c.Status(existingRecord.ResponseStatus)
-			}
-
-			if existingRecord.ResponseBody != "" {
-				var responseBody interface{}
-				if err := json.Unmarshal([]byte(existingRecord.ResponseBody), &responseBody); err == nil {
-					c.JSON(existingRecord.ResponseStatus, responseBody)
-				} else {
-					c.JSON(existingRecord.ResponseStatus, gin.H{
-						"message": existingRecord.ResponseBody,
-					})
-				}
-				return
-			}
-
-			c.JSON(http.StatusOK, gin.H{
-				"message": "Cached response",
-			})
+			respondFromExistingRecord(c, idempotencyKey, &existingRecord, requestHash, db)
 			return
 		}
 
@@ -144,6 +107,24 @@ func IdempotencyMiddleware(db *gorm.DB, config ...IdempotencyConfig) gin.Handler
 		}
 
 		if err := db.Create(&record).Error; err != nil {
+			// #195: the initial SELECT above found nothing, but another
+			// concurrent request with the same key may have inserted its
+			// own row in between that SELECT and this INSERT — the
+			// classic check-then-act race. Without a DB-level uniqueness
+			// guarantee, both requests would otherwise "win" and create
+			// duplicate records. migrations/000008 adds a unique index on
+			// idempotency_key, so the loser's INSERT fails here instead of
+			// silently succeeding — caught and redirected into the same
+			// existing-record handling the winner's concurrent request
+			// would get, rather than surfaced as a bare 500 to the client.
+			if isUniqueConstraintViolation(err) {
+				var raceWinnerRecord models.IdempotencyRecord
+				if fetchErr := db.Where("idempotency_key = ?", idempotencyKey).First(&raceWinnerRecord).Error; fetchErr == nil {
+					respondFromExistingRecord(c, idempotencyKey, &raceWinnerRecord, requestHash, db)
+					return
+				}
+			}
+
 			c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{
 				"error": "Failed to create idempotency record",
 			})
@@ -168,6 +149,65 @@ func IdempotencyMiddleware(db *gorm.DB, config ...IdempotencyConfig) gin.Handler
 		// After handler completes, update the record
 		updateIdempotencyRecord(c, idempotencyKey, db)
 	}
+}
+
+// respondFromExistingRecord writes the appropriate response for an
+// already-known idempotency record: a 409 if the same key was reused with
+// a different request body, a wait-for-completion if the original request
+// is still processing, or the cached response if it already completed.
+// Shared between the initial "record already existed" path and the
+// unique-constraint-violation fallback (#195) so both produce identical
+// behavior instead of the race-losing path being a degraded/different
+// experience from the normal repeat-request path.
+func respondFromExistingRecord(c *gin.Context, idempotencyKey string, existingRecord *models.IdempotencyRecord, requestHash string, db *gorm.DB) {
+	if existingRecord.RequestHash != requestHash {
+		c.AbortWithStatusJSON(http.StatusConflict, gin.H{
+			"error":         "Idempotency key already used with different request body",
+			"existing_hash": existingRecord.RequestHash,
+			"new_hash":      requestHash,
+		})
+		return
+	}
+
+	if existingRecord.Status == "processing" {
+		handleConcurrentRequest(c, idempotencyKey, existingRecord, db)
+		return
+	}
+
+	c.Header("X-Idempotent-Replayed", "true")
+	c.Header("X-Idempotency-Key", idempotencyKey)
+
+	if existingRecord.ResponseStatus > 0 {
+		c.Status(existingRecord.ResponseStatus)
+	}
+
+	if existingRecord.ResponseBody != "" {
+		var responseBody interface{}
+		if err := json.Unmarshal([]byte(existingRecord.ResponseBody), &responseBody); err == nil {
+			c.JSON(existingRecord.ResponseStatus, responseBody)
+		} else {
+			c.JSON(existingRecord.ResponseStatus, gin.H{
+				"message": existingRecord.ResponseBody,
+			})
+		}
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"message": "Cached response",
+	})
+}
+
+// isUniqueConstraintViolation reports whether err came from violating a
+// unique index/constraint. Matches the same substring-based detection this
+// codebase already uses in handlers/auth.go's Register handler, rather
+// than depending on a specific database driver's typed error.
+func isUniqueConstraintViolation(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "unique") || strings.Contains(msg, "duplicate") || strings.Contains(msg, "UNIQUE")
 }
 
 // isMethodAllowed checks if the HTTP method requires idempotency
@@ -283,8 +323,8 @@ func updateIdempotencyRecord(c *gin.Context, key string, db *gorm.DB) {
 	record.Status = "completed"
 	record.ResponseStatus = statusCode
 	record.ResponseBody = responseBody
-	now := time.Now()
-	record.CompletedAt = &now
+	completedAt := time.Now()
+	record.CompletedAt = &completedAt
 
 	if err := db.Save(&record).Error; err != nil {
 		return

@@ -1,6 +1,8 @@
 package middleware
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"net/http"
 	"strings"
@@ -9,6 +11,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/yourusername/gpay-remit/config"
+	"github.com/yourusername/gpay-remit/utils"
 )
 
 // Claims represents the JWT claims
@@ -21,12 +24,17 @@ type Claims struct {
 // GenerateToken creates a new JWT token for a user
 func GenerateToken(userID uint, role string, secret string, expiry time.Duration) (string, error) {
 	expirationTime := time.Now().Add(expiry)
+	jtiBytes := make([]byte, 16)
+	rand.Read(jtiBytes)
+	jti := hex.EncodeToString(jtiBytes)
+
 	claims := &Claims{
 		UserID: userID,
 		Role:   role,
 		RegisteredClaims: jwt.RegisteredClaims{
 			ExpiresAt: jwt.NewNumericDate(expirationTime),
 			IssuedAt:  jwt.NewNumericDate(time.Now()),
+			ID:        jti,
 		},
 	}
 
@@ -75,6 +83,17 @@ func JwtAuthMiddleware(cfg *config.Config) gin.HandlerFunc {
 			c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid token", "code": "InvalidToken"})
 			c.Abort()
 			return
+		}
+
+		// Check if token is revoked
+		if claims.ID != "" {
+			var isRevoked bool
+			found, err := utils.GetCached("revoked:"+claims.ID, &isRevoked)
+			if err == nil && found && isRevoked {
+				c.JSON(http.StatusUnauthorized, gin.H{"error": "Token has been revoked", "code": "RevokedToken"})
+				c.Abort()
+				return
+			}
 		}
 
 		// Set user information in context

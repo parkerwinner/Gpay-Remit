@@ -1,0 +1,15 @@
+{
+  "name": "@gpay-remit/sdk",
+  "version": "1.0.0",
+  "description": "Official JavaScript SDK for the Gpay-Remit cross-border payment API",
+  "main": "index.js",
+  "types": "index.d.ts",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/parkerwinner/Gpay-Remit",
+    "directory": "sdks/javascript"
+  },
+  "keywords": ["gpay-remit", "stellar", "cross-border", "payments", "remittance"],
+  "engines": { "node": ">=18.0.0" }
+}

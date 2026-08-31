@@ -9,6 +9,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
+	"github.com/yourusername/gpay-remit/middleware"
 	"github.com/yourusername/gpay-remit/models"
 	"github.com/yourusername/gpay-remit/services"
 	"gorm.io/driver/sqlite"
@@ -22,37 +23,43 @@ func setupAnalyticsTestDB(t *testing.T) *gorm.DB {
 	err = db.AutoMigrate(&models.Payment{})
 	assert.NoError(t, err)
 
+	// Use times anchored to the start of today (local time, matching
+	// CalculateDateRange which uses now.Location()) so all payments fall within
+	// the daily date range regardless of what hour the tests run. Subtracting
+	// hours from time.Now() can cross midnight when tests run early in the day,
+	// which causes the analytics queries to miss records.
 	now := time.Now()
+	todayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
 	testPayments := []models.Payment{
 		{
-			SenderID:         1,
-			RecipientID:      2,
-			Amount:           1000.00,
-			Currency:         "USD",
-			TargetCurrency:   "EUR",
-			ConvertedAmount:  950.00,
-			Status:           "completed",
-			Fee:              10.00,
-			PlatformFee:      5.00,
-			ForexFee:         2.50,
-			ComplianceFee:    1.00,
-			NetworkFee:       1.50,
-			CreatedAt:        now.Add(-1 * time.Hour),
+			SenderID:        1,
+			RecipientID:     2,
+			Amount:          1000.00,
+			Currency:        "USD",
+			TargetCurrency:  "EUR",
+			ConvertedAmount: 950.00,
+			Status:          "completed",
+			Fee:             10.00,
+			PlatformFee:     5.00,
+			ForexFee:        2.50,
+			ComplianceFee:   1.00,
+			NetworkFee:      1.50,
+			CreatedAt:       todayStart.Add(1 * time.Hour),
 		},
 		{
-			SenderID:         1,
-			RecipientID:      3,
-			Amount:           2000.00,
-			Currency:         "USD",
-			TargetCurrency:   "GBP",
-			ConvertedAmount:  1600.00,
-			Status:           "completed",
-			Fee:              20.00,
-			PlatformFee:      10.00,
-			ForexFee:         5.00,
-			ComplianceFee:    2.00,
-			NetworkFee:       3.00,
-			CreatedAt:        now.Add(-2 * time.Hour),
+			SenderID:        1,
+			RecipientID:     3,
+			Amount:          2000.00,
+			Currency:        "USD",
+			TargetCurrency:  "GBP",
+			ConvertedAmount: 1600.00,
+			Status:          "completed",
+			Fee:             20.00,
+			PlatformFee:     10.00,
+			ForexFee:        5.00,
+			ComplianceFee:   2.00,
+			NetworkFee:      3.00,
+			CreatedAt:       todayStart.Add(2 * time.Hour),
 		},
 		{
 			SenderID:    2,
@@ -60,7 +67,7 @@ func setupAnalyticsTestDB(t *testing.T) *gorm.DB {
 			Amount:      500.00,
 			Currency:    "USD",
 			Status:      "failed",
-			CreatedAt:   now.Add(-3 * time.Hour),
+			CreatedAt:   todayStart.Add(3 * time.Hour),
 		},
 		{
 			SenderID:    3,
@@ -68,7 +75,7 @@ func setupAnalyticsTestDB(t *testing.T) *gorm.DB {
 			Amount:      750.00,
 			Currency:    "USD",
 			Status:      "pending",
-			CreatedAt:   now.Add(-30 * time.Minute),
+			CreatedAt:   todayStart.Add(4 * time.Hour),
 		},
 	}
 
@@ -116,6 +123,7 @@ func TestGetVolumeMetrics(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			router := gin.New()
+	router.Use(middleware.ErrorHandler())
 			router.GET("/analytics/volume", handler.GetVolumeMetrics)
 
 			req := httptest.NewRequest(http.MethodGet, "/analytics/volume"+tt.queryParams, nil)
@@ -138,6 +146,7 @@ func TestGetFeeMetrics(t *testing.T) {
 	handler := NewAnalyticsHandler(db)
 
 	router := gin.New()
+	router.Use(middleware.ErrorHandler())
 	router.GET("/analytics/fees", handler.GetFeeMetrics)
 
 	req := httptest.NewRequest(http.MethodGet, "/analytics/fees?period=daily", nil)
@@ -165,6 +174,7 @@ func TestGetSuccessRate(t *testing.T) {
 	handler := NewAnalyticsHandler(db)
 
 	router := gin.New()
+	router.Use(middleware.ErrorHandler())
 	router.GET("/analytics/success-rate", handler.GetSuccessRate)
 
 	req := httptest.NewRequest(http.MethodGet, "/analytics/success-rate?period=daily", nil)
@@ -234,6 +244,7 @@ func TestGetTopCorridors(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			router := gin.New()
+	router.Use(middleware.ErrorHandler())
 			router.GET("/analytics/top-corridors", handler.GetTopCorridors)
 
 			req := httptest.NewRequest(http.MethodGet, "/analytics/top-corridors"+tt.queryParams, nil)
@@ -288,4 +299,33 @@ func TestGetCacheDuration(t *testing.T) {
 			assert.Equal(t, tt.expected, result)
 		})
 	}
+}
+
+func TestAnalyticsHandler_GetSLAMetrics(t *testing.T) {
+	db := setupAnalyticsTestDB(t)
+	handler := NewAnalyticsHandler(db)
+
+	router := gin.New()
+	router.Use(middleware.ErrorHandler())
+	router.GET("/analytics/sla", handler.GetSLAMetrics)
+
+	req := httptest.NewRequest(http.MethodGet, "/analytics/sla?period=daily", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	var response services.SLAMetrics
+	err := json.Unmarshal(w.Body.Bytes(), &response)
+	assert.NoError(t, err)
+	assert.Equal(t, "daily", response.Period)
+	assert.Equal(t, 99.9, response.TargetUptimePercent)
+	assert.Equal(t, 500.0, response.TargetP95LatencyMs)
+	assert.Equal(t, int64(4), response.TotalRequests)
+	assert.Equal(t, int64(3), response.SuccessfulRequests)
+	assert.Equal(t, int64(1), response.FailedRequests)
+	assert.Equal(t, 75.0, response.ActualUptimePercent)
+	assert.False(t, response.UptimeSLAMet)
+	assert.True(t, response.LatencySLAMet)
+	assert.False(t, response.OverallSLAMet)
 }

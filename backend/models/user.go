@@ -1,30 +1,52 @@
 package models
 
 import (
+	"crypto/sha1"
+	"encoding/hex"
 	"errors"
+	"fmt"
+	"io"
+	"net/http"
+	"strings"
 	"time"
 	"unicode"
 
+	"github.com/pquerna/otp/totp"
+	"github.com/yourusername/gpay-remit/encryption"
 	"golang.org/x/crypto/bcrypt"
 	"gorm.io/gorm"
 )
 
 type User struct {
-	ID                  uint           `gorm:"primaryKey" json:"id"`
-	CreatedAt           time.Time      `json:"created_at"`
-	UpdatedAt           time.Time      `json:"updated_at"`
-	DeletedAt           gorm.DeletedAt `gorm:"index" json:"-"`
-	Email               string         `gorm:"uniqueIndex;size:255;not null" json:"email"`
-	Name                string         `gorm:"size:255;not null" json:"name"`
-	StellarAddress      string         `gorm:"uniqueIndex;size:56;not null" json:"stellar_address"`
-	PasswordHash        string         `gorm:"size:255;not null" json:"-"`
-	Role                string         `gorm:"size:20;default:'user'" json:"role"`
-	Country             string         `gorm:"size:2" json:"country"`
-	KYCStatus           string         `gorm:"size:20;default:'pending'" json:"kyc_status"`
-	KYCVerifiedAt       *time.Time     `json:"kyc_verified_at"`
-	IsActive            bool           `gorm:"index;default:true" json:"is_active"`
-	DefaultCurrency     string         `gorm:"size:10;default:'USD'" json:"default_currency"`
-	EmailNotifications  bool           `gorm:"default:true" json:"email_notifications"`
+	ID                    uint           `gorm:"primaryKey" json:"id"`
+	CreatedAt             time.Time      `json:"created_at"`
+	UpdatedAt             time.Time      `json:"updated_at"`
+	DeletedAt             gorm.DeletedAt `gorm:"index" json:"-"`
+	Email                 string         `gorm:"uniqueIndex;size:255;not null" json:"email"`
+	Name                  string         `gorm:"size:255;not null" json:"name"`
+	StellarAddress        string         `gorm:"uniqueIndex;size:56;not null" json:"stellar_address"`
+	PasswordHash          string         `gorm:"size:255;not null" json:"-"`
+	Role                  string         `gorm:"size:20;default:'user'" json:"role"`
+	Country               string         `gorm:"size:2" json:"country"`
+	KYCStatus             string         `gorm:"size:20;default:'pending'" json:"kyc_status"`
+	KYCVerifiedAt         *time.Time     `json:"kyc_verified_at"`
+	IsActive              bool           `gorm:"index;default:true" json:"is_active"`
+	DefaultCurrency       string         `gorm:"size:10;default:'USD'" json:"default_currency"`
+	EmailNotifications    bool           `gorm:"default:true" json:"email_notifications"`
+	Preferences           string         `gorm:"type:jsonb;default:'{}'" json:"preferences"`
+	ResetToken            string         `gorm:"size:255;index" json:"-"`
+	ResetTokenExpiresAt   *time.Time     `json:"-"`
+	FailedLoginAttempts   int            `gorm:"default:0" json:"-"`
+	LockedUntil           *time.Time     `gorm:"index" json:"-"`
+	LastFailedLoginAt     *time.Time     `json:"-"`
+	TOTPSecret            string         `gorm:"size:255" json:"-"`
+	MFAEnabled            bool           `gorm:"default:false" json:"mfa_enabled"`
+	MFASetupCompletedAt   *time.Time     `json:"-"`
+
+	// Sensitive PII & banking fields encrypted at rest (#275)
+	SSN                   encryption.EncryptedString `gorm:"size:512" json:"-"`
+	BankAccountNumber     encryption.EncryptedString `gorm:"size:512" json:"-"`
+	TaxID                 encryption.EncryptedString `gorm:"size:512" json:"-"`
 }
 
 // TableName overrides the table name.
@@ -62,6 +84,44 @@ func ValidatePasswordStrength(password string) error {
 	if !hasSpecial {
 		return errors.New("password must contain at least one special character")
 	}
+
+	if err := checkCommonPassword(password); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// checkCommonPassword uses HaveIBeenPwned API (k-Anonymity) to check if the password is known
+func checkCommonPassword(password string) error {
+	hasher := sha1.New()
+	hasher.Write([]byte(password))
+	hash := strings.ToUpper(hex.EncodeToString(hasher.Sum(nil)))
+
+	prefix := hash[:5]
+	suffix := hash[5:]
+
+	url := fmt.Sprintf("https://api.pwnedpasswords.com/range/%s", prefix)
+	resp, err := http.Get(url)
+	if err != nil {
+		// Fail open if the external API is down so users can still register
+		return nil
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusOK {
+		bodyBytes, err := io.ReadAll(resp.Body)
+		if err == nil {
+			bodyString := string(bodyBytes)
+			lines := strings.Split(bodyString, "\n")
+			for _, line := range lines {
+				parts := strings.Split(strings.TrimSpace(line), ":")
+				if len(parts) >= 1 && parts[0] == suffix {
+					return errors.New("password is too common or has been compromised in a data breach")
+				}
+			}
+		}
+	}
 	return nil
 }
 
@@ -80,4 +140,81 @@ func HashPassword(password string) (string, error) {
 // ComparePassword reports whether the plaintext password matches the stored bcrypt hash.
 func ComparePassword(hash, password string) bool {
 	return bcrypt.CompareHashAndPassword([]byte(hash), []byte(password)) == nil
+}
+
+// IsAccountLocked checks if the user account is currently locked
+func (u *User) IsAccountLocked() bool {
+	if u.LockedUntil == nil {
+		return false
+	}
+	return time.Now().Before(*u.LockedUntil)
+}
+
+// RecordFailedLogin records a failed login attempt and locks account if threshold reached
+func (u *User) RecordFailedLogin(db *gorm.DB) error {
+	now := time.Now()
+	
+	// Reset counter if last failed login was more than 15 minutes ago
+	if u.LastFailedLoginAt != nil && now.Sub(*u.LastFailedLoginAt) > 15*time.Minute {
+		u.FailedLoginAttempts = 0
+	}
+	
+	u.FailedLoginAttempts++
+	u.LastFailedLoginAt = &now
+	
+	// Lock account after 5 failed attempts
+	if u.FailedLoginAttempts >= 5 {
+		lockUntil := now.Add(30 * time.Minute)
+		u.LockedUntil = &lockUntil
+	}
+	
+	return db.Save(u).Error
+}
+
+// ResetFailedLoginAttempts clears failed login attempts after successful login
+func (u *User) ResetFailedLoginAttempts(db *gorm.DB) error {
+	u.FailedLoginAttempts = 0
+	u.LastFailedLoginAt = nil
+	u.LockedUntil = nil
+	return db.Save(u).Error
+}
+
+// GenerateTOTPSecret creates a new TOTP secret for the user
+func (u *User) GenerateTOTPSecret() (string, string, error) {
+	key, err := totp.Generate(totp.GenerateOpts{
+		Issuer:      "GPay-Remit",
+		AccountName: u.Email,
+		Period:      30,
+		SecretSize:  32,
+	})
+	if err != nil {
+		return "", "", fmt.Errorf("failed to generate TOTP secret: %w", err)
+	}
+
+	u.TOTPSecret = key.Secret()
+	return key.Secret(), key.URL(), nil
+}
+
+// VerifyTOTP verifies a TOTP code against the user's secret
+func (u *User) VerifyTOTP(code string) bool {
+	if u.TOTPSecret == "" {
+		return false
+	}
+	return totp.Validate(code, u.TOTPSecret)
+}
+
+// EnableMFA enables MFA for the user
+func (u *User) EnableMFA(db *gorm.DB) error {
+	now := time.Now()
+	u.MFAEnabled = true
+	u.MFASetupCompletedAt = &now
+	return db.Save(u).Error
+}
+
+// DisableMFA disables MFA for the user
+func (u *User) DisableMFA(db *gorm.DB) error {
+	u.MFAEnabled = false
+	u.TOTPSecret = ""
+	u.MFASetupCompletedAt = nil
+	return db.Save(u).Error
 }

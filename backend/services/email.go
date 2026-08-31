@@ -6,10 +6,54 @@ import (
 	"fmt"
 	"html/template"
 	"net/smtp"
+	"regexp"
+	"strings"
 	"time"
 
 	"github.com/yourusername/gpay-remit/models"
 )
+
+// htmlTagPattern matches any `<...>` sequence, used by sanitizeEmailField
+// to strip markup from user-controlled text before it's placed into an
+// email template.
+var htmlTagPattern = regexp.MustCompile(`<[^>]*>`)
+
+// sanitizeEmailField neutralizes markup and control characters in
+// user-controlled text (#194) before it's substituted into an email
+// template.
+//
+// html/template (used for every template in this file, via
+// template.New(...).Parse(...).Execute(...)) already contextually
+// HTML-escapes every {{.Field}} substitution — verified directly: executing
+// a template with UserName = "<script>alert(1)</script>" produces
+// "&lt;script&gt;alert(1)&lt;/script&gt;" in the rendered body, not
+// executable markup. This function is deliberately redundant with that:
+// explicit sanitization at the point user input enters a template is worth
+// having so the property doesn't silently depend on every future template
+// staying on html/template (a switch to text/template, or a
+// template.HTML(...) cast to render pre-built HTML, would silently
+// reintroduce injection without this).
+func sanitizeEmailField(input string) string {
+	// Strip HTML/script tags entirely rather than escaping them here —
+	// html/template's own escaping is what actually makes the output safe
+	// to render; this pass exists to keep the *data* clean of markup
+	// regardless of which template engine ends up consuming it.
+	sanitized := htmlTagPattern.ReplaceAllString(input, "")
+
+	// Drop non-printable/control characters (keeps the visible content
+	// intact) — these have no legitimate reason to appear in a name,
+	// account reference, or failure reason, and some (CR/LF in
+	// particular) are the building blocks of header/log injection if this
+	// value is ever reused outside the HTML body context.
+	sanitized = strings.Map(func(r rune) rune {
+		if r < 0x20 || r == 0x7f {
+			return -1
+		}
+		return r
+	}, sanitized)
+
+	return strings.TrimSpace(sanitized)
+}
 
 type EmailService struct {
 	smtpHost     string
@@ -191,11 +235,11 @@ func (s *EmailService) SendPaymentCompletedEmail(user *models.User, payment *mod
 	}
 
 	data := map[string]interface{}{
-		"UserName":         user.Name,
+		"UserName":         sanitizeEmailField(user.Name),
 		"PaymentID":        payment.ID,
 		"Amount":           fmt.Sprintf("%.2f", payment.Amount),
 		"Currency":         payment.Currency,
-		"RecipientAccount": payment.RecipientAccount,
+		"RecipientAccount": sanitizeEmailField(payment.RecipientAccount),
 		"Fee":              fmt.Sprintf("%.4f", payment.Fee),
 		"Status":           payment.Status,
 		"Date":             payment.CreatedAt.Format("2006-01-02 15:04:05"),
@@ -293,11 +337,11 @@ func (s *EmailService) SendEscrowExpirationWarningEmail(user *models.User, payme
 	}
 
 	data := map[string]interface{}{
-		"UserName":         user.Name,
+		"UserName":         sanitizeEmailField(user.Name),
 		"PaymentID":        payment.ID,
 		"Amount":           fmt.Sprintf("%.2f", payment.Amount),
 		"Currency":         payment.Currency,
-		"RecipientAccount": payment.RecipientAccount,
+		"RecipientAccount": sanitizeEmailField(payment.RecipientAccount),
 		"EscrowID":         payment.EscrowID,
 		"HoursRemaining":   hoursRemaining,
 	}
@@ -384,12 +428,12 @@ func (s *EmailService) SendPaymentFailedEmail(user *models.User, payment *models
 	}
 
 	data := map[string]interface{}{
-		"UserName":         user.Name,
+		"UserName":         sanitizeEmailField(user.Name),
 		"PaymentID":        payment.ID,
 		"Amount":           fmt.Sprintf("%.2f", payment.Amount),
 		"Currency":         payment.Currency,
-		"RecipientAccount": payment.RecipientAccount,
-		"Reason":           reason,
+		"RecipientAccount": sanitizeEmailField(payment.RecipientAccount),
+		"Reason":           sanitizeEmailField(reason),
 		"Date":             time.Now().Format("2006-01-02 15:04:05"),
 	}
 
@@ -399,5 +443,347 @@ func (s *EmailService) SendPaymentFailedEmail(user *models.User, payment *models
 	}
 
 	subject := fmt.Sprintf("Payment #%d Failed", payment.ID)
+	return s.SendEmail(user.Email, subject, body.String())
+}
+
+
+// SendPasswordResetEmail sends a password reset link to the user
+func (s *EmailService) SendPasswordResetEmail(user *models.User, token string) error {
+	tmpl := `
+<!DOCTYPE html>
+<html>
+<head>
+    <style>
+        body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
+        .container { max-width: 600px; margin: 0 auto; padding: 20px; }
+        .header { background-color: #2196F3; color: white; padding: 20px; text-align: center; }
+        .content { padding: 20px; background-color: #f9f9f9; }
+        .info { background-color: #e3f2fd; border-left: 4px solid #2196F3; padding: 15px; margin: 15px 0; }
+        .cta { text-align: center; margin: 30px 0; }
+        .button { background-color: #2196F3; color: white; padding: 12px 30px; text-decoration: none; border-radius: 5px; display: inline-block; }
+        .token { background-color: #f5f5f5; padding: 15px; border-radius: 5px; font-family: monospace; word-break: break-all; margin: 15px 0; }
+        .warning { color: #f44336; font-weight: bold; margin: 15px 0; }
+        .footer { text-align: center; padding: 20px; font-size: 12px; color: #777; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>Password Reset Request</h1>
+        </div>
+        <div class="content">
+            <p>Hello {{.UserName}},</p>
+            
+            <p>We received a request to reset your password for your GPay-Remit account.</p>
+            
+            <div class="info">
+                <strong>Reset Token:</strong>
+                <div class="token">{{.Token}}</div>
+            </div>
+            
+            <p>This token will expire in <strong>1 hour</strong> for security reasons.</p>
+            
+            <div class="cta">
+                <p>Use this token to reset your password through the application.</p>
+            </div>
+            
+            <div class="warning">
+                ⚠️ If you did not request this password reset, please ignore this email and your password will remain unchanged.
+            </div>
+            
+            <p>For security reasons, we recommend:</p>
+            <ul>
+                <li>Never share this token with anyone</li>
+                <li>Use a strong, unique password</li>
+                <li>Enable two-factor authentication if available</li>
+            </ul>
+        </div>
+        <div class="footer">
+            <p>This is an automated email. Please do not reply.</p>
+            <p>GPay-Remit Security Team</p>
+        </div>
+    </div>
+</body>
+</html>
+`
+
+	t, err := template.New("password_reset").Parse(tmpl)
+	if err != nil {
+		return fmt.Errorf("failed to parse template: %w", err)
+	}
+
+	data := map[string]interface{}{
+		"UserName": sanitizeEmailField(user.Name),
+		"Token":    token,
+	}
+
+	var body bytes.Buffer
+	if err := t.Execute(&body, data); err != nil {
+		return fmt.Errorf("failed to execute template: %w", err)
+	}
+
+	subject := "Password Reset Request - GPay-Remit"
+	return s.SendEmail(user.Email, subject, body.String())
+}
+
+// SendPaymentRequestAcceptedEmail sends notification when a payment request is accepted
+func (s *EmailService) SendPaymentRequestAcceptedEmail(user *models.User, pr *models.PaymentRequest) error {
+	if !user.EmailNotifications {
+		return nil
+	}
+
+	tmpl := `
+<!DOCTYPE html>
+<html>
+<head>
+    <style>
+        body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
+        .container { max-width: 600px; margin: 0 auto; padding: 20px; }
+        .header { background-color: #4CAF50; color: white; padding: 20px; text-align: center; }
+        .content { padding: 20px; background-color: #f9f9f9; }
+        .details { background-color: white; padding: 15px; border-radius: 5px; margin: 15px 0; }
+        .detail-row { display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid #eee; }
+        .label { font-weight: bold; }
+        .footer { text-align: center; padding: 20px; font-size: 12px; color: #777; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>Payment Request Accepted ✓</h1>
+        </div>
+        <div class="content">
+            <p>Hello {{.UserName}},</p>
+            <p>Your payment request has been accepted and a payment has been initiated!</p>
+            
+            <div class="details">
+                <h3>Payment Request Details</h3>
+                <div class="detail-row">
+                    <span class="label">Request ID:</span>
+                    <span>{{.RequestID}}</span>
+                </div>
+                <div class="detail-row">
+                    <span class="label">Amount:</span>
+                    <span>{{.Amount}} {{.Currency}}</span>
+                </div>
+                <div class="detail-row">
+                    <span class="label">Description:</span>
+                    <span>{{.Description}}</span>
+                </div>
+                <div class="detail-row">
+                    <span class="label">Status:</span>
+                    <span style="color: #4CAF50; font-weight: bold;">Accepted</span>
+                </div>
+            </div>
+            
+            <p>Thank you for using GPay-Remit!</p>
+        </div>
+        <div class="footer">
+            <p>This is an automated email. Please do not reply.</p>
+        </div>
+    </div>
+</body>
+</html>
+`
+
+	t, err := template.New("payment_request_accepted").Parse(tmpl)
+	if err != nil {
+		return fmt.Errorf("failed to parse template: %w", err)
+	}
+
+	data := map[string]interface{}{
+		"UserName":    sanitizeEmailField(user.Name),
+		"RequestID":   pr.ID,
+		"Amount":      fmt.Sprintf("%.2f", pr.Amount),
+		"Currency":    pr.Currency,
+		"Description": sanitizeEmailField(pr.Description),
+	}
+
+	var body bytes.Buffer
+	if err := t.Execute(&body, data); err != nil {
+		return fmt.Errorf("failed to execute template: %w", err)
+	}
+
+	subject := fmt.Sprintf("Payment Request #%d Accepted", pr.ID)
+	return s.SendEmail(user.Email, subject, body.String())
+}
+
+// SendPaymentRequestRejectedEmail sends notification when a payment request is rejected
+func (s *EmailService) SendPaymentRequestRejectedEmail(user *models.User, pr *models.PaymentRequest) error {
+	if !user.EmailNotifications {
+		return nil
+	}
+
+	tmpl := `
+<!DOCTYPE html>
+<html>
+<head>
+    <style>
+        body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
+        .container { max-width: 600px; margin: 0 auto; padding: 20px; }
+        .header { background-color: #f44336; color: white; padding: 20px; text-align: center; }
+        .content { padding: 20px; background-color: #f9f9f9; }
+        .error { background-color: #ffebee; border-left: 4px solid #f44336; padding: 15px; margin: 15px 0; }
+        .details { background-color: white; padding: 15px; border-radius: 5px; margin: 15px 0; }
+        .detail-row { display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid #eee; }
+        .label { font-weight: bold; }
+        .footer { text-align: center; padding: 20px; font-size: 12px; color: #777; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>Payment Request Rejected</h1>
+        </div>
+        <div class="content">
+            <p>Hello {{.UserName}},</p>
+            
+            <div class="error">
+                <strong>Payment Request Rejected:</strong> Your payment request has been rejected.
+            </div>
+            
+            {{if .RejectionReason}}
+            <p><strong>Reason:</strong> {{.RejectionReason}}</p>
+            {{end}}
+            
+            <div class="details">
+                <h3>Payment Request Details</h3>
+                <div class="detail-row">
+                    <span class="label">Request ID:</span>
+                    <span>{{.RequestID}}</span>
+                </div>
+                <div class="detail-row">
+                    <span class="label">Amount:</span>
+                    <span>{{.Amount}} {{.Currency}}</span>
+                </div>
+                <div class="detail-row">
+                    <span class="label">Description:</span>
+                    <span>{{.Description}}</span>
+                </div>
+            </div>
+            
+            <p>You may want to contact the recipient for more information.</p>
+        </div>
+        <div class="footer">
+            <p>This is an automated email. Please do not reply.</p>
+        </div>
+    </div>
+</body>
+</html>
+`
+
+	t, err := template.New("payment_request_rejected").Parse(tmpl)
+	if err != nil {
+		return fmt.Errorf("failed to parse template: %w", err)
+	}
+
+	data := map[string]interface{}{
+		"UserName":        sanitizeEmailField(user.Name),
+		"RequestID":       pr.ID,
+		"Amount":          fmt.Sprintf("%.2f", pr.Amount),
+		"Currency":        pr.Currency,
+		"Description":     sanitizeEmailField(pr.Description),
+		"RejectionReason": sanitizeEmailField(pr.RejectionReason),
+	}
+
+	var body bytes.Buffer
+	if err := t.Execute(&body, data); err != nil {
+		return fmt.Errorf("failed to execute template: %w", err)
+	}
+
+	subject := fmt.Sprintf("Payment Request #%d Rejected", pr.ID)
+	return s.SendEmail(user.Email, subject, body.String())
+}
+
+// SendPaymentRequestReceivedEmail sends notification when a new payment request is received
+func (s *EmailService) SendPaymentRequestReceivedEmail(user *models.User, pr *models.PaymentRequest, requesterName string) error {
+	if !user.EmailNotifications {
+		return nil
+	}
+
+	tmpl := `
+<!DOCTYPE html>
+<html>
+<head>
+    <style>
+        body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
+        .container { max-width: 600px; margin: 0 auto; padding: 20px; }
+        .header { background-color: #2196F3; color: white; padding: 20px; text-align: center; }
+        .content { padding: 20px; background-color: #f9f9f9; }
+        .info { background-color: #e3f2fd; border-left: 4px solid #2196F3; padding: 15px; margin: 15px 0; }
+        .details { background-color: white; padding: 15px; border-radius: 5px; margin: 15px 0; }
+        .detail-row { display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid #eee; }
+        .label { font-weight: bold; }
+        .footer { text-align: center; padding: 20px; font-size: 12px; color: #777; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>New Payment Request</h1>
+        </div>
+        <div class="content">
+            <p>Hello {{.UserName}},</p>
+            
+            <div class="info">
+                <strong>{{.RequesterName}}</strong> has requested a payment from you.
+            </div>
+            
+            <div class="details">
+                <h3>Payment Request Details</h3>
+                <div class="detail-row">
+                    <span class="label">Request ID:</span>
+                    <span>{{.RequestID}}</span>
+                </div>
+                <div class="detail-row">
+                    <span class="label">Amount:</span>
+                    <span>{{.Amount}} {{.Currency}}</span>
+                </div>
+                <div class="detail-row">
+                    <span class="label">Description:</span>
+                    <span>{{.Description}}</span>
+                </div>
+                <div class="detail-row">
+                    <span class="label">Expires:</span>
+                    <span>{{.ExpiresAt}}</span>
+                </div>
+            </div>
+            
+            <p>Please review and respond to this payment request in your dashboard.</p>
+        </div>
+        <div class="footer">
+            <p>This is an automated email. Please do not reply.</p>
+        </div>
+    </div>
+</body>
+</html>
+`
+
+	t, err := template.New("payment_request_received").Parse(tmpl)
+	if err != nil {
+		return fmt.Errorf("failed to parse template: %w", err)
+	}
+
+	expiresAt := "No expiration"
+	if pr.ExpiresAt != nil {
+		expiresAt = pr.ExpiresAt.Format("2006-01-02 15:04:05")
+	}
+
+	data := map[string]interface{}{
+		"UserName":      sanitizeEmailField(user.Name),
+		"RequesterName": sanitizeEmailField(requesterName),
+		"RequestID":     pr.ID,
+		"Amount":        fmt.Sprintf("%.2f", pr.Amount),
+		"Currency":      pr.Currency,
+		"Description":   sanitizeEmailField(pr.Description),
+		"ExpiresAt":     expiresAt,
+	}
+
+	var body bytes.Buffer
+	if err := t.Execute(&body, data); err != nil {
+		return fmt.Errorf("failed to execute template: %w", err)
+	}
+
+	subject := fmt.Sprintf("New Payment Request #%d from %s", pr.ID, sanitizeEmailField(requesterName))
 	return s.SendEmail(user.Email, subject, body.String())
 }

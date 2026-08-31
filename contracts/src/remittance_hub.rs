@@ -98,8 +98,11 @@ pub struct Invoice {
     pub fees: i128,
     pub total_due: i128,
     pub status: InvoiceStatus,
+    /// All timestamps are UTC Unix seconds as returned by env.ledger().timestamp() (#201)
     pub created_at: u64,
+    /// Due date in UTC Unix seconds - timezone metadata implicit (#201)
     pub due_date: u64,
+    /// Payment timestamp in UTC Unix seconds (#201)
     pub paid_at: u64,
     pub description: String,
     pub escrow_id: u64,
@@ -125,6 +128,14 @@ pub struct EscrowRequest {
     pub expiration_timestamp: u64,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[contracttype]
+pub struct FeeConfig {
+    pub percentage: i128,
+    pub min_fee: i128,
+    pub max_fee: i128,
+}
+
 #[derive(Clone)]
 #[contracttype]
 pub struct EscrowData {
@@ -148,6 +159,7 @@ pub enum DataKey {
     MetricDaily(MetricType, u64),
     MetricWeekly(MetricType, u64),
     MaxBatchSize,
+    FeeConfig,
 }
 
 #[derive(Clone)]
@@ -304,6 +316,7 @@ impl RemittanceHubContract {
         let cached = CachedRate {
             rate,
             denominator,
+            // All timestamps are UTC Unix seconds as returned by env.ledger().timestamp() (#201)
             timestamp: env.ledger().timestamp(),
             from_asset: from_asset.clone(),
             to_asset: to_asset.clone(),
@@ -317,6 +330,63 @@ impl RemittanceHubContract {
 
     pub fn get_oracle_config(env: Env) -> Option<OracleConfig> {
         env.storage().persistent().get(&HubOracleKey::OracleConfig)
+    }
+
+    pub fn set_fee_config(env: Env, admin: Address, config: FeeConfig) -> Result<(), RemittanceError> {
+        admin.require_auth();
+        let stored_admin: Address = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Admin)
+            .ok_or(RemittanceError::Unauthorized)?;
+        if admin != stored_admin {
+            return Err(RemittanceError::Unauthorized);
+        }
+
+        if config.percentage < 0 || config.percentage > 10000 || config.min_fee < 0 || config.max_fee < config.min_fee {
+            return Err(RemittanceError::InvalidAmount);
+        }
+
+        env.storage().persistent().set(&DataKey::FeeConfig, &config);
+
+        events::emit(
+            &env,
+            symbol_short!("hub"),
+            symbol_short!("fee_cfg"),
+            0,
+            &admin,
+            config.percentage,
+            symbol_short!("na"),
+            EventData::AdminAction(symbol_short!("fee_cfg")),
+        );
+
+        Ok(())
+    }
+
+    pub fn get_fee_config(env: Env) -> Option<FeeConfig> {
+        env.storage().persistent().get(&DataKey::FeeConfig)
+    }
+
+    fn calculate_fee(env: &Env, amount: i128) -> i128 {
+        let config: FeeConfig = env.storage().persistent().get(&DataKey::FeeConfig).unwrap_or(FeeConfig {
+            percentage: 250,
+            min_fee: 0,
+            max_fee: i128::MAX,
+        });
+
+        let mut fees = amount
+            .checked_mul(config.percentage)
+            .unwrap_or(0)
+            .checked_div(10000)
+            .unwrap_or(0);
+
+        if fees < config.min_fee {
+            fees = config.min_fee;
+        } else if fees > config.max_fee {
+            fees = config.max_fee;
+        }
+
+        fees
     }
 
     pub fn configure_aml(
@@ -534,6 +604,7 @@ impl RemittanceHubContract {
                         amount,
                         risk_score: 0,
                         status: AmlStatus::Reviewing,
+                        // All timestamps are UTC Unix seconds as returned by env.ledger().timestamp() (#201)
                         timestamp: env.ledger().timestamp(),
                     };
                     env.storage()
@@ -691,6 +762,7 @@ impl RemittanceHubContract {
         }
 
         let current_time = env.ledger().timestamp();
+        // All timestamp comparisons use UTC Unix seconds as returned by env.ledger().timestamp() (#201)
         if due_date <= current_time {
             return Err(RemittanceError::DueDateInPast);
         }
@@ -704,12 +776,7 @@ impl RemittanceHubContract {
 
         let converted_amount = Self::convert_with_oracle(&env, amount, &asset.code);
 
-        let fee_percentage = 250;
-        let fees = amount
-            .checked_mul(fee_percentage)
-            .unwrap_or(0)
-            .checked_div(10000)
-            .unwrap_or(0);
+        let fees = Self::calculate_fee(&env, amount);
 
         let total_due = amount.checked_add(fees).unwrap_or(amount);
 
@@ -764,6 +831,7 @@ impl RemittanceHubContract {
                     code: invoice.asset.code.clone(),
                     issuer: invoice.asset.issuer.clone(),
                 },
+                amount,
                 total_due,
             ),
         );
@@ -809,6 +877,7 @@ impl RemittanceHubContract {
         }
 
         invoice.status = InvoiceStatus::Paid;
+        // All timestamps are UTC Unix seconds as returned by env.ledger().timestamp() (#201)
         invoice.paid_at = env.ledger().timestamp();
 
         env.storage()
@@ -840,6 +909,7 @@ impl RemittanceHubContract {
 
         let current_time = env.ledger().timestamp();
 
+        // All timestamp comparisons use UTC Unix seconds as returned by env.ledger().timestamp() (#201)
         if current_time <= invoice.due_date {
             return Err(RemittanceError::InvalidInvoiceStatus);
         }
@@ -935,12 +1005,7 @@ impl RemittanceHubContract {
             return Err(RemittanceError::InvalidInvoiceStatus);
         }
 
-        let fee_percentage = 250;
-        let fees = new_amount
-            .checked_mul(fee_percentage)
-            .unwrap_or(0)
-            .checked_div(10000)
-            .unwrap_or(0);
+        let fees = Self::calculate_fee(&env, new_amount);
 
         let _old_amount = invoice.amount;
         invoice.amount = new_amount;
@@ -980,6 +1045,7 @@ impl RemittanceHubContract {
         requests: soroban_sdk::Vec<EscrowRequest>,
     ) -> Result<soroban_sdk::Vec<u64>, RemittanceError> {
         sender.require_auth();
+        Self::enforce_rate_limit(&env, &sender, FunctionType::Batch)?;
 
         let max_batch = Self::get_max_batch_size(env.clone());
         if requests.len() > max_batch {
@@ -1016,6 +1082,7 @@ impl RemittanceHubContract {
         }
 
         let current_time = env.ledger().timestamp();
+        // All timestamp comparisons use UTC Unix seconds as returned by env.ledger().timestamp() (#201)
         if request.expiration_timestamp <= current_time {
             return Err(RemittanceError::DueDateInPast);
         }
@@ -1055,6 +1122,7 @@ impl RemittanceHubContract {
         token_address: Address,
     ) -> Result<(), RemittanceError> {
         sender.require_auth();
+        Self::enforce_rate_limit(&env, &sender, FunctionType::Batch)?;
 
         let max_batch = Self::get_max_batch_size(env.clone());
         if escrow_ids.len() > max_batch {
@@ -1063,7 +1131,6 @@ impl RemittanceHubContract {
 
         let mut total_amount: i128 = 0;
         let mut total_fees: i128 = 0;
-        let fee_percentage = 250;
 
         for id in escrow_ids.iter() {
             let mut escrow: EscrowData = env
@@ -1079,12 +1146,7 @@ impl RemittanceHubContract {
                 return Err(RemittanceError::InvalidStatus);
             }
 
-            let fees = escrow
-                .amount
-                .checked_mul(fee_percentage)
-                .unwrap_or(0)
-                .checked_div(10000)
-                .unwrap_or(0);
+            let fees = Self::calculate_fee(&env, escrow.amount);
 
             total_amount = total_amount
                 .checked_add(escrow.amount)
@@ -1132,6 +1194,7 @@ impl RemittanceHubContract {
         token_address: Address,
     ) -> Result<(), RemittanceError> {
         caller.require_auth();
+        Self::enforce_rate_limit(&env, &caller, FunctionType::Batch)?;
 
         let max_batch = Self::get_max_batch_size(env.clone());
         if escrow_ids.len() > max_batch {
@@ -1468,6 +1531,7 @@ impl RemittanceHubContract {
             return;
         }
 
+        // All timestamps are UTC Unix seconds as returned by env.ledger().timestamp() (#201)
         let now = env.ledger().timestamp();
         let day = now / 86400;
         let week = now / (86400 * 7);
@@ -2625,7 +2689,7 @@ mod test {
         let client = RemittanceHubContractClient::new(&env, &contract_id);
 
         let token_admin = Address::generate(&env);
-        let token_id = env.register_stellar_asset_contract(token_admin.clone());
+        let token_id = env.register_stellar_asset_contract_v2(token_admin.clone()).address();
         let token_client = soroban_sdk::token::StellarAssetClient::new(&env, &token_id);
 
         let sender = Address::generate(&env);
@@ -2725,9 +2789,31 @@ mod test {
             client.get_metric(&MetricType::Volume, &env.ledger().timestamp(), &false);
         assert_eq!(reset_volume, 0);
 
-        // Weekly should still be there
         let weekly_volume_after =
             client.get_metric(&MetricType::Volume, &env.ledger().timestamp(), &true);
         assert_eq!(weekly_volume_after, 1000);
+    }
+
+    #[test]
+    fn test_fee_config() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let contract_id = env.register_contract(None, RemittanceHubContract);
+        let client = RemittanceHubContractClient::new(&env, &contract_id);
+        let admin = Address::generate(&env);
+        client.init_hub(&admin);
+
+        let config = FeeConfig {
+            percentage: 300,
+            min_fee: 10,
+            max_fee: 1000,
+        };
+        client.set_fee_config(&admin, &config);
+
+        let stored_config = client.get_fee_config().unwrap();
+        assert_eq!(stored_config.percentage, 300);
+        assert_eq!(stored_config.min_fee, 10);
+        assert_eq!(stored_config.max_fee, 1000);
     }
 }

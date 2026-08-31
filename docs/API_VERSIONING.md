@@ -57,6 +57,26 @@ All API responses include the version that was used:
 X-API-Version: v2
 ```
 
+## Error Response Format
+
+All API errors return a standardized payload using the `ErrorResponse` structure:
+
+```json
+{
+  "error": {
+    "code": "VALIDATION_ERROR",
+    "message": "A human readable summary of the error",
+    "details": {
+      "field": "description"
+    }
+  }
+}
+```
+
+- `code` is a stable error code such as `VALIDATION_ERROR`, `NOT_FOUND`, `UNAUTHORIZED`, or `INTERNAL_ERROR`.
+- `message` is a client-friendly error summary.
+- `details` is optional and may include validation metadata or extra information.
+
 ## Version-Specific Endpoints
 
 Some endpoints may only be available in specific versions. If you request an endpoint that's not available in your requested version, you'll receive:

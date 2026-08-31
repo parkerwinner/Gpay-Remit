@@ -870,6 +870,39 @@ paths:
         '403':
           description: Admin role required
 
+  /analytics/sla:
+    get:
+      tags: [Analytics]
+      summary: SLA compliance and latency metrics (admin)
+      description: Returns operational SLA tracking metrics including 99.9% uptime and <500ms p95 latency targets.
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: query
+          name: period
+          schema:
+            type: string
+            enum: [daily, weekly, monthly, yearly]
+            default: daily
+          description: Aggregation period
+        - in: query
+          name: start_date
+          schema:
+            type: string
+            format: date
+          description: Custom start date (YYYY-MM-DD)
+        - in: query
+          name: end_date
+          schema:
+            type: string
+            format: date
+          description: Custom end date (YYYY-MM-DD)
+      responses:
+        '200':
+          description: SLA metrics report
+        '403':
+          description: Admin role required
+
   /audit/logs:
     get:
       tags: [Audit]

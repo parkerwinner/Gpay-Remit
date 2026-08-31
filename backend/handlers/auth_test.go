@@ -10,7 +10,9 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/yourusername/gpay-remit/config"
+	"github.com/yourusername/gpay-remit/middleware"
 	"github.com/yourusername/gpay-remit/models"
+	"github.com/yourusername/gpay-remit/services"
 )
 
 func setupAuthHandler(t *testing.T) (*AuthHandler, *gin.Engine) {
@@ -21,8 +23,9 @@ func setupAuthHandler(t *testing.T) (*AuthHandler, *gin.Engine) {
 		JWTSecret:        "test-secret",
 		JWTRefreshSecret: "test-refresh-secret",
 	}
-	handler := NewAuthHandler(db, cfg)
+	handler := NewAuthHandler(db, cfg, services.NewEmailService(cfg.SMTPHost, cfg.SMTPPort, cfg.SMTPUser, cfg.SMTPPassword, cfg.SMTPFrom, cfg.EmailEnabled))
 	router := gin.New()
+	router.Use(middleware.ErrorHandler())
 	router.POST("/auth/register", handler.Register)
 	router.POST("/auth/login", handler.Login)
 	router.POST("/auth/refresh", handler.Refresh)
@@ -36,7 +39,7 @@ func TestRegister(t *testing.T) {
 		body, _ := json.Marshal(map[string]string{
 			"email":           "test@example.com",
 			"name":            "Test User",
-			"password":        "Secure@123",
+			"password":        "Secure#9876Z",
 			"stellar_address": "GDQJUTQYK2MQX2VGDR2FYWLIYAQIEGXTQVTFEMGH6DNHFMHIDENFINMJTEST",
 		})
 		w := httptest.NewRecorder()
@@ -55,7 +58,7 @@ func TestRegister(t *testing.T) {
 		body, _ := json.Marshal(map[string]string{
 			"email":           "dup@example.com",
 			"name":            "First User",
-			"password":        "Secure@123",
+			"password":        "Secure#9876Z",
 			"stellar_address": "GDQJUTQYK2MQX2VGDR2FYWLIYAQIEGXTQVTFEMGH6DNHFMHIDENFINDUP1",
 		})
 		w := httptest.NewRecorder()
@@ -68,7 +71,7 @@ func TestRegister(t *testing.T) {
 		body2, _ := json.Marshal(map[string]string{
 			"email":           "dup@example.com",
 			"name":            "Second User",
-			"password":        "Secure@456",
+			"password":        "Secure#9876Z2",
 			"stellar_address": "GDQJUTQYK2MQX2VGDR2FYWLIYAQIEGXTQVTFEMGH6DNHFMHIDENFINDUP2",
 		})
 		w2 := httptest.NewRecorder()
@@ -122,7 +125,7 @@ func TestRegister(t *testing.T) {
 		body, _ := json.Marshal(map[string]string{
 			"email":           "not-an-email",
 			"name":            "Bad Email",
-			"password":        "Secure@123",
+			"password":        "Secure#9876Z",
 			"stellar_address": "GDQJUTQYK2MQX2VGDR2FYWLIYAQIEGXTQVTFEMGH6DNHFMHIDENFINBAD",
 		})
 		w := httptest.NewRecorder()
@@ -182,7 +185,7 @@ func TestLogin(t *testing.T) {
 	t.Run("Unknown Email Returns 401", func(t *testing.T) {
 		body, _ := json.Marshal(map[string]string{
 			"email":    "nobody@example.com",
-			"password": "Secure@123",
+			"password": "Secure#9876Z",
 		})
 		w := httptest.NewRecorder()
 		req, _ := http.NewRequest(http.MethodPost, "/auth/login", bytes.NewBuffer(body))
@@ -193,7 +196,7 @@ func TestLogin(t *testing.T) {
 
 	t.Run("Missing Email Field", func(t *testing.T) {
 		body, _ := json.Marshal(map[string]string{
-			"password": "Secure@123",
+			"password": "Secure#9876Z",
 		})
 		w := httptest.NewRecorder()
 		req, _ := http.NewRequest(http.MethodPost, "/auth/login", bytes.NewBuffer(body))
@@ -213,16 +216,18 @@ func TestLogin(t *testing.T) {
 	t.Run("Inactive User Returns 403", func(t *testing.T) {
 		handler, r := setupAuthHandler(t)
 
-		// Create inactive user directly in DB
+		// Create user first (IsActive defaults to true via GORM tag), then deactivate.
 		hash, _ := models.HashPassword("Secure@Inactive1")
 		user := models.User{
 			Email:          "inactive@example.com",
 			Name:           "Inactive User",
 			PasswordHash:   hash,
 			StellarAddress: "GDQJUTQYK2MQX2VGDR2FYWLIYAQIEGXTQVTFEMGH6DNHFMHIDENFINIAC",
-			IsActive:       false,
+			IsActive:       true,
 		}
 		handler.DB.Create(&user)
+		// Explicitly set IsActive = false after insert to bypass GORM zero-value handling.
+		handler.DB.Model(&user).Update("is_active", false)
 
 		body, _ := json.Marshal(map[string]string{
 			"email":    "inactive@example.com",

@@ -13,10 +13,21 @@ import (
 
 // RateLimiter stores rate limit information per user
 type RateLimiter struct {
-	mu       sync.RWMutex
-	limits   map[string]*UserLimit
-	config   *config.Config
+	mu              sync.RWMutex
+	limits          map[string]*UserLimit
+	config          *config.Config
 	cleanupInterval time.Duration
+	// staleAfter is how long an entry may go unaccessed before cleanup
+	// removes it. Separated from cleanupInterval (how often the sweep
+	// runs) so tests can exercise cleanup with short, deterministic
+	// intervals without changing what "stale" means in production.
+	staleAfter time.Duration
+	// stop, closed via Stop(), signals the cleanup goroutine to exit —
+	// without this there was previously no way to shut the goroutine down
+	// (fine for the process-lifetime singleton in production, but it
+	// meant a test constructing its own RateLimiter had no way to avoid
+	// leaking a goroutine that outlives the test).
+	stop chan struct{}
 }
 
 // UserLimit tracks request counts for a user
@@ -37,35 +48,67 @@ var (
 	rateLimiterOnce   sync.Once
 )
 
+// defaultCleanupInterval and defaultStaleAfter match this middleware's
+// documented behavior (#196): sweep for stale entries every 5 minutes,
+// removing anything not accessed in the last hour.
+const (
+	defaultCleanupInterval = 5 * time.Minute
+	defaultStaleAfter      = 1 * time.Hour
+)
+
 // GetRateLimiter returns the singleton rate limiter instance
 func GetRateLimiter(cfg *config.Config) *RateLimiter {
 	rateLimiterOnce.Do(func() {
-		globalRateLimiter = &RateLimiter{
-			limits:          make(map[string]*UserLimit),
-			config:          cfg,
-			cleanupInterval: 10 * time.Minute,
-		}
-		// Start cleanup goroutine
-		go globalRateLimiter.cleanup()
+		globalRateLimiter = newRateLimiter(cfg, defaultCleanupInterval, defaultStaleAfter)
 	})
 	return globalRateLimiter
 }
 
-// cleanup removes stale entries periodically
+// newRateLimiter constructs a RateLimiter and starts its cleanup goroutine.
+// Exposed (unexported) separately from GetRateLimiter so tests can build
+// an independent instance with short cleanupInterval/staleAfter values
+// instead of sharing — and being unable to reconfigure — the process-wide
+// singleton.
+func newRateLimiter(cfg *config.Config, cleanupInterval, staleAfter time.Duration) *RateLimiter {
+	rl := &RateLimiter{
+		limits:          make(map[string]*UserLimit),
+		config:          cfg,
+		cleanupInterval: cleanupInterval,
+		staleAfter:      staleAfter,
+		stop:            make(chan struct{}),
+	}
+	go rl.cleanup()
+	return rl
+}
+
+// Stop terminates the cleanup goroutine. Safe to call at most once per
+// RateLimiter (matching a channel's close-once semantics) — the process-
+// lifetime singleton returned by GetRateLimiter is never expected to call
+// this; it exists for tests that construct their own RateLimiter and want
+// to avoid leaking the cleanup goroutine past the test.
+func (rl *RateLimiter) Stop() {
+	close(rl.stop)
+}
+
+// cleanup removes stale entries periodically until Stop() is called.
 func (rl *RateLimiter) cleanup() {
 	ticker := time.NewTicker(rl.cleanupInterval)
 	defer ticker.Stop()
 
-	for range ticker.C {
-		rl.mu.Lock()
-		now := time.Now()
-		for key, limit := range rl.limits {
-			// Remove entries that haven't been accessed in the last hour
-			if now.Sub(limit.LastAccess) > time.Hour {
-				delete(rl.limits, key)
+	for {
+		select {
+		case <-rl.stop:
+			return
+		case <-ticker.C:
+			rl.mu.Lock()
+			now := time.Now()
+			for key, limit := range rl.limits {
+				if now.Sub(limit.LastAccess) > rl.staleAfter {
+					delete(rl.limits, key)
+				}
 			}
+			rl.mu.Unlock()
 		}
-		rl.mu.Unlock()
 	}
 }
 
@@ -144,6 +187,8 @@ func RateLimitMiddleware(cfg *config.Config) gin.HandlerFunc {
 		"POST /api/v1/invoices":           20,
 		"POST /api/v1/auth/login":         5,   // 5 login attempts per minute
 		"POST /api/v1/auth/register":      3,
+		"GET /api/v1/exchange-rates":      30, // 30 lookups per minute (backed by cache)
+		"GET /api/v2/exchange-rates":      30,
 		"default":                         100, // Default 100 requests per minute
 	}
 
