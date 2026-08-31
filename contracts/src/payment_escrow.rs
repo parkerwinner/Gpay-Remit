@@ -6316,7 +6316,7 @@ mod test {
     }
 
     #[test]
-    fn test_compliance_flat_fee() {
+    fn test_compliance_fee_percentage() {
         let env = Env::default();
         env.mock_all_auths();
 
@@ -6326,10 +6326,11 @@ mod test {
         let admin = Address::generate(&env);
         client.init_escrow(&admin);
 
-        client.set_compliance_fee(&admin, &25);
+        client.set_compliance_fee(&admin, &250);
 
         let breakdown = client.get_fee_breakdown(&1000);
-        assert_eq!(breakdown.compliance_fee, 25);
+        let expected_compliance = 1000 * 250 / 10000;
+        assert_eq!(breakdown.compliance_fee, expected_compliance);
     }
 
     // === Multi-Party Approval Tests ===

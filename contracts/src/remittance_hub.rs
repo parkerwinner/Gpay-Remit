@@ -2789,9 +2789,31 @@ mod test {
             client.get_metric(&MetricType::Volume, &env.ledger().timestamp(), &false);
         assert_eq!(reset_volume, 0);
 
-        // Weekly should still be there
         let weekly_volume_after =
             client.get_metric(&MetricType::Volume, &env.ledger().timestamp(), &true);
         assert_eq!(weekly_volume_after, 1000);
+    }
+
+    #[test]
+    fn test_fee_config() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let contract_id = env.register_contract(None, RemittanceHubContract);
+        let client = RemittanceHubContractClient::new(&env, &contract_id);
+        let admin = Address::generate(&env);
+        client.init_hub(&admin);
+
+        let config = FeeConfig {
+            percentage: 300,
+            min_fee: 10,
+            max_fee: 1000,
+        };
+        client.set_fee_config(&admin, &config);
+
+        let stored_config = client.get_fee_config().unwrap();
+        assert_eq!(stored_config.percentage, 300);
+        assert_eq!(stored_config.min_fee, 10);
+        assert_eq!(stored_config.max_fee, 1000);
     }
 }
