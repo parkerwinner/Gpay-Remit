@@ -48,7 +48,7 @@ export const resetPassword = (token, newPassword) =>
 // MFA (requires Authorization header)
 export const setupMFA = (password) => api.post("/auth/mfa/setup", { password });
 export const verifyMFA = (code) => api.post("/auth/mfa/verify", { code });
-export const disableMFA = (password) => api.post("/auth/mfa/disable", { password, email: "" });
+export const disableMFA = (password) => api.post("/auth/mfa/disable", { password });
 export const getMFAStatus = () => api.get("/auth/mfa/status");
 
 export default api;
