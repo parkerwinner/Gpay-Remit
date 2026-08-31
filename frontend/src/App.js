@@ -6,6 +6,7 @@ import InvoiceViewer from "./components/InvoiceViewer";
 import ErrorBoundary from "./components/ErrorBoundary";
 import TransactionHistory from "./pages/TransactionHistory";
 import Onboarding from "./components/Onboarding";
+import { WalletProvider } from "./contexts/WalletContext";
 import "./App.css";
 
 // #290: Simple i18n Context
@@ -50,65 +51,67 @@ function App() {
 
   return (
     <I18nContext.Provider value={{ lang, setLang, t }}>
-      <Router>
-        <div className={`App ${darkMode ? 'dark-mode' : ''}`}>
-          {/* #291: a11y Skip link */}
-          <a href="#main-content" className="skip-link">
-            {t.skipToMain}
-          </a>
-          <header className="App-header">
-            <div className="header-brand-row">
-              <h1>{t.brand}</h1>
-              <div className="header-controls">
-                <select value={lang} onChange={(e) => setLang(e.target.value)} aria-label="Select Language">
-                  <option value="en">EN</option>
-                  <option value="es">ES</option>
-                </select>
-                <button 
-                  onClick={() => setDarkMode(!darkMode)} 
-                  aria-label={t.toggleDark}
-                  className="theme-toggle"
-                >
-                  {darkMode ? '☀️' : '🌙'}
-                </button>
-                <button
-                  type="button"
-                  className="tour-nav-btn"
-                  onClick={() => setShowOnboarding(true)}
-                  aria-label="Start interactive product tour"
-                >
-                  {t.tour}
-                </button>
+      <WalletProvider>
+        <Router>
+          <div className={`App ${darkMode ? 'dark-mode' : ''}`}>
+            {/* #291: a11y Skip link */}
+            <a href="#main-content" className="skip-link">
+              {t.skipToMain}
+            </a>
+            <header className="App-header">
+              <div className="header-brand-row">
+                <h1>{t.brand}</h1>
+                <div className="header-controls">
+                  <select value={lang} onChange={(e) => setLang(e.target.value)} aria-label="Select Language">
+                    <option value="en">EN</option>
+                    <option value="es">ES</option>
+                  </select>
+                  <button 
+                    onClick={() => setDarkMode(!darkMode)} 
+                    aria-label={t.toggleDark}
+                    className="theme-toggle"
+                  >
+                    {darkMode ? '☀️' : '🌙'}
+                  </button>
+                  <button
+                    type="button"
+                    className="tour-nav-btn"
+                    onClick={() => setShowOnboarding(true)}
+                    aria-label="Start interactive product tour"
+                  >
+                    {t.tour}
+                  </button>
+                </div>
               </div>
-            </div>
-            {/* #116 — nav landmark so screen readers can jump straight to navigation */}
-            <nav aria-label="Main navigation">
-              <Link to="/">{t.send}</Link>
-              <Link to="/invoices">{t.invoices}</Link>
-              <Link to="/transactions">{t.history}</Link>
-            </nav>
-          </header>
+              {/* #116 — nav landmark so screen readers can jump straight to navigation */}
+              <nav aria-label="Main navigation">
+                <Link to="/">{t.send}</Link>
+                <Link to="/invoices">{t.invoices}</Link>
+                <Link to="/transactions">{t.history}</Link>
+              </nav>
+            </header>
 
-          {/* #286 — Interactive Multi-Step User Onboarding Tour */}
-          <Onboarding
-            isOpen={showOnboarding}
-            onClose={() => setShowOnboarding(false)}
-            onComplete={() => setShowOnboarding(false)}
-          />
+            {/* #286 — Interactive Multi-Step User Onboarding Tour */}
+            <Onboarding
+              isOpen={showOnboarding}
+              onClose={() => setShowOnboarding(false)}
+              onComplete={() => setShowOnboarding(false)}
+            />
 
-          {/* #105 — wrap route tree so any page-level render error shows a
-              recoverable fallback instead of a blank screen. */}
-          <ErrorBoundary>
-            <main id="main-content" aria-label="Page content" tabIndex="-1">
-              <Routes>
-                <Route path="/" element={<RemittanceForm />} />
-                <Route path="/invoices" element={<InvoiceViewer />} />
-                <Route path="/transactions" element={<TransactionHistory />} />
-              </Routes>
-            </main>
-          </ErrorBoundary>
-        </div>
-      </Router>
+            {/* #105 — wrap route tree so any page-level render error shows a
+                recoverable fallback instead of a blank screen. */}
+            <ErrorBoundary>
+              <main id="main-content" aria-label="Page content" tabIndex="-1">
+                <Routes>
+                  <Route path="/" element={<RemittanceForm />} />
+                  <Route path="/invoices" element={<InvoiceViewer />} />
+                  <Route path="/transactions" element={<TransactionHistory />} />
+                </Routes>
+              </main>
+            </ErrorBoundary>
+          </div>
+        </Router>
+      </WalletProvider>
     </I18nContext.Provider>
   );
 }
