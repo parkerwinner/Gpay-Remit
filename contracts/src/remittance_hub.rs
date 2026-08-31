@@ -367,6 +367,28 @@ impl RemittanceHubContract {
         env.storage().persistent().get(&DataKey::FeeConfig)
     }
 
+    fn calculate_fee(env: &Env, amount: i128) -> i128 {
+        let config: FeeConfig = env.storage().persistent().get(&DataKey::FeeConfig).unwrap_or(FeeConfig {
+            percentage: 250,
+            min_fee: 0,
+            max_fee: i128::MAX,
+        });
+
+        let mut fees = amount
+            .checked_mul(config.percentage)
+            .unwrap_or(0)
+            .checked_div(10000)
+            .unwrap_or(0);
+
+        if fees < config.min_fee {
+            fees = config.min_fee;
+        } else if fees > config.max_fee {
+            fees = config.max_fee;
+        }
+
+        fees
+    }
+
     pub fn configure_aml(
         env: Env,
         caller: Address,
@@ -754,12 +776,7 @@ impl RemittanceHubContract {
 
         let converted_amount = Self::convert_with_oracle(&env, amount, &asset.code);
 
-        let fee_percentage = 250;
-        let fees = amount
-            .checked_mul(fee_percentage)
-            .unwrap_or(0)
-            .checked_div(10000)
-            .unwrap_or(0);
+        let fees = Self::calculate_fee(&env, amount);
 
         let total_due = amount.checked_add(fees).unwrap_or(amount);
 
@@ -988,12 +1005,7 @@ impl RemittanceHubContract {
             return Err(RemittanceError::InvalidInvoiceStatus);
         }
 
-        let fee_percentage = 250;
-        let fees = new_amount
-            .checked_mul(fee_percentage)
-            .unwrap_or(0)
-            .checked_div(10000)
-            .unwrap_or(0);
+        let fees = Self::calculate_fee(&env, new_amount);
 
         let _old_amount = invoice.amount;
         invoice.amount = new_amount;
@@ -1119,7 +1131,6 @@ impl RemittanceHubContract {
 
         let mut total_amount: i128 = 0;
         let mut total_fees: i128 = 0;
-        let fee_percentage = 250;
 
         for id in escrow_ids.iter() {
             let mut escrow: EscrowData = env
@@ -1135,12 +1146,7 @@ impl RemittanceHubContract {
                 return Err(RemittanceError::InvalidStatus);
             }
 
-            let fees = escrow
-                .amount
-                .checked_mul(fee_percentage)
-                .unwrap_or(0)
-                .checked_div(10000)
-                .unwrap_or(0);
+            let fees = Self::calculate_fee(&env, escrow.amount);
 
             total_amount = total_amount
                 .checked_add(escrow.amount)
