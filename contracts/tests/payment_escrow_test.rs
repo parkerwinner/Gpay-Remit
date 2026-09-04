@@ -1,6 +1,8 @@
 use gpay_remit_contracts::payment_escrow::{
-    Asset, DisputeReason, Error, EscrowStatus, NotificationConfig, PaymentEscrowContract,
-    PaymentEscrowContractClient, RecurringConfig, RefundReason, ResolutionOutcome, Milestone, InsuranceConfig, EscrowInsurance, DelegationPermissions, DelegationEntry, EscrowAnalytics
+    Asset, DelegationEntry, DelegationPermissions, DisputeReason, Error, EscrowAnalytics,
+    EscrowInsurance, EscrowStatus, InsuranceConfig, Milestone, NotificationConfig,
+    PaymentEscrowContract, PaymentEscrowContractClient, RecurringConfig, RefundReason,
+    ResolutionOutcome,
 };
 use soroban_sdk::{
     symbol_short,
@@ -287,7 +289,7 @@ fn test_events_emitted() {
         Symbol::new(&env, "created")
     );
     assert_eq!(u64::from_val(&env, &topics.get(3).unwrap()), escrow_id);
-    
+
     // Test mode events publish data as (timestamp, actor, amount, status)
     // let event_data = <(u64, Address, i128, Symbol)>::from_val(&env, &created_event.2);
     // assert_eq!(event_data.1, sender);
@@ -319,7 +321,7 @@ fn test_events_emitted() {
         Symbol::new(&env, "deposit")
     );
     assert_eq!(u64::from_val(&env, &topics.get(3).unwrap()), escrow_id);
-    
+
     // let deposit_data = <(u64, Address, i128, Symbol)>::from_val(&env, &deposit_event.2);
     // assert_eq!(deposit_data.1, sender);
     // assert_eq!(deposit_data.2, amount);
@@ -670,7 +672,6 @@ fn test_multi_party_approval_whitelist_enforcement() {
     let non_whitelisted = Address::generate(&env);
     let result = client.try_multi_party_approve(&escrow_id, &non_whitelisted);
     assert_eq!(result, Err(Ok(Error::ApproverNotWhitelisted)));
-
 }
 
 // ============================================================================
@@ -1144,10 +1145,27 @@ fn test_add_milestone() {
     };
     client.add_supported_asset(&admin, &asset);
 
-    let escrow_id = client.create_escrow(&sender, &recipient, &1000, &asset, &2000, &String::from_str(&env, "Test"));
+    let escrow_id = client.create_escrow(
+        &sender,
+        &recipient,
+        &1000,
+        &asset,
+        &2000,
+        &String::from_str(&env, "Test"),
+    );
 
-    client.add_milestone(&escrow_id, &sender, &String::from_str(&env, "Phase 1"), &400);
-    client.add_milestone(&escrow_id, &sender, &String::from_str(&env, "Phase 2"), &600);
+    client.add_milestone(
+        &escrow_id,
+        &sender,
+        &String::from_str(&env, "Phase 1"),
+        &400,
+    );
+    client.add_milestone(
+        &escrow_id,
+        &sender,
+        &String::from_str(&env, "Phase 2"),
+        &600,
+    );
 
     let milestones = client.get_milestones(&escrow_id);
     assert_eq!(milestones.len(), 2);
@@ -1179,11 +1197,28 @@ fn test_complete_and_approve_milestone() {
     };
     client.add_supported_asset(&admin, &asset);
 
-    let escrow_id = client.create_escrow(&sender, &recipient, &1000, &asset, &2000, &String::from_str(&env, "Test"));
+    let escrow_id = client.create_escrow(
+        &sender,
+        &recipient,
+        &1000,
+        &asset,
+        &2000,
+        &String::from_str(&env, "Test"),
+    );
     client.deposit(&escrow_id, &sender, &1000, &token.address);
 
-    client.add_milestone(&escrow_id, &sender, &String::from_str(&env, "Phase 1"), &400);
-    client.add_milestone(&escrow_id, &sender, &String::from_str(&env, "Phase 2"), &600);
+    client.add_milestone(
+        &escrow_id,
+        &sender,
+        &String::from_str(&env, "Phase 1"),
+        &400,
+    );
+    client.add_milestone(
+        &escrow_id,
+        &sender,
+        &String::from_str(&env, "Phase 2"),
+        &600,
+    );
 
     // Complete milestone 0
     client.complete_milestone(&escrow_id, &0, &sender);
@@ -1226,8 +1261,20 @@ fn test_complete_milestone_wrong_caller() {
     };
     client.add_supported_asset(&admin, &asset);
 
-    let escrow_id = client.create_escrow(&sender, &recipient, &1000, &asset, &2000, &String::from_str(&env, "Test"));
-    client.add_milestone(&escrow_id, &sender, &String::from_str(&env, "Phase 1"), &400);
+    let escrow_id = client.create_escrow(
+        &sender,
+        &recipient,
+        &1000,
+        &asset,
+        &2000,
+        &String::from_str(&env, "Test"),
+    );
+    client.add_milestone(
+        &escrow_id,
+        &sender,
+        &String::from_str(&env, "Phase 1"),
+        &400,
+    );
 
     let result = client.try_complete_milestone(&escrow_id, &0, &unauthorized);
     assert_eq!(result, Err(Ok(Error::Unauthorized)));
@@ -1253,8 +1300,20 @@ fn test_approve_milestone_wrong_caller() {
     };
     client.add_supported_asset(&admin, &asset);
 
-    let escrow_id = client.create_escrow(&sender, &recipient, &1000, &asset, &2000, &String::from_str(&env, "Test"));
-    client.add_milestone(&escrow_id, &sender, &String::from_str(&env, "Phase 1"), &400);
+    let escrow_id = client.create_escrow(
+        &sender,
+        &recipient,
+        &1000,
+        &asset,
+        &2000,
+        &String::from_str(&env, "Test"),
+    );
+    client.add_milestone(
+        &escrow_id,
+        &sender,
+        &String::from_str(&env, "Phase 1"),
+        &400,
+    );
     client.complete_milestone(&escrow_id, &0, &sender);
 
     // Sender cannot approve milestone
@@ -1282,7 +1341,14 @@ fn test_invalid_milestone_index() {
     };
     client.add_supported_asset(&admin, &asset);
 
-    let escrow_id = client.create_escrow(&sender, &recipient, &1000, &asset, &2000, &String::from_str(&env, "Test"));
+    let escrow_id = client.create_escrow(
+        &sender,
+        &recipient,
+        &1000,
+        &asset,
+        &2000,
+        &String::from_str(&env, "Test"),
+    );
 
     let result = client.try_complete_milestone(&escrow_id, &0, &sender);
     assert_eq!(result, Err(Ok(Error::InvalidStatus)));
@@ -1314,7 +1380,14 @@ fn test_delegate_escrow() {
     };
     client.add_supported_asset(&admin, &asset);
 
-    let escrow_id = client.create_escrow(&sender, &recipient, &1000, &asset, &2000, &String::from_str(&env, "Test"));
+    let escrow_id = client.create_escrow(
+        &sender,
+        &recipient,
+        &1000,
+        &asset,
+        &2000,
+        &String::from_str(&env, "Test"),
+    );
 
     let permissions = DelegationPermissions {
         can_release: true,
@@ -1356,7 +1429,14 @@ fn test_revoke_delegation() {
     };
     client.add_supported_asset(&admin, &asset);
 
-    let escrow_id = client.create_escrow(&sender, &recipient, &1000, &asset, &2000, &String::from_str(&env, "Test"));
+    let escrow_id = client.create_escrow(
+        &sender,
+        &recipient,
+        &1000,
+        &asset,
+        &2000,
+        &String::from_str(&env, "Test"),
+    );
 
     let permissions = DelegationPermissions {
         can_release: true,
@@ -1393,7 +1473,14 @@ fn test_delegate_duplicate_rejected() {
     };
     client.add_supported_asset(&admin, &asset);
 
-    let escrow_id = client.create_escrow(&sender, &recipient, &1000, &asset, &2000, &String::from_str(&env, "Test"));
+    let escrow_id = client.create_escrow(
+        &sender,
+        &recipient,
+        &1000,
+        &asset,
+        &2000,
+        &String::from_str(&env, "Test"),
+    );
 
     let permissions = DelegationPermissions {
         can_release: true,
@@ -1429,7 +1516,14 @@ fn test_revoke_nonexistent_delegate() {
     };
     client.add_supported_asset(&admin, &asset);
 
-    let escrow_id = client.create_escrow(&sender, &recipient, &1000, &asset, &2000, &String::from_str(&env, "Test"));
+    let escrow_id = client.create_escrow(
+        &sender,
+        &recipient,
+        &1000,
+        &asset,
+        &2000,
+        &String::from_str(&env, "Test"),
+    );
 
     let result = client.try_revoke_delegation(&escrow_id, &sender, &delegate);
     assert_eq!(result, Err(Ok(Error::ApprovalNotFound)));
@@ -1501,7 +1595,14 @@ fn test_insure_escrow() {
     };
     client.set_insurance_config(&admin, &config);
 
-    let escrow_id = client.create_escrow(&sender, &recipient, &1000, &asset, &2000, &String::from_str(&env, "Test"));
+    let escrow_id = client.create_escrow(
+        &sender,
+        &recipient,
+        &1000,
+        &asset,
+        &2000,
+        &String::from_str(&env, "Test"),
+    );
 
     client.insure_escrow(&escrow_id, &sender);
 
@@ -1545,14 +1646,24 @@ fn test_claim_insurance() {
     };
     client.set_insurance_config(&admin, &config);
 
-    let escrow_id = client.create_escrow(&sender, &recipient, &1000, &asset, &2000, &String::from_str(&env, "Test"));
+    let escrow_id = client.create_escrow(
+        &sender,
+        &recipient,
+        &1000,
+        &asset,
+        &2000,
+        &String::from_str(&env, "Test"),
+    );
     client.insure_escrow(&escrow_id, &sender);
 
     client.claim_insurance(&escrow_id, &sender, &String::from_str(&env, "NonDelivery"));
 
     let insurance = client.get_escrow_insurance(&escrow_id).unwrap();
     assert_eq!(insurance.claimed, true);
-    assert_eq!(insurance.claim_reason.unwrap(), String::from_str(&env, "NonDelivery"));
+    assert_eq!(
+        insurance.claim_reason.unwrap(),
+        String::from_str(&env, "NonDelivery")
+    );
 }
 
 #[test]
@@ -1578,9 +1689,17 @@ fn test_claim_insurance_not_insured() {
     };
     client.add_supported_asset(&admin, &asset);
 
-    let escrow_id = client.create_escrow(&sender, &recipient, &1000, &asset, &2000, &String::from_str(&env, "Test"));
+    let escrow_id = client.create_escrow(
+        &sender,
+        &recipient,
+        &1000,
+        &asset,
+        &2000,
+        &String::from_str(&env, "Test"),
+    );
 
-    let result = client.try_claim_insurance(&escrow_id, &sender, &String::from_str(&env, "NonDelivery"));
+    let result =
+        client.try_claim_insurance(&escrow_id, &sender, &String::from_str(&env, "NonDelivery"));
     assert_eq!(result, Err(Ok(Error::ConditionsNotMet)));
 }
 
@@ -1609,9 +1728,30 @@ fn test_get_total_escrow_volume() {
     };
     client.add_supported_asset(&admin, &asset);
 
-    client.create_escrow(&sender, &recipient, &1000, &asset, &2000, &String::from_str(&env, "Test 1"));
-    client.create_escrow(&sender, &recipient, &2000, &asset, &3000, &String::from_str(&env, "Test 2"));
-    client.create_escrow(&sender, &recipient, &3000, &asset, &4000, &String::from_str(&env, "Test 3"));
+    client.create_escrow(
+        &sender,
+        &recipient,
+        &1000,
+        &asset,
+        &2000,
+        &String::from_str(&env, "Test 1"),
+    );
+    client.create_escrow(
+        &sender,
+        &recipient,
+        &2000,
+        &asset,
+        &3000,
+        &String::from_str(&env, "Test 2"),
+    );
+    client.create_escrow(
+        &sender,
+        &recipient,
+        &3000,
+        &asset,
+        &4000,
+        &String::from_str(&env, "Test 3"),
+    );
 
     let volume = client.get_total_escrow_volume();
     assert_eq!(volume, 6000);
@@ -1638,9 +1778,30 @@ fn test_get_escrow_count_by_status() {
     };
     client.add_supported_asset(&admin, &asset);
 
-    client.create_escrow(&sender, &recipient, &1000, &asset, &2000, &String::from_str(&env, "Test 1"));
-    client.create_escrow(&sender, &recipient, &2000, &asset, &3000, &String::from_str(&env, "Test 2"));
-    client.create_escrow(&sender, &recipient, &3000, &asset, &4000, &String::from_str(&env, "Test 3"));
+    client.create_escrow(
+        &sender,
+        &recipient,
+        &1000,
+        &asset,
+        &2000,
+        &String::from_str(&env, "Test 1"),
+    );
+    client.create_escrow(
+        &sender,
+        &recipient,
+        &2000,
+        &asset,
+        &3000,
+        &String::from_str(&env, "Test 2"),
+    );
+    client.create_escrow(
+        &sender,
+        &recipient,
+        &3000,
+        &asset,
+        &4000,
+        &String::from_str(&env, "Test 3"),
+    );
 
     let count = client.get_escrow_count_by_status(&EscrowStatus::Pending);
     assert_eq!(count, 3);
@@ -1667,9 +1828,30 @@ fn test_get_average_escrow_amount() {
     };
     client.add_supported_asset(&admin, &asset);
 
-    client.create_escrow(&sender, &recipient, &1000, &asset, &2000, &String::from_str(&env, "Test 1"));
-    client.create_escrow(&sender, &recipient, &2000, &asset, &3000, &String::from_str(&env, "Test 2"));
-    client.create_escrow(&sender, &recipient, &3000, &asset, &4000, &String::from_str(&env, "Test 3"));
+    client.create_escrow(
+        &sender,
+        &recipient,
+        &1000,
+        &asset,
+        &2000,
+        &String::from_str(&env, "Test 1"),
+    );
+    client.create_escrow(
+        &sender,
+        &recipient,
+        &2000,
+        &asset,
+        &3000,
+        &String::from_str(&env, "Test 2"),
+    );
+    client.create_escrow(
+        &sender,
+        &recipient,
+        &3000,
+        &asset,
+        &4000,
+        &String::from_str(&env, "Test 3"),
+    );
 
     let avg = client.get_average_escrow_amount();
     assert_eq!(avg, 2000); // (1000 + 2000 + 3000) / 3
@@ -1699,12 +1881,26 @@ fn test_get_success_rate() {
     };
     client.add_supported_asset(&admin, &asset);
 
-    let e1 = client.create_escrow(&sender, &recipient, &1000, &asset, &2000, &String::from_str(&env, "Test 1"));
+    let e1 = client.create_escrow(
+        &sender,
+        &recipient,
+        &1000,
+        &asset,
+        &2000,
+        &String::from_str(&env, "Test 1"),
+    );
     client.deposit(&e1, &sender, &1000, &token.address);
     client.approve_escrow(&e1, &admin);
     client.release_escrow(&e1, &recipient, &token.address);
 
-    let e2 = client.create_escrow(&sender, &recipient, &1000, &asset, &2000, &String::from_str(&env, "Test 2"));
+    let e2 = client.create_escrow(
+        &sender,
+        &recipient,
+        &1000,
+        &asset,
+        &2000,
+        &String::from_str(&env, "Test 2"),
+    );
 
     let rate = client.get_success_rate();
     assert_eq!(rate, 5000); // 1/2 = 50% = 5000 bps
@@ -1731,8 +1927,22 @@ fn test_get_user_statistics() {
     };
     client.add_supported_asset(&admin, &asset);
 
-    client.create_escrow(&sender, &recipient, &1000, &asset, &2000, &String::from_str(&env, "Test 1"));
-    client.create_escrow(&sender, &recipient, &2000, &asset, &3000, &String::from_str(&env, "Test 2"));
+    client.create_escrow(
+        &sender,
+        &recipient,
+        &1000,
+        &asset,
+        &2000,
+        &String::from_str(&env, "Test 1"),
+    );
+    client.create_escrow(
+        &sender,
+        &recipient,
+        &2000,
+        &asset,
+        &3000,
+        &String::from_str(&env, "Test 2"),
+    );
 
     let stats = client.get_user_statistics(&sender);
     assert_eq!(stats.total_escrows, 2);
