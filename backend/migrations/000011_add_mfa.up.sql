@@ -1,0 +1,4 @@
+ALTER TABLE users ADD COLUMN IF NOT EXISTS totp_secret VARCHAR(255);
+ALTER TABLE users ADD COLUMN IF NOT EXISTS mfa_enabled BOOLEAN DEFAULT FALSE;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS mfa_setup_completed_at TIMESTAMPTZ;
+CREATE INDEX IF NOT EXISTS idx_users_mfa_enabled ON users(mfa_enabled);

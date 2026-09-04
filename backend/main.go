@@ -15,6 +15,7 @@ import (
 	"github.com/yourusername/gpay-remit/config"
 	"github.com/yourusername/gpay-remit/graphql"
 	"github.com/yourusername/gpay-remit/handlers"
+	"github.com/yourusername/gpay-remit/models"
 	"github.com/yourusername/gpay-remit/logger"
 	"github.com/yourusername/gpay-remit/metrics"
 	"github.com/yourusername/gpay-remit/middleware"
@@ -92,6 +93,8 @@ func main() {
 		api.POST("/auth/register", authHandler.Register)
 		api.POST("/auth/login", authHandler.Login)
 		api.POST("/auth/refresh", authHandler.Refresh)
+		api.POST("/auth/forgot-password", authHandler.ForgotPassword)
+		api.POST("/auth/reset-password", authHandler.ResetPassword)
 
 		api.POST("/users", authHandler.Register)
 
@@ -100,6 +103,19 @@ func main() {
 		protected.Use(middleware.AuditTrail(db))
 		{
 			protected.POST("/auth/logout", authHandler.Logout)
+			// 2FA endpoints — pquerna/otp based TOTP
+			protected.POST("/auth/mfa/setup", authHandler.SetupMFA)
+			protected.POST("/auth/mfa/verify", authHandler.VerifyMFA)
+			protected.POST("/auth/mfa/disable", authHandler.DisableMFA)
+			protected.GET("/auth/mfa/status", func(c *gin.Context) {
+				userID, _ := c.Get("userID")
+				var user models.User
+				if err := db.First(&user, userID).Error; err != nil {
+					c.JSON(404, gin.H{"error": "User not found"})
+					return
+				}
+				c.JSON(200, gin.H{"mfa_enabled": user.MFAEnabled})
+			})
 			remittanceHandler := handlers.NewRemittanceHandler(db, cfg)
 			protected.POST("/remittances/create", remittanceHandler.CreateRemittance)
 			protected.POST("/remittances", remittanceHandler.SendRemittance)
@@ -154,6 +170,7 @@ func main() {
 			protected.GET("/analytics/fees", middleware.RequireRole("admin"), analyticsHandler.GetFeeMetrics)
 			protected.GET("/analytics/success-rate", middleware.RequireRole("admin"), analyticsHandler.GetSuccessRate)
 			protected.GET("/analytics/top-corridors", middleware.RequireRole("admin"), analyticsHandler.GetTopCorridors)
+			protected.GET("/analytics/sla", middleware.RequireRole("admin"), analyticsHandler.GetSLAMetrics)
 
 		}
 	}
@@ -166,6 +183,8 @@ func main() {
 		api2.POST("/auth/register", authHandler.Register)
 		api2.POST("/auth/login", authHandler.Login)
 		api2.POST("/auth/refresh", authHandler.Refresh)
+		api2.POST("/auth/forgot-password", authHandler.ForgotPassword)
+		api2.POST("/auth/reset-password", authHandler.ResetPassword)
 
 		api2.POST("/users", authHandler.Register)
 
@@ -174,6 +193,18 @@ func main() {
 		protected.Use(middleware.AuditTrail(db))
 		{
 			protected.POST("/auth/logout", authHandler.Logout)
+			protected.POST("/auth/mfa/setup", authHandler.SetupMFA)
+			protected.POST("/auth/mfa/verify", authHandler.VerifyMFA)
+			protected.POST("/auth/mfa/disable", authHandler.DisableMFA)
+			protected.GET("/auth/mfa/status", func(c *gin.Context) {
+				userID, _ := c.Get("userID")
+				var user models.User
+				if err := db.First(&user, userID).Error; err != nil {
+					c.JSON(404, gin.H{"error": "User not found"})
+					return
+				}
+				c.JSON(200, gin.H{"mfa_enabled": user.MFAEnabled})
+			})
 			remittanceHandler := handlers.NewRemittanceHandler(db, cfg)
 			protected.POST("/remittances/create", remittanceHandler.CreateRemittance)
 			protected.POST("/remittances", remittanceHandler.SendRemittance)
@@ -226,6 +257,7 @@ func main() {
 			protected.GET("/analytics/fees", middleware.RequireRole("admin"), analyticsHandler.GetFeeMetrics)
 			protected.GET("/analytics/success-rate", middleware.RequireRole("admin"), analyticsHandler.GetSuccessRate)
 			protected.GET("/analytics/top-corridors", middleware.RequireRole("admin"), analyticsHandler.GetTopCorridors)
+			protected.GET("/analytics/sla", middleware.RequireRole("admin"), analyticsHandler.GetSLAMetrics)
 
 		}
 	}

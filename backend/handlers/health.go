@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -47,17 +48,40 @@ type databaseStatus struct {
 }
 
 type healthResponse struct {
-	Status       string                      `json:"status"`
-	Service      string                      `json:"service"`
-	Timestamp    string                      `json:"timestamp"`
-	Dependencies map[string]interface{}      `json:"dependencies,omitempty"`
+	Status       string                 `json:"status"`
+	Service      string                 `json:"service"`
+	Timestamp    string                 `json:"timestamp"`
+	Dependencies map[string]interface{} `json:"dependencies,omitempty"`
+}
+
+// checkAll probes every dependency concurrently.
+//
+// Sequential probing made the endpoint's worst case the *sum* of the individual
+// timeouts (2s database + 3s Horizon + 2s Redis = 7s). A Kubernetes probe
+// typically gives 1-3s, so a single partitioned dependency would time out the
+// probe itself and the pod would be restarted or pulled from service without
+// any indication of which dependency was at fault. Run concurrently, the worst
+// case is the slowest single check.
+func (h *HealthHandler) checkAll() (databaseStatus, dependencyStatus, dependencyStatus) {
+	var (
+		wg      sync.WaitGroup
+		db      databaseStatus
+		horizon dependencyStatus
+		redis   dependencyStatus
+	)
+
+	wg.Add(3)
+	go func() { defer wg.Done(); db = h.checkDatabase() }()
+	go func() { defer wg.Done(); horizon = h.checkHorizon() }()
+	go func() { defer wg.Done(); redis = h.checkRedis() }()
+	wg.Wait()
+
+	return db, horizon, redis
 }
 
 // Health returns detailed health status including all dependencies.
 func (h *HealthHandler) Health(c *gin.Context) {
-	dbStatus := h.checkDatabase()
-	horizonStatus := h.checkHorizon()
-	redisStatus := h.checkRedis()
+	dbStatus, horizonStatus, redisStatus := h.checkAll()
 
 	overall := "healthy"
 	httpStatus := http.StatusOK
@@ -82,9 +106,7 @@ func (h *HealthHandler) Health(c *gin.Context) {
 
 // Ready checks database, Horizon, and Redis — used for Kubernetes readiness probes.
 func (h *HealthHandler) Ready(c *gin.Context) {
-	dbStatus := h.checkDatabase()
-	horizonStatus := h.checkHorizon()
-	redisStatus := h.checkRedis()
+	dbStatus, horizonStatus, redisStatus := h.checkAll()
 
 	// "unconfigured" is non-fatal for readiness — allow the pod to serve traffic.
 	if dbStatus.Status != "healthy" || horizonStatus.Status != "healthy" ||
@@ -100,7 +122,15 @@ func (h *HealthHandler) Ready(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"status": "ready"})
 }
 
-// Live checks only critical in-process state — used for Kubernetes liveness probes.
+// Live reports whether the process itself is running — used for Kubernetes
+// liveness probes.
+//
+// Deliberately does not touch the database, Horizon or Redis. Liveness answers
+// "should this container be restarted?", and restarting the API because
+// Postgres is briefly unreachable makes an outage worse: every replica dies at
+// once and none of them can serve the cached or degraded responses they
+// otherwise could. Dependency state belongs on readiness, which pulls the pod
+// out of the load balancer without killing it.
 func (h *HealthHandler) Live(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"status":    "alive",

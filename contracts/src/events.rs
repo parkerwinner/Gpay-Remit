@@ -45,7 +45,7 @@ pub fn emit(
     actor: &Address,
     amount: i128,
     status: Symbol,
-    data: EventData,
+    #[allow(unused_variables)] data: EventData,
 ) {
     #[cfg(not(test))]
     {

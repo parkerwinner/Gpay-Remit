@@ -140,8 +140,8 @@ func LoadConfig() (*Config, error) {
 		}
 	}
 
-	return &Config{
-		Port:              os.Getenv("PORT"),
+	cfg := &Config{
+		Port:              getEnvOrDefault("PORT", "8080"),
 		Environment:       getEnvOrDefault("APP_ENV", "development"),
 		DatabaseURL:       os.Getenv("DATABASE_URL"),
 		StellarNetwork:    stellarNetwork,
@@ -177,7 +177,135 @@ func LoadConfig() (*Config, error) {
 		ExchangeRateAPIURL: getEnvOrDefault("EXCHANGE_RATE_API_URL", "https://open.er-api.com/v6/latest"),
 
 		SandboxMode: sandbox,
-	}, nil
+	}
+
+	if err := cfg.Validate(); err != nil {
+		return nil, fmt.Errorf("invalid configuration: %w", err)
+	}
+
+	return cfg, nil
+}
+
+// Validate checks all required configuration values and constraints.
+func (c *Config) Validate() error {
+	var errs []string
+
+	// 1. Port
+	if strings.TrimSpace(c.Port) == "" {
+		errs = append(errs, "PORT is required")
+	} else {
+		var portNum int
+		if _, err := fmt.Sscanf(c.Port, "%d", &portNum); err != nil || portNum < 1 || portNum > 65535 {
+			errs = append(errs, fmt.Sprintf("PORT must be a valid port number between 1 and 65535 (got %q)", c.Port))
+		}
+	}
+
+	// 2. DatabaseURL
+	if strings.TrimSpace(c.DatabaseURL) == "" {
+		errs = append(errs, "DATABASE_URL is required")
+	} else if !strings.HasPrefix(c.DatabaseURL, "postgres://") && !strings.HasPrefix(c.DatabaseURL, "postgresql://") {
+		errs = append(errs, "DATABASE_URL must be a valid postgres connection URI (starting with postgres:// or postgresql://)")
+	}
+
+	// 3. Environment
+	validEnvs := map[string]bool{
+		"development": true,
+		"staging":     true,
+		"production":  true,
+		"test":        true,
+	}
+	if !validEnvs[strings.ToLower(c.Environment)] {
+		errs = append(errs, fmt.Sprintf("APP_ENV must be one of 'development', 'staging', 'production', 'test' (got %q)", c.Environment))
+	}
+
+	// 4. JWT Secrets
+	if len(c.JWTSecret) < 32 {
+		errs = append(errs, "JWT_SECRET must be at least 32 characters long")
+	}
+	if len(c.JWTRefreshSecret) < 32 {
+		errs = append(errs, "JWT_REFRESH_SECRET must be at least 32 characters long")
+	}
+
+	// 5. Stellar Network & Horizon URL
+	validNetworks := map[string]bool{
+		"testnet":    true,
+		"public":     true,
+		"standalone": true,
+		"futurenet":  true,
+	}
+	if !validNetworks[strings.ToLower(c.StellarNetwork)] {
+		errs = append(errs, fmt.Sprintf("STELLAR_NETWORK must be one of 'testnet', 'public', 'futurenet', 'standalone' (got %q)", c.StellarNetwork))
+	}
+	if !strings.HasPrefix(c.HorizonURL, "http://") && !strings.HasPrefix(c.HorizonURL, "https://") {
+		errs = append(errs, fmt.Sprintf("HORIZON_URL must be a valid HTTP/HTTPS URL (got %q)", c.HorizonURL))
+	}
+
+	// 6. Fee validation
+	if c.PlatformFeeBps < 0 {
+		errs = append(errs, "PLATFORM_FEE_BPS must be non-negative")
+	}
+	if c.ForexFeeBps < 0 {
+		errs = append(errs, "FOREX_FEE_BPS must be non-negative")
+	}
+	if c.ComplianceFeeBps < 0 {
+		errs = append(errs, "COMPLIANCE_FEE_BPS must be non-negative")
+	}
+	if c.NetworkFeeBps < 0 {
+		errs = append(errs, "NETWORK_FEE_BPS must be non-negative")
+	}
+	totalBps := c.PlatformFeeBps + c.ForexFeeBps + c.ComplianceFeeBps + c.NetworkFeeBps
+	if totalBps > 10000 {
+		errs = append(errs, fmt.Sprintf("total fee basis points cannot exceed 10000 (100%%), got %d bps", totalBps))
+	}
+	if c.MinFee < 0 {
+		errs = append(errs, "MIN_FEE must be non-negative")
+	}
+	if c.MaxFee < 0 {
+		errs = append(errs, "MAX_FEE must be non-negative")
+	}
+	if c.MaxFee > 0 && c.MinFee > c.MaxFee {
+		errs = append(errs, fmt.Sprintf("MIN_FEE (%v) cannot exceed MAX_FEE (%v)", c.MinFee, c.MaxFee))
+	}
+
+	// 7. Database Connection Pool
+	if c.DBMaxIdleConns < 0 {
+		errs = append(errs, "DB_MAX_IDLE_CONNS must be non-negative")
+	}
+	if c.DBMaxOpenConns <= 0 {
+		errs = append(errs, "DB_MAX_OPEN_CONNS must be greater than 0")
+	}
+	if c.DBMaxIdleConns > c.DBMaxOpenConns {
+		errs = append(errs, fmt.Sprintf("DB_MAX_IDLE_CONNS (%d) cannot exceed DB_MAX_OPEN_CONNS (%d)", c.DBMaxIdleConns, c.DBMaxOpenConns))
+	}
+	if c.DBConnMaxLifetime <= 0 {
+		errs = append(errs, "DB_CONN_MAX_LIFETIME must be positive")
+	}
+
+	// 8. Email Configuration (when enabled)
+	if c.EmailEnabled {
+		if strings.TrimSpace(c.SMTPHost) == "" {
+			errs = append(errs, "SMTP_HOST is required when EMAIL_ENABLED=true")
+		}
+		if strings.TrimSpace(c.SMTPPort) == "" {
+			errs = append(errs, "SMTP_PORT is required when EMAIL_ENABLED=true")
+		}
+		if strings.TrimSpace(c.SMTPUser) == "" {
+			errs = append(errs, "SMTP_USER is required when EMAIL_ENABLED=true")
+		}
+		if strings.TrimSpace(c.SMTPFrom) == "" {
+			errs = append(errs, "SMTP_FROM is required when EMAIL_ENABLED=true")
+		}
+	}
+
+	// 9. Redis Configuration
+	if c.RedisDB < 0 {
+		errs = append(errs, "REDIS_DB must be non-negative")
+	}
+
+	if len(errs) > 0 {
+		return fmt.Errorf("config validation failed with %d error(s):\n  - %s", len(errs), strings.Join(errs, "\n  - "))
+	}
+	return nil
 }
 
 // gormLogLevel picks the GORM log verbosity for the given environment. Every
