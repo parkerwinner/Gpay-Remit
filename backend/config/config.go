@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/joho/godotenv"
@@ -18,6 +19,48 @@ import (
 	"github.com/yourusername/gpay-remit/secrets"
 )
 
+var connectionPoolMonitor = struct {
+	sync.Mutex
+	cancel context.CancelFunc
+	done   chan struct{}
+}{}
+
+func startConnectionPoolMonitor(db *sql.DB) {
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+
+	connectionPoolMonitor.Lock()
+	previousCancel := connectionPoolMonitor.cancel
+	connectionPoolMonitor.cancel = cancel
+	connectionPoolMonitor.done = done
+	connectionPoolMonitor.Unlock()
+
+	if previousCancel != nil {
+		previousCancel()
+	}
+
+	go func() {
+		defer close(done)
+		MonitorConnectionPool(ctx, db)
+	}()
+}
+
+// StopConnectionPoolMonitor waits for the pool monitor to exit before the
+// database connection is closed during application shutdown.
+func StopConnectionPoolMonitor() {
+	connectionPoolMonitor.Lock()
+	cancel := connectionPoolMonitor.cancel
+	done := connectionPoolMonitor.done
+	connectionPoolMonitor.cancel = nil
+	connectionPoolMonitor.done = nil
+	connectionPoolMonitor.Unlock()
+
+	if cancel == nil {
+		return
+	}
+	cancel()
+	<-done
+}
 type Config struct {
 	Port              string
 	Environment       string
@@ -349,19 +392,23 @@ func InitDB(cfg *Config) (*gorm.DB, error) {
 	sqlDB.SetMaxOpenConns(cfg.DBMaxOpenConns)
 	sqlDB.SetConnMaxLifetime(cfg.DBConnMaxLifetime)
 
-	// Start monitoring connection pool periodically
-	go MonitorConnectionPool(sqlDB)
+	// Stop the monitor cleanly before closing the database pool.
+	startConnectionPoolMonitor(sqlDB)
 
 	return db, nil
 }
 
 // MonitorConnectionPool monitors database connection pool stats and logs alerts
-func MonitorConnectionPool(db *sql.DB) {
+func MonitorConnectionPool(ctx context.Context, db *sql.DB) {
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
 
-	for range ticker.C {
-		stats := db.Stats()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			stats := db.Stats()
 
 		// Log connection pool metrics
 		logger.Log.WithFields(map[string]interface{}{
@@ -390,6 +437,7 @@ func MonitorConnectionPool(db *sql.DB) {
 				"wait_duration":  stats.WaitDuration.Seconds(),
 				"connections":   stats.OpenConnections,
 			}).Warn("Queries waiting for database connections")
+		}
 		}
 	}
 }

@@ -319,6 +319,9 @@ func main() {
 		logger.Log.Warn("Timeout waiting for background workers to stop")
 	}
 
+	logger.Log.Info("Stopping database connection pool monitor...")
+	config.StopConnectionPoolMonitor()
+
 	logger.Log.Info("Closing database connection...")
 	if sqlDB, err := db.DB(); err != nil {
 		logger.Log.WithField("error", err).Error("Failed to get sql.DB for closing")
