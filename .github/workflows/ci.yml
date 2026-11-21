@@ -32,11 +32,29 @@ jobs:
       # (`prop` -> tests/prop_conditions.rs, `integration` ->
       # tests/integration_remittance.rs). tests/fuzz_*.rs are proptest-based
       # and run on every `cargo test`.
+      #
+      # Every run uses a known RNG seed (the run id, or the dispatch input),
+      # printed below, so a failure can be replayed exactly (#376):
+      #   PROPTEST_RNG_SEED=<seed> cargo test --features prop --test prop_conditions
       - name: Run contract tests (all features, incl. property/fuzz tests)
         working-directory: ./contracts
         env:
           PROPTEST_CASES: "256"
-        run: cargo test --locked --all-features --no-fail-fast
+          PROPTEST_RNG_SEED: ${{ github.run_id }}
+        run: |
+          echo "PROPTEST_RNG_SEED=$PROPTEST_RNG_SEED (replay a failure locally with this seed)"
+          echo "Property tests ran with \`PROPTEST_RNG_SEED=$PROPTEST_RNG_SEED\`" >> "$GITHUB_STEP_SUMMARY"
+          cargo test --locked --all-features --no-fail-fast
+
+      # proptest writes each failure's shrunk counterexample here; commit the
+      # file to keep replaying that case first.
+      - name: Upload proptest regressions
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: proptest-regressions
+          path: contracts/tests/*.proptest-regressions
+          if-no-files-found: ignore
 
   test-backend:
     name: Test Backend
