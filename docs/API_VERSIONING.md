@@ -38,16 +38,79 @@ Accept-Version: v2
 
 If no version is specified, the API defaults to **v2** (the current version).
 
-## Deprecation Warnings
+## Validation (#380)
 
-When using deprecated API versions (v1), the response will include deprecation headers:
+The version is checked against a fixed list of supported versions,
+`supportedVersions` in
+[`backend/middleware/versioning.go`](../backend/middleware/versioning.go). That
+table is the only place where a version is added, deprecated or given a sunset
+date.
+
+| Request | Result |
+| --- | --- |
+| `/api/v2/...`, or `X-API-Version: v2` / `2` / `V2` | Served as v2 |
+| No version anywhere | Served as the default (v2) |
+| A blank version header | Treated as absent |
+| `/api/v3/...`, or `X-API-Version: v7` | `400` "Unsupported API version" |
+| `X-API-Version: v2.0`, `latest`, … | `400` "Invalid API version format" |
+| `/api/v1/...` with `X-API-Version: v2` | `400` "API version in header does not match the version in the URL path" |
+
+Header precedence is `X-API-Version`, then `Accept-Version`. A header and the
+path must agree, because a client that says both means one of them is wrong.
+
+Every `400` response has the same body. The requested value is never echoed
+back:
+
+```json
+{
+  "error": "Unsupported API version",
+  "supported_versions": ["v1", "v2"],
+  "default_version": "v2"
+}
+```
+
+Responses carry `Vary: X-API-Version, Accept-Version`, so caches keep versions
+apart.
+
+## Deprecation Headers
+
+Responses served under a deprecated version (currently v1) include the
+standard headers:
+
+```
+Deprecation: @1798675200                     # RFC 9745, the deprecation date as Unix seconds (2026-12-31)
+Sunset: Wed, 30 Jun 2027 00:00:00 GMT        # RFC 8594, when the version stops working
+Link: <https://github.com/parkerwinner/Gpay-Remit/blob/main/docs/API_VERSIONING.md>; rel="deprecation"; type="text/html"
+```
+
+The earlier `X-API-*` headers are still sent for existing clients:
 
 ```
 X-API-Deprecation-Warning: This API version is deprecated
 X-API-Deprecation-Date: 2026-12-31
 X-API-Sunset-Date: 2027-06-30
-X-API-Deprecation-Info: Please migrate to v2. See documentation at /docs/migration
+X-API-Deprecation-Info: Please migrate to v2. See documentation at https://github.com/parkerwinner/Gpay-Remit/blob/main/docs/API_VERSIONING.md
 ```
+
+## Versioning Policy
+
+1. **When a new version is needed.** A major version (`vN`) is introduced
+   only for a breaking change. Examples: removing or renaming a field or
+   endpoint, changing a type, or tightening validation so that previously
+   valid requests fail. Additive changes ship in the current version.
+2. **How many versions are supported.** At most two at a time: the current
+   version, and the previous one while it is deprecated.
+3. **Deprecation.** When a new version ships, the previous one is marked
+   deprecated in `supportedVersions` with a deprecation date and a sunset
+   date. From then on, every response carries the headers above.
+4. **Sunset.** The sunset date is at least six months after the deprecation
+   date. After it, the version is removed from `supportedVersions`. Requests
+   naming it then get `400 Unsupported API version`; they are not silently
+   served by another version.
+5. **What clients should do.** Clients should log or alert on a `Deprecation`
+   header, and send an explicit version (path or header) rather than relying
+   on the default. The default moves to each new version when that version
+   ships.
 
 ## Response Headers
 

@@ -258,3 +258,101 @@ func TestIsDeprecatedVersion(t *testing.T) {
 		})
 	}
 }
+
+// #380: the version is validated against the supported set from every
+// source, and deprecated versions carry standard deprecation headers.
+func TestVersionMiddlewareValidation(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	serve := func(path string, headers map[string]string) *httptest.ResponseRecorder {
+		router := gin.New()
+		router.Use(VersionMiddleware())
+		router.GET("/*path", func(c *gin.Context) {
+			c.JSON(http.StatusOK, gin.H{"version": GetAPIVersion(c)})
+		})
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		for k, v := range headers {
+			req.Header.Set(k, v)
+		}
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+		return w
+	}
+
+	rejected := []struct {
+		name    string
+		path    string
+		headers map[string]string
+		message string
+	}{
+		{"unknown version in path", "/api/v3/remittances", nil, "Unsupported API version"},
+		{"v0 in path", "/api/v0/remittances", nil, "Unsupported API version"},
+		{"unknown version in Accept-Version", "/api/remittances", map[string]string{"Accept-Version": "v7"}, "Unsupported API version"},
+		{"non-numeric version", "/api/remittances", map[string]string{"X-API-Version": "latest"}, "Invalid API version format"},
+		{"minor version", "/api/remittances", map[string]string{"X-API-Version": "v2.0"}, "Invalid API version format"},
+		{"injection attempt", "/api/remittances", map[string]string{"X-API-Version": "v2; DROP"}, "Invalid API version format"},
+		{"header contradicts v1 path", "/api/v1/remittances", map[string]string{"X-API-Version": "v2"}, "does not match"},
+		{"header contradicts v2 path", "/api/v2/remittances", map[string]string{"Accept-Version": "1"}, "does not match"},
+	}
+	for _, tt := range rejected {
+		t.Run(tt.name, func(t *testing.T) {
+			w := serve(tt.path, tt.headers)
+			assert.Equal(t, http.StatusBadRequest, w.Code)
+			assert.Contains(t, w.Body.String(), tt.message)
+			assert.Contains(t, w.Body.String(), `"supported_versions":["v1","v2"]`)
+			assert.NotContains(t, w.Body.String(), "DROP", "the raw header is never echoed")
+		})
+	}
+
+	accepted := []struct {
+		name    string
+		path    string
+		headers map[string]string
+		version string
+	}{
+		{"matching header and path", "/api/v1/remittances", map[string]string{"X-API-Version": "V1"}, "v1"},
+		{"bare number header", "/api/remittances", map[string]string{"Accept-Version": "2"}, "v2"},
+		{"blank header is ignored", "/api/remittances", map[string]string{"X-API-Version": "   "}, "v2"},
+		{"X-API-Version wins over Accept-Version", "/api/remittances", map[string]string{"X-API-Version": "v1", "Accept-Version": "v2"}, "v1"},
+		{"root route keeps the default", "/health", nil, "v2"},
+	}
+	for _, tt := range accepted {
+		t.Run(tt.name, func(t *testing.T) {
+			w := serve(tt.path, tt.headers)
+			assert.Equal(t, http.StatusOK, w.Code, w.Body.String())
+			assert.Equal(t, tt.version, w.Header().Get("X-API-Version"))
+			assert.Contains(t, w.Header().Get("Vary"), "X-API-Version")
+		})
+	}
+
+	t.Run("deprecated v1 sends RFC 9745 Deprecation, RFC 8594 Sunset and a Link", func(t *testing.T) {
+		w := serve("/api/v1/remittances", nil)
+		assert.Equal(t, "@1798675200", w.Header().Get("Deprecation")) // 2026-12-31T00:00:00Z
+		assert.Equal(t, "Wed, 30 Jun 2027 00:00:00 GMT", w.Header().Get("Sunset"))
+		assert.Contains(t, w.Header().Get("Link"), `rel="deprecation"`)
+		assert.Contains(t, w.Header().Get("Link"), "API_VERSIONING.md")
+		assert.Equal(t, "2026-12-31", w.Header().Get("X-API-Deprecation-Date"))
+	})
+
+	t.Run("current v2 sends no deprecation headers", func(t *testing.T) {
+		w := serve("/api/v2/remittances", nil)
+		for _, h := range []string{"Deprecation", "Sunset", "Link", "X-API-Deprecation-Warning"} {
+			assert.Empty(t, w.Header().Get(h), h)
+		}
+	})
+}
+
+func TestSupportedVersionsTable(t *testing.T) {
+	assert.Equal(t, []string{"v1", "v2"}, SupportedVersions())
+	info, ok := LookupVersion(CurrentAPIVersion)
+	assert.True(t, ok)
+	assert.False(t, info.IsDeprecated, "the current version cannot be deprecated")
+	_, ok = LookupVersion(DefaultAPIVersion)
+	assert.True(t, ok, "the default version must be supported")
+	for _, v := range SupportedVersions() {
+		info, _ := LookupVersion(v)
+		if info.IsDeprecated {
+			assert.NotEmpty(t, info.SunsetDate, "%s is deprecated, so it needs a sunset date", v)
+		}
+	}
+}
