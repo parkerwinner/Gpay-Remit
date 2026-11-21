@@ -2,7 +2,6 @@ package main
 
 import (
 	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 
@@ -22,13 +21,7 @@ type OpenAPISpec struct {
 }
 
 func TestOpenAPISpecValidation(t *testing.T) {
-	specPath := filepath.Join("..", "docs", "api", "openapi.yaml")
-	data, err := os.ReadFile(specPath)
-	if err != nil {
-		// try direct path
-		specPath = filepath.Join("docs", "api", "openapi.yaml")
-		data, err = os.ReadFile(specPath)
-	}
+	data, err := os.ReadFile(canonicalSpecPath)
 	require.NoError(t, err, "Failed to read openapi.yaml")
 
 	var spec OpenAPISpec

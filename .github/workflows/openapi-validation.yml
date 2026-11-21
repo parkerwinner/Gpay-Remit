@@ -4,17 +4,29 @@ on:
   push:
     branches: [ main, dev ]
     paths:
-      - 'docs/api/openapi.yaml'
+      - 'backend/handlers/openapi.yaml'
       - 'backend/openapi_validation_test.go'
+      - 'backend/openapi_routes_test.go'
       - 'backend/main.go'
+      - 'backend/router.go'
       - 'backend/handlers/**'
+      - 'backend/middleware/**'
+      - 'docs/api/**'
+      - 'scripts/validate_openapi.sh'
+      - '.github/workflows/openapi-validation.yml'
   pull_request:
     branches: [ main, dev ]
     paths:
-      - 'docs/api/openapi.yaml'
+      - 'backend/handlers/openapi.yaml'
       - 'backend/openapi_validation_test.go'
+      - 'backend/openapi_routes_test.go'
       - 'backend/main.go'
+      - 'backend/router.go'
       - 'backend/handlers/**'
+      - 'backend/middleware/**'
+      - 'docs/api/**'
+      - 'scripts/validate_openapi.sh'
+      - '.github/workflows/openapi-validation.yml'
 
 jobs:
   validate-openapi:

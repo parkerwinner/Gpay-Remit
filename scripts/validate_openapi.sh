@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-SPEC_FILE="${1:-docs/api/openapi.yaml}"
+# The canonical spec (#379). It is embedded into the binary and served at
+# /api/docs/openapi.yaml, so it lives inside the Go module.
+SPEC_FILE="${1:-backend/handlers/openapi.yaml}"
 
 echo "=========================================="
 echo " Validating OpenAPI Specification: $SPEC_FILE"
@@ -13,8 +15,8 @@ if [ ! -f "$SPEC_FILE" ]; then
 fi
 
 # Run Go-based spec validation test
-echo "Running Go OpenAPI syntax and schema verification..."
-cd backend && go mod download && go test -v -run TestOpenAPISpecValidation .
+echo "Running Go OpenAPI checks: syntax, required paths, and spec <-> Gin route parity..."
+cd backend && go mod download && go test -v -run 'TestOpenAPISpecValidation|TestOpenAPISpecMatchesRoutes|TestOnlyOneOpenAPISpec' .
 
 echo ""
 echo "✅ OpenAPI Specification is valid and passed all validation checks!"

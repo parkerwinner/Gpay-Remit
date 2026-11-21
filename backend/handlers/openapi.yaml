@@ -39,6 +39,14 @@ tags:
     description: Transaction analytics (admin only)
   - name: Audit
     description: Audit log access (admin only)
+  - name: Contacts
+    description: Address book and recipient management
+  - name: PaymentRequests
+    description: Request money from another user and accept, reject or cancel requests
+  - name: ExchangeRates
+    description: Currency exchange rates
+  - name: Admin
+    description: Operator endpoints; require the admin role
   - name: Health
     description: Service health and readiness probes
 
@@ -50,6 +58,32 @@ components:
       bearerFormat: JWT
 
   schemas:
+    CreatePaymentRequestRequest:
+      type: object
+      required: [target_user_id, amount, currency, asset_code]
+      properties:
+        target_user_id:
+          type: integer
+          description: User who is asked to pay
+        amount:
+          type: integer
+          format: int64
+          minimum: 1
+          description: Amount in the asset's smallest unit
+        currency:
+          type: string
+        asset_code:
+          type: string
+        asset_issuer:
+          type: string
+        description:
+          type: string
+        reference:
+          type: string
+        expires_in_hours:
+          type: integer
+          nullable: true
+
     Error:
       type: object
       properties:
@@ -99,6 +133,72 @@ components:
           example: "eyJhbGciOiJIUzI1NiIs..."
         user:
           $ref: '#/components/schemas/User'
+
+    Contact:
+      type: object
+      properties:
+        id:
+          type: integer
+          example: 1
+        user_id:
+          type: integer
+          example: 42
+        nickname:
+          type: string
+          example: Alice Personal
+        stellar_address:
+          type: string
+          example: GBZC6YRFWINCGYH6FFIK3VY4KF3WZJQR7CD3S5Y4GVNIKU5RM3JY7YEX
+        currency:
+          type: string
+          example: USDC
+        email:
+          type: string
+          example: alice@example.com
+        notes:
+          type: string
+          example: Friend in London
+        verification_status:
+          type: string
+          enum: [pending, verified, failed]
+          example: verified
+        is_verified:
+          type: boolean
+          example: true
+
+    CreateContactRequest:
+      type: object
+      required: [nickname, stellar_address]
+      properties:
+        nickname:
+          type: string
+          example: Alice Personal
+        stellar_address:
+          type: string
+          example: GBZC6YRFWINCGYH6FFIK3VY4KF3WZJQR7CD3S5Y4GVNIKU5RM3JY7YEX
+        currency:
+          type: string
+          example: USDC
+        email:
+          type: string
+          example: alice@example.com
+        notes:
+          type: string
+          example: Friend in London
+
+    UpdateContactRequest:
+      type: object
+      properties:
+        nickname:
+          type: string
+        stellar_address:
+          type: string
+        currency:
+          type: string
+        email:
+          type: string
+        notes:
+          type: string
 
     User:
       type: object
@@ -399,6 +499,234 @@ paths:
         '401':
           description: Invalid or expired refresh token
 
+  /users:
+    post:
+      tags: [Auth]
+      summary: Register a new user (alias of /auth/register)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegisterRequest'
+      responses:
+        '201':
+          description: User registered
+        '400':
+          description: Validation error
+        '409':
+          description: Email already registered
+
+  /auth/forgot-password:
+    post:
+      tags: [Auth]
+      summary: Email a password reset link
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email]
+              properties:
+                email:
+                  type: string
+      responses:
+        '200':
+          description: Reset email sent if the account exists
+        '400':
+          description: Validation error
+
+  /auth/reset-password:
+    post:
+      tags: [Auth]
+      summary: Reset a password with a reset token
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [token, new_password]
+              properties:
+                token:
+                  type: string
+                new_password:
+                  type: string
+      responses:
+        '200':
+          description: Password reset
+        '400':
+          description: Validation error
+        '401':
+          description: Invalid or expired token
+
+  /auth/request-unlock:
+    post:
+      tags: [Auth]
+      summary: Email an account unlock link
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email]
+              properties:
+                email:
+                  type: string
+      responses:
+        '200':
+          description: Unlock email sent if the account is locked
+        '400':
+          description: Validation error
+
+  /auth/unlock:
+    post:
+      tags: [Auth]
+      summary: Unlock a locked account with an unlock token
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [token]
+              properties:
+                token:
+                  type: string
+      responses:
+        '200':
+          description: Account unlocked
+        '400':
+          description: Validation error
+        '401':
+          description: Invalid or expired token
+
+  /auth/logout:
+    post:
+      tags: [Auth]
+      summary: Revoke the current session
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: Logged out
+        '401':
+          description: Missing or invalid token
+
+  /auth/change-password:
+    post:
+      tags: [Auth]
+      summary: Change the current user's password
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [current_password, new_password]
+              properties:
+                current_password:
+                  type: string
+                new_password:
+                  type: string
+      responses:
+        '200':
+          description: Password changed
+        '400':
+          description: Validation error
+        '401':
+          description: Missing or invalid token
+
+  /auth/mfa/setup:
+    post:
+      tags: [Auth]
+      summary: Start TOTP setup; returns the secret and a QR code
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [password]
+              properties:
+                password:
+                  type: string
+      responses:
+        '200':
+          description: TOTP secret and QR code
+        '400':
+          description: Validation error
+        '401':
+          description: Missing or invalid token
+
+  /auth/mfa/verify:
+    post:
+      tags: [Auth]
+      summary: Confirm TOTP setup with a code from the authenticator
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [code]
+              properties:
+                code:
+                  type: string
+      responses:
+        '200':
+          description: MFA enabled
+        '400':
+          description: Validation error
+        '401':
+          description: Missing or invalid token
+
+  /auth/mfa/disable:
+    post:
+      tags: [Auth]
+      summary: Disable TOTP after re-entering the password
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [password]
+              properties:
+                password:
+                  type: string
+      responses:
+        '200':
+          description: MFA disabled
+        '400':
+          description: Validation error
+        '401':
+          description: Missing or invalid token
+
+  /auth/mfa/status:
+    get:
+      tags: [Auth]
+      summary: Whether MFA is enabled for the current user
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: MFA status (mfa_enabled)
+        '401':
+          description: Missing or invalid token
+        '404':
+          description: Not found
+
   /remittances:
     get:
       tags: [Remittances]
@@ -670,6 +998,230 @@ paths:
               schema:
                 $ref: '#/components/schemas/FeeBreakdown'
 
+  /exchange-rates:
+    get:
+      tags: [ExchangeRates]
+      summary: Current exchange rate between two currencies
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: from
+          in: query
+          required: true
+          schema:
+            type: string
+          description: Source currency code, e.g. USD
+        - name: to
+          in: query
+          required: true
+          schema:
+            type: string
+          description: Target currency code, e.g. NGN
+      responses:
+        '200':
+          description: Exchange rate
+        '400':
+          description: Validation error
+        '401':
+          description: Missing or invalid token
+        '429':
+          description: Rate limit exceeded
+
+  /payment-requests:
+    post:
+      tags: [PaymentRequests]
+      summary: Request a payment from another user
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreatePaymentRequestRequest'
+      responses:
+        '201':
+          description: Payment request created
+        '400':
+          description: Validation error
+        '401':
+          description: Missing or invalid token
+
+    get:
+      tags: [PaymentRequests]
+      summary: List payment requests sent or received by the current user
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: status
+          in: query
+          required: false
+          schema:
+            type: string
+          description: "Filter by status: pending, accepted, rejected, cancelled, expired, paid"
+      responses:
+        '200':
+          description: Payment requests
+        '401':
+          description: Missing or invalid token
+
+  /payment-requests/{id}:
+    get:
+      tags: [PaymentRequests]
+      summary: Get a payment request
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Payment request
+        '401':
+          description: Missing or invalid token
+        '404':
+          description: Not found
+
+  /payment-requests/{id}/accept:
+    post:
+      tags: [PaymentRequests]
+      summary: Accept a pending payment request and create the remittance
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [sender_account]
+              properties:
+                sender_account:
+                  type: string
+      responses:
+        '200':
+          description: Accepted
+        '400':
+          description: Validation error
+        '401':
+          description: Missing or invalid token
+        '404':
+          description: Not found
+        '409':
+          description: Not pending or expired
+
+  /payment-requests/{id}/reject:
+    post:
+      tags: [PaymentRequests]
+      summary: Reject a pending payment request
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                reason:
+                  type: string
+      responses:
+        '200':
+          description: Rejected
+        '401':
+          description: Missing or invalid token
+        '404':
+          description: Not found
+        '409':
+          description: Not pending
+
+  /payment-requests/{id}/cancel:
+    post:
+      tags: [PaymentRequests]
+      summary: Cancel a pending payment request you created
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Cancelled
+        '401':
+          description: Missing or invalid token
+        '404':
+          description: Not found
+        '409':
+          description: Not pending
+
+  /admin/rate-limit/reset:
+    post:
+      tags: [Admin]
+      summary: Reset rate limits for a user (admin)
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: user_id
+          in: query
+          required: true
+          schema:
+            type: string
+          description: User whose limits are reset
+        - name: endpoint
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Reset only this endpoint's limit
+      responses:
+        '200':
+          description: Limits reset
+        '400':
+          description: Validation error
+        '401':
+          description: Missing or invalid token
+        '403':
+          description: Admin role required
+
+  /admin/rate-limit/view:
+    get:
+      tags: [Admin]
+      summary: View current rate-limit counters (admin)
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: user_id
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Only show this user's limits
+      responses:
+        '200':
+          description: Rate-limit counters
+        '401':
+          description: Missing or invalid token
+        '403':
+          description: Admin role required
+
   /webhooks:
     get:
       tags: [Webhooks]
@@ -873,33 +1425,21 @@ paths:
   /analytics/sla:
     get:
       tags: [Analytics]
-      summary: SLA compliance and latency metrics (admin)
-      description: Returns operational SLA tracking metrics including 99.9% uptime and <500ms p95 latency targets.
+      summary: Settlement SLA metrics (admin)
       security:
         - BearerAuth: []
       parameters:
-        - in: query
-          name: period
+        - name: period
+          in: query
+          required: false
           schema:
             type: string
-            enum: [daily, weekly, monthly, yearly]
-            default: daily
-          description: Aggregation period
-        - in: query
-          name: start_date
-          schema:
-            type: string
-            format: date
-          description: Custom start date (YYYY-MM-DD)
-        - in: query
-          name: end_date
-          schema:
-            type: string
-            format: date
-          description: Custom end date (YYYY-MM-DD)
+          description: Aggregation period (default daily)
       responses:
         '200':
-          description: SLA metrics report
+          description: SLA metrics
+        '401':
+          description: Missing or invalid token
         '403':
           description: Admin role required
 
@@ -926,6 +1466,116 @@ paths:
         '403':
           description: Admin role required
 
+  /contacts:
+    get:
+      tags: [Contacts]
+      summary: List address book contacts
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: List of contacts
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Contact'
+    post:
+      tags: [Contacts]
+      summary: Create new contact in address book
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateContactRequest'
+      responses:
+        '201':
+          description: Contact created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Contact'
+
+  /contacts/{id}:
+    get:
+      tags: [Contacts]
+      summary: Get contact by ID
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Contact details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Contact'
+        '404':
+          description: Contact not found
+    put:
+      tags: [Contacts]
+      summary: Update contact
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateContactRequest'
+      responses:
+        '200':
+          description: Contact updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Contact'
+    delete:
+      tags: [Contacts]
+      summary: Delete contact
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Contact deleted
+
+  /contacts/{id}/verify:
+    post:
+      tags: [Contacts]
+      summary: Verify contact on Stellar network
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Contact verification result
+
   /transactions/export:
     get:
       tags: [Audit]
@@ -940,7 +1590,10 @@ paths:
               schema:
                 type: string
 
-/health:
+  /health:
+    servers:
+      - url: http://localhost:8080
+        description: Health probes are served at the root, not under /api/vN
     get:
       tags: [Health]
       summary: Full health check with dependency status
@@ -959,6 +1612,9 @@ paths:
                 $ref: '#/components/schemas/HealthResponse'
 
   /health/ready:
+    servers:
+      - url: http://localhost:8080
+        description: Health probes are served at the root, not under /api/vN
     get:
       tags: [Health]
       summary: Kubernetes readiness probe
@@ -969,6 +1625,9 @@ paths:
           description: Service not ready
 
   /health/live:
+    servers:
+      - url: http://localhost:8080
+        description: Health probes are served at the root, not under /api/vN
     get:
       tags: [Health]
       summary: Kubernetes liveness probe
