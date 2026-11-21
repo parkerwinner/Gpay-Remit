@@ -53,7 +53,9 @@ pub struct AmlScreeningResult {
 #[contract]
 pub struct MockAmlOracleContract;
 
-#[contractimpl]
+// Exported only from the wasm built with `--features contract-mocks` (see Cargo.toml);
+// native builds and tests always include it.
+#[cfg_attr(any(not(target_family = "wasm"), feature = "contract-mocks"), contractimpl)]
 impl MockAmlOracleContract {
     pub fn initialize(env: Env, admin: Address) {
         admin.require_auth();

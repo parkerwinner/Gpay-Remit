@@ -83,7 +83,9 @@ pub enum KycDataKey {
 #[contract]
 pub struct MockKycOracleContract;
 
-#[contractimpl]
+// Exported only from the wasm built with `--features contract-mocks` (see Cargo.toml);
+// native builds and tests always include it.
+#[cfg_attr(any(not(target_family = "wasm"), feature = "contract-mocks"), contractimpl)]
 impl MockKycOracleContract {
     pub fn init_kyc(env: Env, admin: Address) {
         admin.require_auth();

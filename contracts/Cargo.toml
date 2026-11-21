@@ -25,3 +25,32 @@ harness = false
 [features]
 prop = []
 integration = []
+
+# A wasm build exports only the contracts whose feature is enabled (#378).
+# One wasm cannot export the escrow and the hub together: both define
+# rate-limit admin entry points with the same names (set_rate_limit_config
+# and five others), so the symbols collide and the build fails. The mock
+# oracles are test doubles; keeping them out of production wasm stops their
+# unauthenticated setters from being exported by a deployed contract.
+# Native builds (tests, benches) always include every contract.
+#
+#   cargo build --release --target wasm32v1-none --features contract-escrow
+#   cargo build --release --target wasm32v1-none --features contract-hub
+contract-escrow = []
+contract-hub = []
+contract-mocks = []
+
+# Size-optimised profile for deployable wasm (#378), the settings Soroban
+# recommends. It is separate from `release` so benches keep their normal
+# optimisation. overflow-checks stays on: contract arithmetic must trap,
+# not wrap.
+[profile.release-wasm]
+inherits = "release"
+opt-level = "z"
+overflow-checks = true
+debug = 0
+strip = "symbols"
+debug-assertions = false
+panic = "abort"
+codegen-units = 1
+lto = true

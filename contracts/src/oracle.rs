@@ -76,7 +76,9 @@ const RATE_PRECISION: i128 = 1_000_000_000_000_000_000; // 18 decimal places
 #[contract]
 pub struct MockOracleContract;
 
-#[contractimpl]
+// Exported only from the wasm built with `--features contract-mocks` (see Cargo.toml);
+// native builds and tests always include it.
+#[cfg_attr(any(not(target_family = "wasm"), feature = "contract-mocks"), contractimpl)]
 impl MockOracleContract {
     pub fn init_oracle(env: Env, admin: Address) {
         admin.require_auth();

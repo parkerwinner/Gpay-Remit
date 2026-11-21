@@ -221,7 +221,9 @@ pub enum AmlKey {
 #[contract]
 pub struct RemittanceHubContract;
 
-#[contractimpl]
+// Exported only from the wasm built with `--features contract-hub` (see Cargo.toml);
+// native builds and tests always include it.
+#[cfg_attr(any(not(target_family = "wasm"), feature = "contract-hub"), contractimpl)]
 impl RemittanceHubContract {
     /// Enforce that `caller` signed the invocation **and** is the stored admin.
     ///

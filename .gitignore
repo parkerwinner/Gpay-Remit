@@ -66,3 +66,6 @@ Thumbs.db
 
 # contracts is a cdylib application crate: commit its lockfile so CI (--locked) is reproducible
 !contracts/Cargo.lock
+
+# Contract deployment outputs (scripts/deploy_contracts.sh)
+deployments/

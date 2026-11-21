@@ -5,6 +5,22 @@ on:
     branches: [main, develop]
   pull_request:
     branches: [main, develop]
+  # Manual run, e.g. to redeploy the contracts to testnet (#378) or replay
+  # a property-test failure with its seed (#376).
+  workflow_dispatch:
+    inputs:
+      deploy_contracts:
+        description: "Contracts to deploy to testnet (space separated: escrow hub). Empty skips deployment."
+        required: false
+        default: "escrow hub"
+      proptest_seed:
+        description: "PROPTEST_RNG_SEED to replay a property-test run (empty = use the run id)"
+        required: false
+        default: ""
+
+env:
+  # Pinned to match the testnet protocol; bump together with the network.
+  STELLAR_CLI_VERSION: "30.0.1"
 
 jobs:
   test-contracts:
@@ -40,7 +56,7 @@ jobs:
         working-directory: ./contracts
         env:
           PROPTEST_CASES: "256"
-          PROPTEST_RNG_SEED: ${{ github.run_id }}
+          PROPTEST_RNG_SEED: ${{ inputs.proptest_seed || github.run_id }}
         run: |
           echo "PROPTEST_RNG_SEED=$PROPTEST_RNG_SEED (replay a failure locally with this seed)"
           echo "Property tests ran with \`PROPTEST_RNG_SEED=$PROPTEST_RNG_SEED\`" >> "$GITHUB_STEP_SUMMARY"
@@ -55,6 +71,109 @@ jobs:
           name: proptest-regressions
           path: contracts/tests/*.proptest-regressions
           if-no-files-found: ignore
+
+  # Builds the deployable wasm on every push and PR, so a change that breaks
+  # the wasm build (e.g. two contracts exporting the same entry point) or
+  # outgrows the network's size limit is caught before merge (#378).
+  build-contracts-wasm:
+    name: Build Contract Wasm
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32v1-none
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            contracts/target
+          key: ${{ runner.os }}-cargo-wasm-${{ hashFiles('contracts/Cargo.lock') }}
+
+      - name: Install Stellar CLI
+        uses: stellar/stellar-cli@v30.0.1
+
+      - name: Build and size-check every contract
+        env:
+          DRY_RUN: "1"
+          DEPLOY_CONTRACTS: "escrow hub"
+        run: ./scripts/deploy_contracts.sh
+
+      - name: Upload wasm
+        uses: actions/upload-artifact@v4
+        with:
+          name: contracts-wasm
+          path: deployments/testnet/wasm/*.wasm
+          retention-days: 14
+
+  # Deploys to testnet on every push to main and on manual dispatch (#378).
+  # Uses the TESTNET_DEPLOYER_SECRET secret when set (a stable admin key);
+  # otherwise a fresh friendbot-funded identity becomes the admin.
+  deploy-contracts-testnet:
+    name: Deploy Contracts (testnet)
+    needs: [test-contracts, build-contracts-wasm]
+    if: >-
+      (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
+      (github.event_name == 'workflow_dispatch' && inputs.deploy_contracts != '')
+    runs-on: ubuntu-latest
+    environment: testnet
+    # Never run two deployments at once; never cancel one half way.
+    concurrency:
+      group: deploy-contracts-testnet
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32v1-none
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            contracts/target
+          key: ${{ runner.os }}-cargo-wasm-${{ hashFiles('contracts/Cargo.lock') }}
+
+      - name: Install Stellar CLI
+        uses: stellar/stellar-cli@v30.0.1
+
+      - name: Deploy, initialise and smoke-test
+        env:
+          NETWORK: testnet
+          DEPLOY_CONTRACTS: ${{ inputs.deploy_contracts || vars.DEPLOY_CONTRACTS || 'escrow hub' }}
+          STELLAR_DEPLOYER_SECRET: ${{ secrets.TESTNET_DEPLOYER_SECRET }}
+        run: ./scripts/deploy_contracts.sh
+
+      - name: Summarise deployment
+        if: success()
+        run: |
+          {
+            echo "### Testnet contract deployment"
+            echo '```'
+            cat deployments/testnet/contracts.env
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload deployed addresses and wasm
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: testnet-contracts-${{ github.sha }}
+          path: |
+            deployments/testnet/contracts.json
+            deployments/testnet/contracts.env
+            deployments/testnet/wasm/*.wasm
+          if-no-files-found: warn
+          retention-days: 90
 
   test-backend:
     name: Test Backend

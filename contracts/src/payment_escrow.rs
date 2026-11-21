@@ -548,7 +548,9 @@ impl PaymentEscrowContract {
     }
 }
 
-#[contractimpl]
+// Exported only from the wasm built with `--features contract-escrow` (see Cargo.toml);
+// native builds and tests always include it.
+#[cfg_attr(any(not(target_family = "wasm"), feature = "contract-escrow"), contractimpl)]
 impl PaymentEscrowContract {
     pub fn init_escrow(env: Env, admin: Address) {
         if env.storage().instance().has(&DataKey::Admin) {
