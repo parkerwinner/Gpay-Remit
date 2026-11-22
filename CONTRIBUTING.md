@@ -11,6 +11,16 @@ Thank you for contributing to Gpay-Remit! This guide outlines development practi
 
 ## Development Setup
 
+### Local Development with Docker Compose
+
+To spin up all required dependencies (PostgreSQL 15, Redis 7, Backend, and Frontend) with development volume mounts and live reload:
+
+```bash
+make dev
+# Or directly via docker compose:
+docker compose -f docker-compose.yml -f docker-compose.dev.yml up --build
+```
+
 ### Backend
 
 1. Navigate to the backend directory:

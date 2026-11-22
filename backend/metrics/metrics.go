@@ -102,6 +102,74 @@ var (
 		},
 		[]string{"reason"},
 	)
+
+	// Database connection pool metrics
+	DBOpenConnections = prometheus.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: "gpay_remit",
+			Name:      "db_open_connections",
+			Help:      "Current number of open database connections.",
+		},
+	)
+
+	DBInUseConnections = prometheus.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: "gpay_remit",
+			Name:      "db_in_use_connections",
+			Help:      "Current number of in-use database connections.",
+		},
+	)
+
+	DBIdleConnections = prometheus.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: "gpay_remit",
+			Name:      "db_idle_connections",
+			Help:      "Current number of idle database connections.",
+		},
+	)
+
+	DBWaitCount = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "gpay_remit",
+			Name:      "db_wait_count_total",
+			Help:      "Total number of connections waited for.",
+		},
+	)
+
+	DBWaitDuration = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "gpay_remit",
+			Name:      "db_wait_duration_seconds_total",
+			Help:      "Total time blocked waiting for a new connection in seconds.",
+		},
+	)
+
+	// Redis cache hit/miss metrics
+	RedisHitsTotal = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "gpay_remit",
+			Name:      "redis_hits_total",
+			Help:      "Total number of Redis cache hits.",
+		},
+	)
+
+	RedisMissesTotal = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "gpay_remit",
+			Name:      "redis_misses_total",
+			Help:      "Total number of Redis cache misses.",
+		},
+	)
+
+	// Webhook delivery counters by status and event
+	WebhookDeliveriesTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "gpay_remit",
+			Name:      "webhook_deliveries_total",
+			Help:      "Total number of webhook deliveries by status and event.",
+		},
+		[]string{"status", "event"},
+	)
 )
 
 func init() {
@@ -115,12 +183,48 @@ func init() {
 		ExchangeRateLookupsTotal,
 		WebhookRetryAttemptsTotal,
 		WebhookDeadLettersTotal,
+		DBOpenConnections,
+		DBInUseConnections,
+		DBIdleConnections,
+		DBWaitCount,
+		DBWaitDuration,
+		RedisHitsTotal,
+		RedisMissesTotal,
+		WebhookDeliveriesTotal,
 	)
 }
 
 // Handler returns standard Prometheus metrics HTTP handler.
 func Handler() http.Handler {
 	return promhttp.Handler()
+}
+
+// RecordDBStats updates database pool metrics from sql.DBStats.
+func RecordDBStats(open, inUse, idle int, waitCount int64, waitDurationSeconds float64) {
+	DBOpenConnections.Set(float64(open))
+	DBInUseConnections.Set(float64(inUse))
+	DBIdleConnections.Set(float64(idle))
+	if waitCount > 0 {
+		DBWaitCount.Add(float64(waitCount))
+	}
+	if waitDurationSeconds > 0 {
+		DBWaitDuration.Add(waitDurationSeconds)
+	}
+}
+
+// RecordRedisHit records a Redis cache hit.
+func RecordRedisHit() {
+	RedisHitsTotal.Inc()
+}
+
+// RecordRedisMiss records a Redis cache miss.
+func RecordRedisMiss() {
+	RedisMissesTotal.Inc()
+}
+
+// RecordWebhookDelivery records a webhook delivery attempt outcome.
+func RecordWebhookDelivery(status, event string) {
+	WebhookDeliveriesTotal.WithLabelValues(status, event).Inc()
 }
 
 // RecordHTTPRequest updates HTTP request counters and duration histograms.

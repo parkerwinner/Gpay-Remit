@@ -14,9 +14,15 @@ info:
     - **v2** — current, recommended
 
     Set the desired version via the `Accept-Version` header or use the versioned path prefix (`/api/v1/` or `/api/v2/`).
+
+    ## Changelog
+    For a historical record of all changes, migrations, and breaking changes, see the [API Changelog](docs/API_CHANGELOG.md).
   version: "2.0.0"
   contact:
     name: Gpay-Remit Team
+externalDocs:
+  description: API Changelog and Migration Notes
+  url: docs/API_CHANGELOG.md
 
 servers:
   - url: http://localhost:8080/api/v1
