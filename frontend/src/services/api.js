@@ -2,6 +2,14 @@
 import axios from "axios";
 import { API_BASE_URL } from "../config";
 
+/**
+ * Shared API contracts and TypeScript types generated from backend/handlers/openapi.yaml
+ * @typedef {import("../types").Remittance} Remittance
+ * @typedef {import("../types").Invoice} Invoice
+ * @typedef {import("../types").User} User
+ * @typedef {import("../types").Paths} ApiPaths
+ */
+
 // Global loading indicator state
 let activeRequestsCount = 0;
 const loadingListeners = new Set();

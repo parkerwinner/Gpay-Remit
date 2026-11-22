@@ -19,7 +19,9 @@
     "build": "react-scripts build",
     "test": "react-scripts test",
     "eject": "react-scripts eject",
-    "lint": "eslint src"
+    "lint": "eslint src",
+    "generate:types": "openapi-typescript ../backend/handlers/openapi.yaml -o src/types/api.ts",
+    "check:types": "openapi-typescript ../backend/handlers/openapi.yaml -o src/types/api.ts && git diff --exit-code src/types/api.ts"
   },
   "eslintConfig": {
     "extends": [
@@ -39,6 +41,7 @@
     ]
   },
   "devDependencies": {
+    "@faker-js/faker": "^8.4.1",
     "@testing-library/jest-dom": "^6.1.5",
     "@testing-library/react": "^14.1.2",
     "@testing-library/user-event": "^14.5.1"

@@ -2,8 +2,6 @@
 
 A cross-border payment and remittance hub built on the Stellar network, enabling instant, low-cost international money transfers with multi-currency support.
 
-i just need to create a drrsft pr
-
 ## Overview
 
 Gpay-Remit leverages Stellar's payment rails to provide:
@@ -33,6 +31,10 @@ Gpay-Remit/
 ├── docs/              # Architecture documentation
 └── scripts/           # Setup and deployment scripts
 ```
+
+## Architecture
+
+For complete system diagrams, data flow sequences, and deployment topology, see [docs/architecture.md](docs/architecture.md).
 
 ## Quick Start
 
@@ -157,4 +159,3 @@ MIT License - see [LICENSE](LICENSE) file for details.
 - [Stellar Documentation](https://developers.stellar.org/)
 - [Soroban Documentation](https://soroban.stellar.org/)
 - [Stellar Go SDK](https://github.com/stellar/go)
-±

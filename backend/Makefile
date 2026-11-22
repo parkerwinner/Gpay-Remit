@@ -6,6 +6,9 @@ dev:
 test:
 	go test ./...
 
+mutation-test:
+	./scripts/run_mutation_tests.sh
+
 integration-test:
 	go test -count=1 -tags=integration ./...
 

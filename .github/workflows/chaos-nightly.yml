@@ -1,0 +1,48 @@
+name: Nightly Chaos & Resilience Testing
+
+on:
+  schedule:
+    - cron: "0 4 * * *"
+  workflow_dispatch:
+
+jobs:
+  chaos-tests:
+    name: Chaos & Resilience Suite
+    runs-on: ubuntu-latest
+
+    services:
+      toxiproxy:
+        image: ghcr.io/shopify/toxiproxy:latest
+        ports:
+          - 8474:8474
+          - 25432:25432
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+          cache-dependency-path: backend/go.sum
+
+      - name: Download Go Dependencies
+        run: |
+          cd backend && go mod download
+
+      - name: Run In-Process Chaos Tests
+        run: |
+          cd backend && go test -race -v ./chaos/...
+
+      - name: Run Toxiproxy Chaos Tests
+        env:
+          TOXIPROXY: "1"
+          TOXIPROXY_URL: "http://localhost:8474"
+        run: |
+          cd backend && go test -race -v -tags=toxiproxy ./chaos/...
+
+      - name: Alert on Failure
+        if: failure()
+        run: |
+          echo "::error title=Chaos Test Suite Failed::Nightly chaos tests encountered failures. Check the job logs and review backend/chaos/."

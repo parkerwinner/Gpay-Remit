@@ -1,0 +1,43 @@
+name: Backend Mutation Testing
+
+on:
+  push:
+    branches: [main, dev]
+    paths:
+      - 'backend/**'
+      - '.github/workflows/mutation-testing.yml'
+  pull_request:
+    branches: [main, dev]
+    paths:
+      - 'backend/**'
+      - '.github/workflows/mutation-testing.yml'
+  workflow_dispatch:
+
+jobs:
+  mutation-tests:
+    name: Mutation Testing Suite
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+          cache-dependency-path: backend/go.sum
+
+      - name: Run Mutation Tests
+        working-directory: ./backend
+        run: |
+          ./scripts/run_mutation_tests.sh
+
+      - name: Upload Mutation Test Reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mutation-reports
+          path: |
+            backend/mutation_report.txt
+            backend/mutation_score.log

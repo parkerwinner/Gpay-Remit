@@ -1,8 +1,19 @@
 import { formatMinorUnits } from '../utils/currency';
 // #112 — modal/detail view for a single transaction record.
-import React from "react";
+import React, { useEffect } from "react";
 
 function TransactionDetails({ transaction, onClose }) {
+  useEffect(() => {
+    if (!transaction) return undefined;
+
+    const handleKeyDown = (event) => {
+      if (event.key === "Escape") onClose();
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [transaction, onClose]);
+
   if (!transaction) return null;
 
   return (
@@ -11,9 +22,13 @@ function TransactionDetails({ transaction, onClose }) {
       aria-modal="true"
       aria-labelledby="tx-detail-title"
       className="transaction-details-overlay"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) onClose();
+      }}
     >
       <div className="transaction-details-card">
         <button
+          type="button"
           className="close-btn"
           onClick={onClose}
           aria-label="Close transaction details"

@@ -2,9 +2,11 @@ package services
 
 import (
 	"errors"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"syscall"
 	"testing"
 	"time"
@@ -252,5 +254,96 @@ func TestIsConnectionRefused(t *testing.T) {
 			Err: nil,
 		}
 		assert.False(t, isConnectionRefused(opErr))
+	})
+}
+
+// Tests for Webhook HMAC Signature and Tamper Detection (#424)
+func TestWebhookDeliverySignatureAndTamperVerification(t *testing.T) {
+	secret := "super-secure-webhook-secret-key"
+	validPayload := `{"event":"payment.completed","timestamp":"2026-01-15T10:30:00Z","data":{"amount":"100.00","currency":"USDC"}}`
+
+	service := NewWebhookDeliveryService(nil)
+	validSig := service.generateSignature(secret, validPayload)
+	currentTimestamp := strconv.FormatInt(time.Now().Unix(), 10)
+
+	t.Run("Task 1: Delivers a webhook with a valid signature", func(t *testing.T) {
+		headers := http.Header{}
+		headers.Set("X-Webhook-Signature", validSig)
+		headers.Set("X-Webhook-Timestamp", currentTimestamp)
+
+		err := VerifyWebhookDelivery(secret, headers, []byte(validPayload), 5*time.Minute)
+		assert.NoError(t, err, "Webhook with valid signature and fresh timestamp should pass verification")
+	})
+
+	t.Run("Task 2: Test with a tampered body (signature should not match)", func(t *testing.T) {
+		tamperedPayload := `{"event":"payment.completed","timestamp":"2026-01-15T10:30:00Z","data":{"amount":"999999.00","currency":"USDC"}}`
+
+		headers := http.Header{}
+		headers.Set("X-Webhook-Signature", validSig) // Using signature generated for validPayload
+		headers.Set("X-Webhook-Timestamp", currentTimestamp)
+
+		err := VerifyWebhookDelivery(secret, headers, []byte(tamperedPayload), 5*time.Minute)
+		assert.Error(t, err, "Tampered payload should fail HMAC verification")
+		assert.Contains(t, err.Error(), "invalid webhook signature")
+	})
+
+	t.Run("Task 3: Test with a missing signature header", func(t *testing.T) {
+		headers := http.Header{}
+		headers.Set("X-Webhook-Timestamp", currentTimestamp)
+		// No X-Webhook-Signature header set
+
+		err := VerifyWebhookDelivery(secret, headers, []byte(validPayload), 5*time.Minute)
+		assert.Error(t, err, "Missing signature header should fail verification")
+		assert.Contains(t, err.Error(), "missing X-Webhook-Signature header")
+	})
+
+	t.Run("Task 4: Test with an expired timestamp", func(t *testing.T) {
+		// Timestamp from 1 hour ago
+		expiredTimestamp := strconv.FormatInt(time.Now().Add(-1*time.Hour).Unix(), 10)
+
+		headers := http.Header{}
+		headers.Set("X-Webhook-Signature", validSig)
+		headers.Set("X-Webhook-Timestamp", expiredTimestamp)
+
+		// Verification with 5-minute maximum tolerance
+		err := VerifyWebhookDelivery(secret, headers, []byte(validPayload), 5*time.Minute)
+		assert.Error(t, err, "Expired timestamp should fail verification")
+		assert.Contains(t, err.Error(), "webhook timestamp expired")
+	})
+
+	t.Run("End-to-End Delivery and Consumer Verification", func(t *testing.T) {
+		receivedHeaders := make(chan http.Header, 1)
+		receivedBody := make(chan string, 1)
+
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			receivedHeaders <- r.Header.Clone()
+			b, _ := io.ReadAll(r.Body)
+			receivedBody <- string(b)
+			w.WriteHeader(http.StatusOK)
+		}))
+		defer server.Close()
+
+		webhook := &models.Webhook{
+			ID:     10,
+			URL:    server.URL,
+			Secret: secret,
+		}
+
+		success, code, _, errMsg, err := service.sendWebhookRequest(webhook, validPayload, "req-123")
+		assert.True(t, success)
+		assert.Equal(t, http.StatusOK, code)
+		assert.NoError(t, err)
+		assert.Empty(t, errMsg)
+
+		headers := <-receivedHeaders
+		body := <-receivedBody
+
+		// Consumer verifies received payload
+		verifyErr := VerifyWebhookDelivery(secret, headers, []byte(body), 5*time.Minute)
+		assert.NoError(t, verifyErr, "Consumer should successfully verify delivered webhook")
+
+		// Consumer rejects tampered payload
+		tamperedErr := VerifyWebhookDelivery(secret, headers, []byte(body+`{"extra":true}`), 5*time.Minute)
+		assert.Error(t, tamperedErr, "Consumer must reject tampered body")
 	})
 }

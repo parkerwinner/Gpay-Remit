@@ -360,6 +360,7 @@ func (s *WebhookDeliveryService) sendWebhookRequest(webhook *models.Webhook, pay
 
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-Webhook-Signature", signature)
+	req.Header.Set("X-Webhook-Timestamp", fmt.Sprintf("%d", time.Now().Unix()))
 	req.Header.Set("X-Webhook-ID", fmt.Sprintf("%d", webhook.ID))
 	req.Header.Set("User-Agent", "GPay-Remit-Webhook/1.0")
 	if requestID != "" {
@@ -403,6 +404,43 @@ func VerifySignature(secret, payload, signature string) bool {
 	h.Write([]byte(payload))
 	expectedSignature := hex.EncodeToString(h.Sum(nil))
 	return hmac.Equal([]byte(expectedSignature), []byte(signature))
+}
+
+// VerifyWebhookDelivery verifies an incoming webhook delivery on the consumer side.
+// It verifies:
+// 1. Signature header is present.
+// 2. Signature matches the HMAC-SHA256 of the payload.
+// 3. Timestamp header is present, parseable, and not expired (within maxAge tolerance).
+func VerifyWebhookDelivery(secret string, headers http.Header, payload []byte, maxAge time.Duration) error {
+	sig := headers.Get("X-Webhook-Signature")
+	if sig == "" {
+		return errors.New("missing X-Webhook-Signature header")
+	}
+
+	if !VerifySignature(secret, string(payload), sig) {
+		return errors.New("invalid webhook signature: payload does not match HMAC signature")
+	}
+
+	if maxAge > 0 {
+		tsStr := headers.Get("X-Webhook-Timestamp")
+		if tsStr == "" {
+			return errors.New("missing X-Webhook-Timestamp header")
+		}
+		tsUnix, err := strconv.ParseInt(tsStr, 10, 64)
+		if err != nil {
+			return fmt.Errorf("invalid X-Webhook-Timestamp format: %w", err)
+		}
+		sentAt := time.Unix(tsUnix, 0)
+		age := time.Since(sentAt)
+		if age < 0 {
+			age = -age
+		}
+		if age > maxAge {
+			return fmt.Errorf("webhook timestamp expired: age %v exceeds max tolerance %v", age, maxAge)
+		}
+	}
+
+	return nil
 }
 
 // retryClaimLease stops the next worker tick from picking up a delivery whose

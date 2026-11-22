@@ -85,84 +85,53 @@ function TransactionHistory() {
       <h2 id="tx-history-heading">Transaction History</h2>
 
       <div className="tx-filters" role="search" aria-label="Filter transactions">
-        <label htmlFor="tx-search" className="sr-only">
-          Search by ID or user
-        </label>
-        <input
-          id="tx-search"
-          type="search"
-          placeholder="Search by ID or user…"
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          aria-label="Search transactions"
-        />
-
-        <label htmlFor="tx-status" className="sr-only">
-          Filter by status
-        </label>
-        <select
-          id="tx-status"
-          value={filter}
-          onChange={(e) => setFilter(e.target.value)}
-          aria-label="Filter by status"
-        >
-          {STATUS_OPTIONS.map((s) => (
-            <option key={s} value={s}>
-              {s.charAt(0).toUpperCase() + s.slice(1)}
-            </option>
-          ))}
+        <label htmlFor="tx-search" className="sr-only">Search by ID or user</label>
+        <input id="tx-search" type="search" placeholder="Search by ID or user…" value={search}
+          onChange={(e) => setSearch(e.target.value)} aria-label="Search transactions" />
+        <label htmlFor="tx-status" className="sr-only">Filter by status</label>
+        <select id="tx-status" value={filter} onChange={(e) => setFilter(e.target.value)} aria-label="Filter by status">
+          {STATUS_OPTIONS.map((s) => <option key={s} value={s}>{s.charAt(0).toUpperCase() + s.slice(1)}</option>)}
         </select>
       </div>
 
       {loading && <SkeletonLoader rows={5} columns={6} />}
-      {error && (
-        <p role="alert" className="error">
-          {error}
-        </p>
-      )}
+      {error && <p role="alert" className="error">{error}</p>}
 
       {!loading && !error && (
         <table aria-labelledby="tx-history-heading">
           <thead>
             <tr>
-              <th scope="col">ID</th>
-              <th scope="col">Sender</th>
-              <th scope="col">Recipient</th>
-              <th scope="col">Amount</th>
-              <th scope="col">Status</th>
-              <th scope="col">Date</th>
-              <th scope="col">
-                <span className="sr-only">Actions</span>
-              </th>
+              <th scope="col">ID</th><th scope="col">Sender</th><th scope="col">Recipient</th>
+              <th scope="col">Amount</th><th scope="col">Status</th><th scope="col">Date</th>
+              <th scope="col"><span className="sr-only">Actions</span></th>
             </tr>
           </thead>
           <tbody>
             {filtered.length === 0 ? (
-              <tr>
-                <td colSpan={7}>No transactions found.</td>
-              </tr>
+              <tr><td colSpan={7}>No transactions found.</td></tr>
             ) : (
               filtered.map((tx) => (
-                <tr key={tx.id}>
-                  <td>{tx.id}</td>
-                  <td>{tx.sender_id}</td>
-                  <td>{tx.recipient_id}</td>
-                  <td>
-                    {formatMinorUnits(tx.amount, tx.currency)} {tx.currency}
-                  </td>
-                  <td>
-                    <span className={`status-badge status-${tx.status?.toLowerCase()}`}>
-                      {tx.status}
-                    </span>
-                  </td>
+                <tr
+                  key={tx.id}
+                  className="transaction-row"
+                  tabIndex={0}
+                  role="button"
+                  aria-label={`View details for transaction ${tx.id}`}
+                  onClick={() => setSelected(tx)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" || event.key === " ") {
+                      event.preventDefault();
+                      setSelected(tx);
+                    }
+                  }}
+                >
+                  <td>{tx.id}</td><td>{tx.sender_id}</td><td>{tx.recipient_id}</td>
+                  <td>{formatMinorUnits(tx.amount, tx.currency)} {tx.currency}</td>
+                  <td><span className={`status-badge status-${tx.status?.toLowerCase()}`}>{tx.status}</span></td>
                   <td>{new Date(tx.created_at).toLocaleDateString()}</td>
                   <td>
-                    <button
-                      onClick={() => setSelected(tx)}
-                      aria-label={`View details for transaction ${tx.id}`}
-                    >
-                      Details
-                    </button>
+                    <button type="button" onClick={(event) => { event.stopPropagation(); setSelected(tx); }}
+                      aria-label={`View details for transaction ${tx.id}`}>Details</button>
                   </td>
                 </tr>
               ))
@@ -175,71 +144,27 @@ function TransactionHistory() {
         <div className="tx-pagination" role="navigation" aria-label="Transaction pagination">
           <span className="tx-pagination-status" aria-live="polite">
             {totalCount !== null ? (
-              <>
-                {pageStart}–{pageEnd} of {totalCount.toLocaleString()} transaction{totalCount === 1 ? "" : "s"}
-                {totalPages !== null && <> · Page {page} of {totalPages}</>}
-              </>
+              <>{pageStart}–{pageEnd} of {totalCount.toLocaleString()} transaction{totalCount === 1 ? "" : "s"}
+                {totalPages !== null && <> · Page {page} of {totalPages}</>}</>
             ) : (
               <>Page {page} · {transactions.length} result{transactions.length === 1 ? "" : "s"}</>
             )}
           </span>
-
-          <label htmlFor="tx-page-size" className="sr-only">
-            Results per page
-          </label>
-          <select
-            id="tx-page-size"
-            value={pageSize}
-            onChange={(e) => changePageSize(Number(e.target.value))}
-            aria-label="Results per page"
-            disabled={loading}
-          >
-            {PAGE_SIZE_OPTIONS.map((size) => (
-              <option key={size} value={size}>
-                {size} / page
-              </option>
-            ))}
+          <label htmlFor="tx-page-size" className="sr-only">Results per page</label>
+          <select id="tx-page-size" value={pageSize} onChange={(e) => changePageSize(Number(e.target.value))}
+            aria-label="Results per page" disabled={loading}>
+            {PAGE_SIZE_OPTIONS.map((size) => <option key={size} value={size}>{size} / page</option>)}
           </select>
-
-          <button
-            type="button"
-            onClick={() => goToPage(page - 1)}
-            disabled={!hasPrevPage || loading}
-            aria-label="Previous page"
-          >
-            Previous
-          </button>
-
-          {/* Jump-to-page buttons when total pages is known and manageable */}
-          {totalPages !== null && totalPages <= 7 &&
-            Array.from({ length: totalPages }, (_, i) => i + 1).map((p) => (
-              <button
-                key={p}
-                type="button"
-                onClick={() => goToPage(p)}
-                disabled={loading}
-                aria-current={p === page ? "page" : undefined}
-                className={p === page ? "active" : ""}
-                aria-label={`Page ${p}`}
-              >
-                {p}
-              </button>
-            ))}
-
-          <button
-            type="button"
-            onClick={() => goToPage(page + 1)}
-            disabled={!hasNextPage || loading}
-            aria-label="Next page"
-          >
-            Next
-          </button>
+          <button type="button" onClick={() => goToPage(page - 1)} disabled={!hasPrevPage || loading} aria-label="Previous page">Previous</button>
+          {totalPages !== null && totalPages <= 7 && Array.from({ length: totalPages }, (_, i) => i + 1).map((p) => (
+            <button key={p} type="button" onClick={() => goToPage(p)} disabled={loading}
+              aria-current={p === page ? "page" : undefined} className={p === page ? "active" : ""} aria-label={`Page ${p}`}>{p}</button>
+          ))}
+          <button type="button" onClick={() => goToPage(page + 1)} disabled={!hasNextPage || loading} aria-label="Next page">Next</button>
         </div>
       )}
 
-      {selected && (
-        <TransactionDetails transaction={selected} onClose={() => setSelected(null)} />
-      )}
+      {selected && <TransactionDetails transaction={selected} onClose={() => setSelected(null)} />}
     </main>
   );
 }
