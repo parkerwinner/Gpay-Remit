@@ -6,8 +6,6 @@ export class LedgerWalletService {
   private transport: any | null = null;
   private str: any | null = null;
 
-  constructor() {}
-
   async connect(): Promise<{ publicKey: string }> {
     try {
       if (!this.transport) {
