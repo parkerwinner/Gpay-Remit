@@ -40,6 +40,14 @@ jobs:
             contracts/target
           key: ${{ runner.os }}-cargo-${{ hashFiles('contracts/Cargo.lock') }}
 
+      - name: Check Rust formatting
+        working-directory: ./contracts
+        run: cargo fmt --check
+
+      - name: Run cargo clippy
+        working-directory: ./contracts
+        run: cargo clippy --all-targets -- -D warnings
+
       # --all-features also compiles and runs the feature-gated suites
       # (`prop` -> tests/prop_conditions.rs, `integration` ->
       # tests/integration_remittance.rs). tests/fuzz_*.rs are proptest-based
