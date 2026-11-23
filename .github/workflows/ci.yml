@@ -98,6 +98,13 @@ jobs:
           # cannot build the module at all.
           go-version: "1.25"
 
+      - name: Run golangci-lint
+        uses: golangci/golangci-lint-action@v6
+        with:
+          version: v1.64
+          working-directory: ./backend
+          args: --timeout=5m
+
       - name: Run backend tests with coverage
         working-directory: ./backend
         env:

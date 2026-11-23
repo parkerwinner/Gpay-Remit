@@ -1,4 +1,7 @@
-.PHONY: test integration-test chaos-test mutation-test coverage coverage-html check fmt-check
+.PHONY: test integration-test chaos-test mutation-test coverage coverage-html check fmt-check lint
+
+lint:
+	golangci-lint run ./...
 
 test:
 	go test ./...
