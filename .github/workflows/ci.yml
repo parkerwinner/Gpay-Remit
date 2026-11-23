@@ -167,6 +167,13 @@ jobs:
           redis-cli -h localhost CONFIG SET maxmemory "$REDIS_MAXMEMORY"
           redis-cli -h localhost CONFIG SET maxmemory-policy allkeys-lru
 
+      - name: Run golangci-lint
+        uses: golangci/golangci-lint-action@v6
+        with:
+          version: v1.64
+          working-directory: ./backend
+          args: --timeout=5m
+
       - name: Run backend tests with coverage
         working-directory: ./backend
         env:
