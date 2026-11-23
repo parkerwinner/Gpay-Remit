@@ -21,6 +21,7 @@ services:
   redis:
     image: redis:7-alpine
     container_name: gpay-remit-cache
+    command: ["redis-server", "--maxmemory", "${REDIS_MAXMEMORY:-256mb}", "--maxmemory-policy", "allkeys-lru"]
     ports:
       - "6379:6379"
     restart: unless-stopped

@@ -43,6 +43,14 @@ func main() {
 		logger.Log.WithField("error", err).Fatal("Failed to connect to database")
 	}
 
+	readDB := db
+	if replicaDB, replicaErr := config.InitReadDB(cfg); replicaErr != nil {
+		logger.Log.WithField("error", replicaErr).Warn("Read replica unavailable — using primary for reads")
+	} else if replicaDB != nil {
+		readDB = replicaDB
+		logger.Log.Info("Database read replica connected")
+	}
+
 	if err := models.EncryptLegacyWebhookSecrets(db); err != nil {
 		logger.Log.WithField("error", err).Fatal("Failed to encrypt legacy webhook secrets")
 	}
@@ -72,7 +80,7 @@ func main() {
 	router.Use(middleware.CSRFProtection())
 	router.Use(middleware.SecurityHeadersMiddleware())
 
-	registerRoutes(router, db, cfg)
+	registerRoutes(router, db, readDB, cfg)
 
 	server := &http.Server{
 		Addr:    ":" + cfg.Port,
@@ -80,11 +88,15 @@ func main() {
 	}
 
 	baseCtx, cancelWorkers := context.WithCancel(context.Background())
+	utils.StartRedisStatsCollector(baseCtx, 30*time.Second)
 	var wg sync.WaitGroup
 	middleware.StartIdempotencyCleanupScheduler(baseCtx, &wg, db, time.Hour)
 	workers.StartMonitor(baseCtx, &wg)
 	workers.StartWebhookRetryWorker(baseCtx, &wg, db)
 	workers.StartPaymentRequestExpiryWorker(baseCtx, &wg, db)
+	if cfg.RecurringWorkerEnabled {
+		workers.StartRecurringPaymentWorker(baseCtx, &wg, db, cfg)
+	}
 
 	errCh := make(chan error, 1)
 	go func() {
@@ -142,13 +154,20 @@ func main() {
 	} else {
 		logger.Log.Info("Database connection closed")
 	}
+	if readDB != db {
+		if sqlDB, err := readDB.DB(); err == nil {
+			if err := sqlDB.Close(); err != nil {
+				logger.Log.WithField("error", err).Warn("Failed to close read replica")
+			}
+		}
+	}
 }
 
 // registerRoutes mounts every HTTP route on router. It is separate from
 // main so tests can enumerate the real route table (see
 // openapi_routes_test.go) without a database: handler constructors only
 // store their dependencies, so nil db is fine for registration.
-func registerRoutes(router *gin.Engine, db *gorm.DB, cfg *config.Config) {
+func registerRoutes(router *gin.Engine, db, readDB *gorm.DB, cfg *config.Config) {
 	router.GET("/metrics", gin.WrapH(metrics.Handler()))
 
 	healthHandler := handlers.NewHealthHandlerWithRedis(db, cfg, utils.RedisClient)
@@ -198,12 +217,36 @@ func registerRoutes(router *gin.Engine, db *gorm.DB, cfg *config.Config) {
 				}
 				c.JSON(200, gin.H{"mfa_enabled": user.MFAEnabled})
 			})
-			remittanceHandler := handlers.NewRemittanceHandler(db, cfg)
+			remittanceHandler := handlers.NewRemittanceHandler(db, cfg, readDB)
+			searchHandler := handlers.NewSearchHandler(db, cfg, readDB)
+			protected.GET("/search/transactions", searchHandler.SearchTransactions)
 			protected.POST("/remittances/create", remittanceHandler.CreateRemittance)
+			protected.POST("/remittances/batch", remittanceHandler.CreateBatchRemittance)
 			protected.POST("/remittances", remittanceHandler.SendRemittance)
 			protected.GET("/remittances/:id", remittanceHandler.GetRemittance)
 			protected.GET("/remittances", remittanceHandler.ListRemittances)
 			protected.POST("/remittances/:id/complete", middleware.RequireRole("admin"), remittanceHandler.CompleteRemittance)
+
+			templateHandler := handlers.NewPaymentTemplateHandler(db, cfg, utils.NewStellarClient(cfg.StellarHorizonURL, cfg.NetworkPassphrase))
+			protected.POST("/templates", templateHandler.CreateTemplate)
+			protected.GET("/templates", templateHandler.ListTemplates)
+			protected.GET("/templates/:id", templateHandler.GetTemplate)
+			protected.PUT("/templates/:id", templateHandler.UpdateTemplate)
+			protected.DELETE("/templates/:id", templateHandler.DeleteTemplate)
+			protected.POST("/templates/:id/send", templateHandler.SendFromTemplate)
+
+			recurringHandler := handlers.NewRecurringScheduleHandler(db, cfg, utils.NewStellarClient(cfg.StellarHorizonURL, cfg.NetworkPassphrase))
+			protected.POST("/recurring-schedules", recurringHandler.CreateSchedule)
+			protected.GET("/recurring-schedules", recurringHandler.ListSchedules)
+			protected.GET("/recurring-schedules/:id", recurringHandler.GetSchedule)
+			protected.POST("/recurring-schedules/:id/pause", recurringHandler.PauseSchedule)
+			protected.POST("/recurring-schedules/:id/resume", recurringHandler.ResumeSchedule)
+			protected.POST("/recurring-schedules/:id/cancel", recurringHandler.CancelSchedule)
+
+			walletHandler := handlers.NewWalletHandler(db, cfg, utils.NewStellarClient(cfg.StellarHorizonURL, cfg.NetworkPassphrase))
+			protected.GET("/wallet/balances", walletHandler.GetBalances)
+			protected.GET("/wallet/preferences", walletHandler.GetPreferences)
+			protected.PUT("/wallet/preferences", walletHandler.UpdatePreferences)
 
 			protected.POST("/invoices", remittanceHandler.CreateInvoice)
 			protected.GET("/invoices", remittanceHandler.ListInvoices)
@@ -227,7 +270,7 @@ func registerRoutes(router *gin.Engine, db *gorm.DB, cfg *config.Config) {
 			auditHandler := handlers.NewAuditLogHandler(db)
 			protected.GET("/audit/logs", middleware.RequireRole("admin"), auditHandler.List)
 
-			exportHandler := handlers.NewExportHandler(db)
+			exportHandler := handlers.NewExportHandler(db, readDB)
 			protected.GET("/transactions/export", exportHandler.ExportTransactions)
 
 			// Admin rate limit management endpoints
@@ -254,7 +297,7 @@ func registerRoutes(router *gin.Engine, db *gorm.DB, cfg *config.Config) {
 			protected.GET("/webhooks/:id/deliveries", webhookHandler.GetWebhookDeliveries)
 			protected.POST("/webhooks/deliveries/:delivery_id/retry", webhookHandler.RetryWebhookDelivery)
 
-			analyticsHandler := handlers.NewAnalyticsHandler(db)
+			analyticsHandler := handlers.NewAnalyticsHandler(db, readDB)
 			protected.GET("/analytics/volume", middleware.RequireRole("admin"), analyticsHandler.GetVolumeMetrics)
 			protected.GET("/analytics/fees", middleware.RequireRole("admin"), analyticsHandler.GetFeeMetrics)
 			protected.GET("/analytics/success-rate", middleware.RequireRole("admin"), analyticsHandler.GetSuccessRate)
@@ -297,12 +340,36 @@ func registerRoutes(router *gin.Engine, db *gorm.DB, cfg *config.Config) {
 				}
 				c.JSON(200, gin.H{"mfa_enabled": user.MFAEnabled})
 			})
-			remittanceHandler := handlers.NewRemittanceHandler(db, cfg)
+			remittanceHandler := handlers.NewRemittanceHandler(db, cfg, readDB)
+			searchHandler := handlers.NewSearchHandler(db, cfg, readDB)
+			protected.GET("/search/transactions", searchHandler.SearchTransactions)
 			protected.POST("/remittances/create", remittanceHandler.CreateRemittance)
+			protected.POST("/remittances/batch", remittanceHandler.CreateBatchRemittance)
 			protected.POST("/remittances", remittanceHandler.SendRemittance)
 			protected.GET("/remittances/:id", remittanceHandler.GetRemittance)
 			protected.GET("/remittances", remittanceHandler.ListRemittances)
 			protected.POST("/remittances/:id/complete", middleware.RequireRole("admin"), remittanceHandler.CompleteRemittance)
+
+			templateHandler := handlers.NewPaymentTemplateHandler(db, cfg, utils.NewStellarClient(cfg.StellarHorizonURL, cfg.NetworkPassphrase))
+			protected.POST("/templates", templateHandler.CreateTemplate)
+			protected.GET("/templates", templateHandler.ListTemplates)
+			protected.GET("/templates/:id", templateHandler.GetTemplate)
+			protected.PUT("/templates/:id", templateHandler.UpdateTemplate)
+			protected.DELETE("/templates/:id", templateHandler.DeleteTemplate)
+			protected.POST("/templates/:id/send", templateHandler.SendFromTemplate)
+
+			recurringHandler := handlers.NewRecurringScheduleHandler(db, cfg, utils.NewStellarClient(cfg.StellarHorizonURL, cfg.NetworkPassphrase))
+			protected.POST("/recurring-schedules", recurringHandler.CreateSchedule)
+			protected.GET("/recurring-schedules", recurringHandler.ListSchedules)
+			protected.GET("/recurring-schedules/:id", recurringHandler.GetSchedule)
+			protected.POST("/recurring-schedules/:id/pause", recurringHandler.PauseSchedule)
+			protected.POST("/recurring-schedules/:id/resume", recurringHandler.ResumeSchedule)
+			protected.POST("/recurring-schedules/:id/cancel", recurringHandler.CancelSchedule)
+
+			walletHandler := handlers.NewWalletHandler(db, cfg, utils.NewStellarClient(cfg.StellarHorizonURL, cfg.NetworkPassphrase))
+			protected.GET("/wallet/balances", walletHandler.GetBalances)
+			protected.GET("/wallet/preferences", walletHandler.GetPreferences)
+			protected.PUT("/wallet/preferences", walletHandler.UpdatePreferences)
 
 			protected.POST("/invoices", remittanceHandler.CreateInvoice)
 			protected.GET("/invoices", remittanceHandler.ListInvoices)
@@ -326,7 +393,7 @@ func registerRoutes(router *gin.Engine, db *gorm.DB, cfg *config.Config) {
 			auditHandler := handlers.NewAuditLogHandler(db)
 			protected.GET("/audit/logs", middleware.RequireRole("admin"), auditHandler.List)
 
-			exportHandler := handlers.NewExportHandler(db)
+			exportHandler := handlers.NewExportHandler(db, readDB)
 			protected.GET("/transactions/export", exportHandler.ExportTransactions)
 
 			protected.POST("/admin/rate-limit/reset", middleware.RequireRole("admin"), middleware.AdminResetRateLimit(cfg))
@@ -351,7 +418,7 @@ func registerRoutes(router *gin.Engine, db *gorm.DB, cfg *config.Config) {
 			protected.GET("/webhooks/:id/deliveries", webhookHandler.GetWebhookDeliveries)
 			protected.POST("/webhooks/deliveries/:delivery_id/retry", webhookHandler.RetryWebhookDelivery)
 
-			analyticsHandler := handlers.NewAnalyticsHandler(db)
+			analyticsHandler := handlers.NewAnalyticsHandler(db, readDB)
 			protected.GET("/analytics/volume", middleware.RequireRole("admin"), analyticsHandler.GetVolumeMetrics)
 			protected.GET("/analytics/fees", middleware.RequireRole("admin"), analyticsHandler.GetFeeMetrics)
 			protected.GET("/analytics/success-rate", middleware.RequireRole("admin"), analyticsHandler.GetSuccessRate)

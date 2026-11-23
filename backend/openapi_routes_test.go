@@ -25,7 +25,7 @@ import (
 func TestOpenAPISpecMatchesRoutes(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
-	registerRoutes(router, nil, &config.Config{})
+	registerRoutes(router, nil, nil, &config.Config{})
 
 	actual := map[string]bool{}
 	for _, r := range router.Routes() {

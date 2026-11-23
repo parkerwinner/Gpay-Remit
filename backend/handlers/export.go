@@ -9,19 +9,24 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/gin-gonic/gin"
-	"github.com/jung-kurt/gofpdf"
 	"github.com/Gpay-Remit/gpay-remit/errors"
 	"github.com/Gpay-Remit/gpay-remit/models"
+	"github.com/gin-gonic/gin"
+	"github.com/jung-kurt/gofpdf"
 	"gorm.io/gorm"
 )
 
 type ExportHandler struct {
-	db *gorm.DB
+	db     *gorm.DB
+	readDB *gorm.DB
 }
 
-func NewExportHandler(db *gorm.DB) *ExportHandler {
-	return &ExportHandler{db: db}
+func NewExportHandler(db *gorm.DB, readDB ...*gorm.DB) *ExportHandler {
+	read := db
+	if len(readDB) > 0 && readDB[0] != nil {
+		read = readDB[0]
+	}
+	return &ExportHandler{db: db, readDB: read}
 }
 
 // ExportTransactions handles both CSV and PDF export requests
@@ -41,7 +46,8 @@ func (h *ExportHandler) ExportTransactions(c *gin.Context) {
 	pageSize := c.DefaultQuery("page_size", "1000")
 
 	// Build query
-	query := h.db.Model(&models.Payment{})
+	readDB := preferredReadDB(h.db, h.readDB)
+	query := readDB.Model(&models.Payment{})
 
 	// Apply date filters
 	if startDate != "" {
@@ -86,7 +92,7 @@ func (h *ExportHandler) ExportTransactions(c *gin.Context) {
 
 	// Count total matching records
 	var total int64
-	countQuery := h.db.Model(&models.Payment{})
+	countQuery := readDB.Model(&models.Payment{})
 	if startDate != "" {
 		if parsedDate, err := time.Parse("2006-01-02", startDate); err == nil {
 			countQuery = countQuery.Where("created_at >= ?", parsedDate)
@@ -251,7 +257,7 @@ func (h *ExportHandler) exportPDF(c *gin.Context, payments []models.Payment) {
 	// Table header
 	pdf.SetFont("Arial", "B", 8)
 	pdf.SetFillColor(200, 220, 255)
-	
+
 	// Column widths (total: 277mm for A4 landscape)
 	widths := []float64{10, 35, 20, 20, 20, 15, 15, 15, 15, 15, 15, 20, 52}
 	headers := []string{
@@ -333,10 +339,10 @@ func (h *ExportHandler) exportPDF(c *gin.Context, payments []models.Payment) {
 	pdf.Ln(8)
 
 	pdf.SetFont("Arial", "", 9)
-	
+
 	var totalAmount, totalFees int64
 	statusCounts := make(map[string]int)
-	
+
 	for _, p := range payments {
 		totalAmount += p.Amount
 		totalFees += p.Fee
@@ -347,7 +353,7 @@ func (h *ExportHandler) exportPDF(c *gin.Context, payments []models.Payment) {
 	pdf.Ln(6)
 	pdf.Cell(0, 6, fmt.Sprintf("Total Fees Collected: %.4f", float64(totalFees)/100.0))
 	pdf.Ln(6)
-	
+
 	pdf.Cell(0, 6, "Status Breakdown:")
 	pdf.Ln(6)
 	for status, count := range statusCounts {

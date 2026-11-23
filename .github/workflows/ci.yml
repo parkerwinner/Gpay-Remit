@@ -56,6 +56,9 @@ jobs:
           echo "Reproduce: cd contracts && PROPTEST_RNG_SEED=$PROPTEST_RNG_SEED PROPTEST_CASES=$PROPTEST_CASES cargo test --all-features"
           cargo test --locked --all-features --no-fail-fast
 
+      - name: Validate contract regression snapshots
+        run: python3 scripts/check_contract_snapshots.py
+
       - name: Upload proptest regressions
         if: failure()
         uses: actions/upload-artifact@v4
@@ -74,6 +77,65 @@ jobs:
             cargo build --locked --profile release-wasm --target wasm32v1-none --features "$contract"
             echo "$contract: $(wc -c < target/wasm32v1-none/release-wasm/gpay_remit_contracts.wasm) bytes (unoptimised)"
           done
+
+  benchmark-contracts:
+    name: Benchmark Contracts
+    if: github.event_name == 'pull_request' || github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Restore latest main benchmark baseline
+        id: criterion-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: contracts/target/criterion
+          key: criterion-${{ runner.os }}-main-${{ github.sha }}
+          restore-keys: criterion-${{ runner.os }}-main-
+
+      - name: Benchmark the pull request base when no baseline is cached
+        if: github.event_name == 'pull_request'
+        run: |
+          if ! find contracts/target/criterion -path '*/main/estimates.json' -print -quit 2>/dev/null | grep -q .; then
+            git fetch origin "+refs/heads/${GITHUB_BASE_REF}:refs/remotes/origin/${GITHUB_BASE_REF}"
+            git worktree add /tmp/gpay-remit-benchmark-base "origin/$GITHUB_BASE_REF"
+            cd /tmp/gpay-remit-benchmark-base/contracts
+            CARGO_TARGET_DIR="$GITHUB_WORKSPACE/contracts/target" \
+              cargo bench --locked --bench escrow_bench --bench remittance_bench -- --save-baseline main
+          fi
+
+      - name: Compare pull request benchmarks against main
+        if: github.event_name == 'pull_request'
+        working-directory: ./contracts
+        run: cargo bench --locked --bench escrow_bench --bench remittance_bench -- --baseline main
+
+      - name: Fail on benchmark regressions above 10 percent
+        if: github.event_name == 'pull_request'
+        run: python3 scripts/check_criterion_regressions.py contracts/target/criterion
+
+      - name: Save current main benchmark baseline
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        working-directory: ./contracts
+        run: cargo bench --locked --bench escrow_bench --bench remittance_bench -- --save-baseline main
+
+      - name: Cache main benchmark baseline
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.criterion-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: contracts/target/criterion
+          key: criterion-${{ runner.os }}-main-${{ github.sha }}
+
+      - name: Upload benchmark results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: contract-benchmarks-${{ github.run_id }}
+          path: contracts/target/criterion
+          if-no-files-found: ignore
+          retention-days: 30
 
   test-backend:
     name: Test Backend
@@ -98,6 +160,13 @@ jobs:
           # cannot build the module at all.
           go-version: "1.25"
 
+      - name: Configure Redis cache eviction policy
+        env:
+          REDIS_MAXMEMORY: 256mb
+        run: |
+          redis-cli -h localhost CONFIG SET maxmemory "$REDIS_MAXMEMORY"
+          redis-cli -h localhost CONFIG SET maxmemory-policy allkeys-lru
+
       - name: Run golangci-lint
         uses: golangci/golangci-lint-action@v6
         with:
@@ -116,6 +185,10 @@ jobs:
           # -covermode=atomic is required for -race; count mode is not
           # goroutine-safe and silently miscounts under concurrent tests.
           go test -race -covermode=atomic -coverprofile=coverage.out ./...
+
+      - name: Run authenticated remittance integration flow
+        working-directory: ./backend
+        run: go test -tags=integration -run '^TestIntegrationUserContactAndRemittanceFlow$' .
 
       - name: Report coverage summary
         working-directory: ./backend
@@ -170,6 +243,10 @@ jobs:
         env:
           CI: false
         run: npm run build
+
+      - name: Analyze frontend bundle and enforce size budgets
+        working-directory: ./frontend
+        run: npm run analyze:bundle
 
       - name: Run frontend tests with coverage
         working-directory: ./frontend

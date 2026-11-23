@@ -1,12 +1,68 @@
+/* #458: Theme custom properties (tokens). Light values are defaults;
+   dark values override when .dark, .dark-mode or [data-theme="dark"] is applied. */
+:root {
+  --bg: #f5f5f5;
+  --text: #1a1a1a;
+  --surface: #ffffff;
+  --border: #cccccc;
+  --primary: #61dafb;
+  --primary-hover: #4fa8c5;
+  --header-bg: #282c34;
+  --input-bg: #ffffff;
+  --table-head: #f0f0f0;
+  --shadow: rgba(0, 0, 0, 0.1);
+
+  /* Backwards compatibility token aliases (#355) */
+  --color-bg: var(--bg);
+  --color-text: var(--text);
+  --color-surface: var(--surface);
+  --color-border: var(--border);
+  --color-input-bg: var(--input-bg);
+  --color-table-head: var(--table-head);
+  --color-shadow: var(--shadow);
+}
+
+/* #458: Dark theme variable overrides */
+:root.dark,
+:root.dark-mode,
+:root[data-theme="dark"],
+body.dark,
+body.dark-mode,
+.App.dark,
+.App.dark-mode,
+[data-theme="dark"] {
+  --bg: #121212;
+  --text: #ffffff;
+  --surface: #1e1e1e;
+  --border: #444444;
+  --primary: #61dafb;
+  --primary-hover: #4fa8c5;
+  --header-bg: #181a1f;
+  --input-bg: #2c2c2c;
+  --table-head: #2c2c2c;
+  --shadow: rgba(255, 255, 255, 0.05);
+
+  --color-bg: var(--bg);
+  --color-text: var(--text);
+  --color-surface: var(--surface);
+  --color-border: var(--border);
+  --color-input-bg: var(--input-bg);
+  --color-table-head: var(--table-head);
+  --color-shadow: var(--shadow);
+}
+
 .App {
   min-height: 100vh;
-  background-color: #f5f5f5;
+  background-color: var(--bg);
+  color: var(--text);
+  transition: background-color 0.25s ease, color 0.25s ease;
 }
 
 .App-header {
-  background-color: #282c34;
+  background-color: var(--header-bg);
   padding: 20px;
   color: white;
+  transition: background-color 0.25s ease;
 }
 
 .header-brand-row {
@@ -23,7 +79,7 @@
 .tour-nav-btn {
   background: rgba(97, 218, 251, 0.15);
   border: 1px solid rgba(97, 218, 251, 0.4);
-  color: #61dafb;
+  color: var(--primary);
   font-size: 0.85rem;
   font-weight: 600;
   padding: 6px 14px;
@@ -34,7 +90,7 @@
 
 .tour-nav-btn:hover {
   background: rgba(97, 218, 251, 0.28);
-  border-color: #61dafb;
+  border-color: var(--primary);
   transform: translateY(-1px);
 }
 
@@ -44,7 +100,7 @@
 }
 
 .App-header nav a {
-  color: #61dafb;
+  color: var(--primary);
   text-decoration: none;
 }
 
@@ -60,10 +116,13 @@ main {
 
 .remittance-form,
 .invoice-viewer {
-  background: white;
+  background: var(--surface);
+  color: var(--text);
   padding: 30px;
   border-radius: 8px;
-  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+  border: 1px solid var(--border);
+  box-shadow: 0 2px 4px var(--shadow);
+  transition: background-color 0.25s ease, border-color 0.25s ease;
 }
 
 .form-group {
@@ -81,22 +140,27 @@ main {
 .form-group textarea {
   width: 100%;
   padding: 10px;
-  border: 1px solid #ddd;
+  border: 1px solid var(--border);
+  background-color: var(--input-bg);
+  color: var(--text);
   border-radius: 4px;
+  transition: background-color 0.2s ease, border-color 0.2s ease;
 }
 
 button {
-  background-color: #61dafb;
+  background-color: var(--primary);
   color: #282c34;
   padding: 12px 24px;
   border: none;
   border-radius: 4px;
   cursor: pointer;
   font-size: 16px;
+  font-weight: 600;
+  transition: background-color 0.2s ease;
 }
 
 button:hover {
-  background-color: #4fa8c5;
+  background-color: var(--primary-hover);
 }
 
 button:disabled {
@@ -130,11 +194,12 @@ table th,
 table td {
   padding: 12px;
   text-align: left;
-  border-bottom: 1px solid #ddd;
+  border-bottom: 1px solid var(--border);
 }
 
 table th {
-  background-color: #f8f9fa;
+  background-color: var(--table-head);
+  color: var(--text);
   font-weight: bold;
 }
 
@@ -154,63 +219,10 @@ table th {
 
 /* Ensure focus outline for a11y */
 *:focus {
-  outline: 2px solid #61dafb;
+  outline: 2px solid var(--primary);
 }
 main:focus {
   outline: none;
-}
-
-/* #355: Theme colour tokens. Light values are the defaults; dark values apply
-   when the .dark-mode class is on the app wrapper or <body>. */
-:root {
-  --color-bg: #f5f5f5;
-  --color-surface: #ffffff;
-  --color-text: #1a1a1a;
-  --color-input-bg: #ffffff;
-  --color-border: #cccccc;
-  --color-table-head: #f0f0f0;
-  --color-shadow: rgba(0, 0, 0, 0.1);
-}
-
-.App.dark-mode,
-body.dark-mode {
-  --color-bg: #121212;
-  --color-surface: #1e1e1e;
-  --color-text: #ffffff;
-  --color-input-bg: #2c2c2c;
-  --color-border: #444444;
-  --color-table-head: #2c2c2c;
-  --color-shadow: rgba(255, 255, 255, 0.05);
-}
-
-/* #288 / #355: Dark mode styles driven by the tokens above */
-.App.dark-mode {
-  background-color: var(--color-bg);
-  color: var(--color-text);
-}
-
-.App.dark-mode .remittance-form,
-.App.dark-mode .invoice-viewer {
-  background-color: var(--color-surface);
-  color: var(--color-text);
-  box-shadow: 0 2px 4px var(--color-shadow);
-}
-
-.App.dark-mode .form-group input,
-.App.dark-mode .form-group select,
-.App.dark-mode .form-group textarea {
-  background-color: var(--color-input-bg);
-  color: var(--color-text);
-  border: 1px solid var(--color-border);
-}
-
-.App.dark-mode table th {
-  background-color: var(--color-table-head);
-  color: var(--color-text);
-}
-
-.App.dark-mode table td {
-  border-bottom: 1px solid var(--color-border);
 }
 
 /* #357: Stellar address input with valid-state checkmark */
@@ -265,4 +277,113 @@ body.dark-mode {
     margin: 20px auto;
     padding: 10px;
   }
+}
+
+.feature-card {
+  background: white;
+  padding: 24px;
+  border-radius: 8px;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+  overflow-x: hidden;
+}
+
+.dark-mode .feature-card {
+  background: #1e242c;
+  color: #f0f4f8;
+}
+
+.feature-card button:focus-visible,
+.feature-card input:focus-visible,
+.feature-card select:focus-visible {
+  outline: 2px solid #0066cc;
+  outline-offset: 2px;
+}
+
+.form-row {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.form-row .form-group {
+  flex: 1 1 140px;
+}
+
+.button-row {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.secondary-btn {
+  background: #6c757d;
+  color: #fff;
+}
+
+.danger-btn {
+  background: #c62828;
+  color: #fff;
+}
+
+.item-list {
+  list-style: none;
+  padding: 0;
+  margin: 12px 0 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.item-card {
+  border: 1px solid #e0e0e0;
+  border-radius: 6px;
+  padding: 12px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.dark-mode .item-card {
+  border-color: #3a424d;
+}
+
+.item-meta {
+  font-size: 0.875rem;
+  color: #555;
+  word-break: break-all;
+}
+
+.dark-mode .item-meta {
+  color: #b0bec5;
+}
+
+.confirm-box {
+  border: 1px solid #1976d2;
+  background: #e3f2fd;
+  padding: 16px;
+  border-radius: 6px;
+  margin: 16px 0;
+}
+
+.dark-mode .confirm-box {
+  background: #1a2c3d;
+  border-color: #64b5f6;
+}
+
+.alert-error {
+  background: #fdecea;
+  color: #b71c1c;
+  padding: 10px 12px;
+  border-radius: 4px;
+  margin-bottom: 12px;
+}
+
+.alert-success {
+  background: #e8f5e9;
+  color: #1b5e20;
+  padding: 10px 12px;
+  border-radius: 4px;
+  margin-bottom: 12px;
 }

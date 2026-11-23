@@ -5,16 +5,41 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
+	"github.com/Gpay-Remit/gpay-remit/config"
+	"github.com/Gpay-Remit/gpay-remit/models"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/Gpay-Remit/gpay-remit/config"
-	"github.com/Gpay-Remit/gpay-remit/models"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 )
+
+func TestValidateQueryCostEnforcesDepthAndIgnoresStringsAndComments(t *testing.T) {
+	if err := validateQueryCost("query { me { name # { ignored\n } }"); err != nil {
+		t.Fatalf("valid query rejected: %v", err)
+	}
+	if err := validateQueryCost(`query { a { b { c { d { e { f { g { h { i { j { k } } } } } } } } } }`); err == nil {
+		t.Fatal("expected depth limit error")
+	}
+	if err := validateQueryCost(`query { me { note(value: "{ not a selection }") } }`); err != nil {
+		t.Fatalf("string contents affected depth: %v", err)
+	}
+}
+
+func TestValidateQueryCostEnforcesComplexity(t *testing.T) {
+	var query strings.Builder
+	query.WriteString("query { items {")
+	for i := 0; i <= maxQueryComplexity; i++ {
+		query.WriteString(" field")
+	}
+	query.WriteString(" } }")
+	if err := validateQueryCost(query.String()); err == nil {
+		t.Fatal("expected complexity limit error")
+	}
+}
 
 func setupTestGraphQLServer() (*Server, *gin.Engine, *gorm.DB) {
 	gin.SetMode(gin.TestMode)

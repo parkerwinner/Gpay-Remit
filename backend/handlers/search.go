@@ -15,17 +15,23 @@ import (
 
 type SearchHandler struct {
 	db     *gorm.DB
+	readDB *gorm.DB
 	config *config.Config
 }
 
 const maxSearchQueryLength = 200
 
-func NewSearchHandler(db *gorm.DB, cfg *config.Config) *SearchHandler {
-	return &SearchHandler{db: db, config: cfg}
+func NewSearchHandler(db *gorm.DB, cfg *config.Config, readDB ...*gorm.DB) *SearchHandler {
+	read := db
+	if len(readDB) > 0 && readDB[0] != nil {
+		read = readDB[0]
+	}
+	return &SearchHandler{db: db, readDB: read, config: cfg}
 }
 
 // SearchTransactions handles GET /api/v1/search/transactions?q=...
 func (h *SearchHandler) SearchTransactions(c *gin.Context) {
+	db := preferredReadDB(h.db, h.readDB)
 	q := strings.TrimSpace(c.Query("q"))
 	if q == "" {
 		c.Error(errors.NewValidationError("Missing query parameter", "q is required"))
@@ -89,7 +95,7 @@ func (h *SearchHandler) SearchTransactions(c *gin.Context) {
 	var total int64
 	var rows []map[string]interface{}
 
-	dialect := h.db.Dialector.Name()
+	dialect := db.Dialector.Name()
 	if dialect == "postgres" {
 		// Use full-text search or fuzzy trigram search
 		var countQuery *gorm.DB
@@ -97,11 +103,11 @@ func (h *SearchHandler) SearchTransactions(c *gin.Context) {
 
 		if searchMode == "fuzzy" {
 			// Trigram-based fuzzy matching
-			countQuery = h.db.Model(&models.Payment{}).
+			countQuery = db.Model(&models.Payment{}).
 				Where("notes % ? OR currency % ? OR status % ?", q, q, q)
 		} else {
 			// Full-text search (default)
-			countQuery = h.db.Model(&models.Payment{}).
+			countQuery = db.Model(&models.Payment{}).
 				Where("search_vector @@ plainto_tsquery(?)", q)
 		}
 
@@ -119,11 +125,11 @@ func (h *SearchHandler) SearchTransactions(c *gin.Context) {
 		// Query with parameterized values and safe column names
 		var payments []models.Payment
 		if searchMode == "fuzzy" {
-			query = h.db.Model(&models.Payment{}).
+			query = db.Model(&models.Payment{}).
 				Select("id, sender_id, recipient_id, amount, currency, status, notes, created_at, similarity(notes, ?) as sim").
 				Where("notes % ? OR currency % ? OR status % ?", q, q, q, q)
 		} else {
-			query = h.db.Model(&models.Payment{}).
+			query = db.Model(&models.Payment{}).
 				Select("id, sender_id, recipient_id, amount, currency, status, notes, created_at").
 				Where("search_vector @@ plainto_tsquery(?)", q)
 		}
@@ -161,7 +167,7 @@ func (h *SearchHandler) SearchTransactions(c *gin.Context) {
 			if searchMode == "fuzzy" {
 				highlightResult.Highlight = p.Notes
 			} else {
-				h.db.Raw(
+				db.Raw(
 					"SELECT ts_headline('english', ?, plainto_tsquery(?), 'StartSel=<em>, StopSel=</em>') as highlight",
 					p.Notes,
 					q,
@@ -184,7 +190,7 @@ func (h *SearchHandler) SearchTransactions(c *gin.Context) {
 		// Fallback: use parameterized LIKE queries
 		likeQ := "%" + q + "%"
 
-		countQuery := h.db.Model(&models.Payment{})
+		countQuery := db.Model(&models.Payment{})
 		// Count with parameterized query
 		if amt, err := strconv.ParseFloat(q, 64); err == nil {
 			countQuery = countQuery.Where("notes LIKE ? OR currency LIKE ? OR status LIKE ? OR amount = ?", likeQ, likeQ, likeQ, amt)
@@ -204,7 +210,7 @@ func (h *SearchHandler) SearchTransactions(c *gin.Context) {
 		countQuery.Count(&total)
 
 		// Query with parameterized values
-		query := h.db.Model(&models.Payment{}).
+		query := db.Model(&models.Payment{}).
 			Select("id, sender_id, recipient_id, amount, currency, status, notes, created_at")
 
 		if amt, err := strconv.ParseFloat(q, 64); err == nil {

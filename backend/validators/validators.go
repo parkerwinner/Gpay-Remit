@@ -23,9 +23,26 @@ func ValidateAmount(amt float64) error {
 	return nil
 }
 
+// SupportedCurrencies is the canonical list of currencies supported by the platform.
+var SupportedCurrencies = []string{"USD", "EUR", "GBP", "XLM", "USDC", "NGN", "KES", "GHS"}
+
+// IsSupportedCurrency reports whether code is a supported currency (case-insensitive).
+func IsSupportedCurrency(code string) bool {
+	upper := strings.ToUpper(strings.TrimSpace(code))
+	for _, c := range SupportedCurrencies {
+		if c == upper {
+			return true
+		}
+	}
+	return false
+}
+
 func ValidateCurrency(currency string) error {
-	if currency == "" {
+	if strings.TrimSpace(currency) == "" {
 		return errors.New("currency is required")
+	}
+	if !IsSupportedCurrency(currency) {
+		return errors.New("unsupported currency")
 	}
 	return nil
 }

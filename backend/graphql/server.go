@@ -8,15 +8,128 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gin-gonic/gin"
 	"github.com/Gpay-Remit/gpay-remit/config"
 	"github.com/Gpay-Remit/gpay-remit/models"
+	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 )
 
 type Server struct {
 	db  *gorm.DB
 	cfg *config.Config
+}
+
+const (
+	maxQueryDepth      = 10
+	maxQueryComplexity = 1000
+)
+
+// validateQueryCost applies structural limits before query execution. It
+// ignores comments and string literals so braces inside user values do not
+// affect the depth calculation.
+func validateQueryCost(query string) error {
+	depth, maxDepth, complexity := 0, 0, 0
+	inString, blockString, escaped, inComment := false, false, false, false
+	parenDepth := 0
+	for i := 0; i < len(query); {
+		ch := query[i]
+		if inComment {
+			if ch == '\n' || ch == '\r' {
+				inComment = false
+			}
+			i++
+			continue
+		}
+		if inString {
+			if escaped {
+				escaped = false
+			} else if ch == '\\' {
+				escaped = true
+			} else if ch == '"' {
+				inString = false
+			}
+			i++
+			continue
+		}
+		if blockString {
+			if i+2 < len(query) && query[i:i+3] == `"""` {
+				blockString = false
+				i += 3
+				continue
+			}
+			i++
+			continue
+		}
+		if ch == '#' {
+			inComment = true
+			i++
+			continue
+		}
+		if ch == '"' {
+			if i+2 < len(query) && query[i:i+3] == `"""` {
+				blockString = true
+				i += 3
+				continue
+			}
+			inString = true
+			i++
+			continue
+		}
+		switch ch {
+		case '(':
+			parenDepth++
+		case ')':
+			if parenDepth > 0 {
+				parenDepth--
+			}
+		case '{':
+			depth++
+			if depth > maxDepth {
+				maxDepth = depth
+			}
+		case '}':
+			depth--
+			if depth < 0 {
+				return fmt.Errorf("invalid GraphQL query: unexpected closing brace")
+			}
+		default:
+			if depth > 0 && parenDepth == 0 && isGraphQLNameStart(ch) {
+				start := i
+				for i < len(query) && isGraphQLNameContinue(query[i]) {
+					i++
+				}
+				name := query[start:i]
+				if !isGraphQLKeyword(name) {
+					complexity++
+				}
+				continue
+			}
+		}
+		i++
+	}
+	if inString || blockString || depth != 0 || parenDepth != 0 {
+		return fmt.Errorf("invalid GraphQL query: unclosed string or selection")
+	}
+	if maxDepth > maxQueryDepth {
+		return fmt.Errorf("query depth limit exceeded: maximum is %d", maxQueryDepth)
+	}
+	if complexity > maxQueryComplexity {
+		return fmt.Errorf("query complexity limit exceeded: maximum is %d", maxQueryComplexity)
+	}
+	return nil
+}
+
+func isGraphQLNameStart(ch byte) bool {
+	return ch == '_' || (ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z')
+}
+func isGraphQLNameContinue(ch byte) bool { return isGraphQLNameStart(ch) || (ch >= '0' && ch <= '9') }
+func isGraphQLKeyword(name string) bool {
+	switch name {
+	case "query", "mutation", "subscription", "fragment", "on", "true", "false", "null":
+		return true
+	default:
+		return false
+	}
 }
 
 func NewServer(db *gorm.DB, cfg *config.Config) *Server {
@@ -70,6 +183,10 @@ func (s *Server) QueryHandler() gin.HandlerFunc {
 			c.JSON(http.StatusBadRequest, gin.H{"errors": []gin.H{{"message": "Query cannot be empty"}}})
 			return
 		}
+		if err := validateQueryCost(query); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"errors": []gin.H{{"message": err.Error()}}})
+			return
+		}
 
 		userIDVal, _ := c.Get("userID")
 		var userID uint
@@ -93,6 +210,9 @@ func (s *Server) QueryHandler() gin.HandlerFunc {
 }
 
 func (s *Server) ExecuteQuery(query string, variables map[string]interface{}, currentUserID uint) (map[string]interface{}, error) {
+	if err := validateQueryCost(query); err != nil {
+		return nil, err
+	}
 	data := make(map[string]interface{})
 
 	// Handle introspection query (__schema)

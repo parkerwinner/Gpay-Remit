@@ -17,6 +17,7 @@
   "scripts": {
     "start": "react-scripts start",
     "build": "react-scripts build",
+    "analyze:bundle": "node scripts/analyze-bundle.js",
     "test": "react-scripts test",
     "eject": "react-scripts eject",
     "lint": "eslint src",

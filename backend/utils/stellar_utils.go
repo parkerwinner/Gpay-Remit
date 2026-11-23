@@ -18,12 +18,19 @@ const (
 	ctxUserIDKey    ctxKey = "userID"
 )
 
+type AccountBalance struct {
+	AssetCode   string `json:"asset_code"`
+	AssetIssuer string `json:"asset_issuer,omitempty"`
+	Balance     string `json:"balance"`
+}
+
 type StellarClientInterface interface {
 	SubmitPayment(ctx context.Context, sourceSecret string, destination string, assetCode string, issuer string, amount string) (string, error)
 	ValidateAccount(ctx context.Context, accountID string) error
 	BuildEscrowTx(ctx context.Context, sender string, recipient string, assetCode string, issuer string, amount string) (string, error)
 	BuildPaymentTx(ctx context.Context, sourceAccount txnbuild.Account, destination string, assetCode string, issuer string, amount string) (*txnbuild.Transaction, error)
 	SignTx(ctx context.Context, envelopeXDR string, secretKey string) (string, error)
+	GetAccountBalances(ctx context.Context, accountID string) ([]AccountBalance, error)
 }
 
 type StellarClient struct {
@@ -272,4 +279,27 @@ func (s *StellarClient) BuildEscrowTx(ctx context.Context, sender string, recipi
 
 	logWithContext(ctx, "build_escrow_tx").Info("Escrow transaction envelope built successfully")
 	return xdr, nil
+}
+
+func (s *StellarClient) GetAccountBalances(ctx context.Context, accountID string) ([]AccountBalance, error) {
+	logWithContext(ctx, "get_account_balances").WithField("account_id", accountID).Info("Fetching Stellar account balances")
+	account, err := s.client.AccountDetail(horizonclient.AccountRequest{AccountID: accountID})
+	if err != nil {
+		logWithContext(ctx, "get_account_balances").WithError(err).Error("Failed to fetch account balances")
+		return nil, fmt.Errorf("failed to fetch account balances: %w", err)
+	}
+
+	balances := make([]AccountBalance, 0, len(account.Balances))
+	for _, b := range account.Balances {
+		code := b.Asset.Code
+		if b.Asset.Type == "native" || code == "" {
+			code = "XLM"
+		}
+		balances = append(balances, AccountBalance{
+			AssetCode:   code,
+			AssetIssuer: b.Asset.Issuer,
+			Balance:     b.Balance,
+		})
+	}
+	return balances, nil
 }

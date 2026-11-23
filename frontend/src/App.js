@@ -2,6 +2,9 @@
 import React, { useState, useEffect, createContext } from "react";
 import { BrowserRouter as Router, Routes, Route, Link } from "react-router-dom";
 import RemittanceForm from "./components/RemittanceForm";
+import PaymentTemplates from "./components/PaymentTemplates";
+import RecurringSchedules from "./components/RecurringSchedules";
+import WalletDashboard from "./components/WalletDashboard";
 import InvoiceViewer from "./components/InvoiceViewer";
 import ErrorBoundary from "./components/ErrorBoundary";
 import TransactionHistory from "./pages/TransactionHistory";
@@ -43,7 +46,7 @@ function App() {
       : false;
   });
 
-  // Persist the preference and mirror it onto <body> for global theming.
+  // Persist the preference and mirror it onto <html>, <body>, and root for global theming (#458).
   useEffect(() => {
     try {
       localStorage.setItem("gpay_dark_mode", String(darkMode));
@@ -51,6 +54,12 @@ function App() {
       // ignore write failures
     }
     document.body.classList.toggle("dark-mode", darkMode);
+    document.body.classList.toggle("dark", darkMode);
+    if (typeof document !== "undefined" && document.documentElement) {
+      document.documentElement.classList.toggle("dark-mode", darkMode);
+      document.documentElement.classList.toggle("dark", darkMode);
+      document.documentElement.setAttribute("data-theme", darkMode ? "dark" : "light");
+    }
   }, [darkMode]);
   // #290: Language State with browser language detection
   const [lang, setLang] = useState(() => {
@@ -80,7 +89,7 @@ function App() {
     <I18nContext.Provider value={{ lang, setLang, t }}>
       <WalletProvider>
         <Router>
-          <div className={`App ${darkMode ? "dark-mode" : ""}`}>
+          <div className={`App ${darkMode ? "dark-mode dark" : ""}`} data-theme={darkMode ? "dark" : "light"}>
             {/* #291: a11y Skip link */}
             <a href="#main-content" className="skip-link">
               {t.skipToMain}
@@ -119,6 +128,9 @@ function App() {
               {/* #116 — nav landmark so screen readers can jump straight to navigation */}
               <nav aria-label="Main navigation">
                 <Link to="/">{t.send}</Link>
+                <Link to="/templates">{t.templates}</Link>
+                <Link to="/recurring">{t.recurring}</Link>
+                <Link to="/wallet">{t.wallet}</Link>
                 <Link to="/invoices">{t.invoices}</Link>
                 <Link to="/transactions">{t.history}</Link>
               </nav>
@@ -137,6 +149,9 @@ function App() {
               <main id="main-content" aria-label="Page content" tabIndex="-1">
                 <Routes>
                   <Route path="/" element={<RemittanceForm />} />
+                  <Route path="/templates" element={<PaymentTemplates />} />
+                  <Route path="/recurring" element={<RecurringSchedules />} />
+                  <Route path="/wallet" element={<WalletDashboard />} />
                   <Route path="/invoices" element={<InvoiceViewer />} />
                   <Route path="/transactions" element={<TransactionHistory />} />
                 </Routes>

@@ -102,6 +102,23 @@ var (
 		},
 		[]string{"reason"},
 	)
+
+	CacheOperationsTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "gpay_remit",
+			Name:      "cache_operations_total",
+			Help:      "Cache operations by operation and outcome (hit, miss, success, error, unavailable).",
+		},
+		[]string{"operation", "result"},
+	)
+
+	RedisEvictedKeysTotal = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "gpay_remit",
+			Name:      "redis_evicted_keys_total",
+			Help:      "Redis key evictions observed by this process; use rate() to alert on eviction pressure.",
+		},
+	)
 )
 
 func init() {
@@ -115,6 +132,8 @@ func init() {
 		ExchangeRateLookupsTotal,
 		WebhookRetryAttemptsTotal,
 		WebhookDeadLettersTotal,
+		CacheOperationsTotal,
+		RedisEvictedKeysTotal,
 	)
 }
 
