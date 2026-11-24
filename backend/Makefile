@@ -1,4 +1,7 @@
-.PHONY: test integration-test chaos-test mutation-test coverage coverage-html check fmt-check lint
+.PHONY: dev test integration-test chaos-test coverage coverage-html check fmt-check
+
+dev:
+	docker compose -f ../docker-compose.yml -f ../docker-compose.dev.yml up --build
 
 test:
 	go test ./...

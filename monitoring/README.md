@@ -165,3 +165,28 @@ auto-resolved. Document the incident in the team log.
 Edit `monitoring/uptimerobot.yml` then re-run the setup script. The script
 creates new monitors; to delete old ones use the UptimeRobot dashboard or
 `deleteMonitor` API endpoint.
+
+---
+
+## Grafana Metrics Dashboard
+
+Prometheus metrics exported by `backend/metrics/metrics.go` are visualized via the Grafana dashboard located at:
+`monitoring/grafana/dashboards/gpay_remit_dashboard.json`.
+
+### Dashboard Visualizations
+- **Request Rate & Latency**: HTTP requests per second by endpoint and status code, plus median (p50), p95, and p99 latency histograms.
+- **Error Rates**: 4xx client errors and 5xx server errors by endpoint, alongside system error rates by component.
+- **Database Connection Pool**: Open, active in-use, and idle connection counts, as well as connection wait duration and count.
+- **Redis Cache**: Cache hit ratio gauge and hits vs. misses throughput rates.
+- **Webhook Deliveries**: Delivery outcomes (success vs failure) and retry/dead-letter rates.
+
+### Provisioning
+Provisioning configuration files are provided in:
+- `monitoring/grafana/provisioning/dashboards/dashboards.yml`
+- `monitoring/grafana/provisioning/datasources/datasources.yml`
+
+To run Grafana locally with Prometheus:
+```bash
+docker compose up -d grafana
+```
+The dashboard is automatically provisioned and accessible at `http://localhost:3200` (or `:3000`).
