@@ -139,3 +139,45 @@ func TestEmailTemplateGeneration(t *testing.T) {
 	err = service.SendPaymentFailedEmail(user, payment, "Network error")
 	assert.NoError(t, err)
 }
+
+func TestCanSendEmail_PreferencesAndSecurityAlerts(t *testing.T) {
+	user := &models.User{
+		ID:                 42,
+		Email:              "user@example.com",
+		Name:               "Test User",
+		EmailNotifications: true,
+	}
+
+	// Default preferences: transaction=true, marketing=false, security=true
+	defaults := models.DefaultEmailPreferences(user.ID)
+	assert.True(t, CanSendEmail(user, &defaults, models.EmailCategoryTransaction))
+	assert.False(t, CanSendEmail(user, &defaults, models.EmailCategoryMarketing))
+	assert.True(t, CanSendEmail(user, &defaults, models.EmailCategorySecurity))
+
+	// Even if someone constructs EmailPreferences with SecurityAlerts=false and
+	// user.EmailNotifications=false, security alerts cannot be disabled.
+	disabledAll := &models.EmailPreferences{
+		UserID:                   user.ID,
+		TransactionConfirmations: false,
+		Marketing:                false,
+		SecurityAlerts:           false,
+	}
+	userOptedOut := &models.User{ID: 42, EmailNotifications: false}
+	assert.False(t, CanSendEmail(user, disabledAll, models.EmailCategoryTransaction))
+	assert.False(t, CanSendEmail(user, disabledAll, models.EmailCategoryMarketing))
+	assert.True(t, CanSendEmail(userOptedOut, disabledAll, models.EmailCategorySecurity))
+	assert.True(t, disabledAll.Allows(models.EmailCategorySecurity))
+}
+
+func TestSendMarketingEmail_RespectsOptOut(t *testing.T) {
+	service := NewEmailService("smtp.gmail.com", "465", "test@example.com", "password", "noreply@example.com", true)
+	user := &models.User{
+		ID:                 7,
+		Email:              "user@example.com",
+		Name:               "Test User",
+		EmailNotifications: true,
+	}
+	// Marketing defaults to false when no DB/preference row enables it, so it skips SMTP
+	err := service.SendMarketingEmail(user, "Promo", "Special offer")
+	assert.NoError(t, err)
+}

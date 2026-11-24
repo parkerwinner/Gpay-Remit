@@ -44,3 +44,6 @@ check:
 
 fmt-check:
 	@gofmt -l . || true
+
+lint:
+	golangci-lint run --timeout=5m

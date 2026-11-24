@@ -2,6 +2,27 @@
 
 > Issue [#280](https://github.com/parkerwinner/Gpay-Remit/issues/280) — External uptime monitoring via UptimeRobot
 
+## Prometheus alerts
+
+Prometheus rules are defined in `monitoring/alerts.yml`, and delivery routing
+is configured in `monitoring/alertmanager.yml`.
+
+| Severity | Meaning | Examples |
+|---|---|---|
+| `critical` | Immediate production impact or likely outage | 5xx error rate, Redis unavailable |
+| `warning` | Degraded service or approaching capacity | Database pool usage, webhook failures, API latency |
+
+The rules fire for:
+
+- HTTP 5xx error ratio above 5% for 5 minutes
+- Database connection usage above 80% for 5 minutes
+- Redis unavailable for 1 minute
+- Webhook failure ratio above 20% for 5 minutes
+- API p99 latency above 1 second for 5 minutes
+
+Alertmanager receivers are intentionally empty placeholders; configure real
+Slack, PagerDuty, email, or webhook integrations before production use.
+
 ## Status
 
 | Monitor | Status |

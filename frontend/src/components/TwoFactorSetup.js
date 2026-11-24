@@ -121,6 +121,7 @@ function TwoFactorSetup() {
           <input
             id="mfa-password"
             type="password"
+            autoComplete="current-password"
             value={password}
             onChange={(e) => setPassword(e.target.value)}
             required
@@ -151,6 +152,7 @@ function TwoFactorSetup() {
               id="mfa-code"
               type="text"
               inputMode="numeric"
+              autoComplete="one-time-code"
               pattern="[0-9]{6}"
               maxLength={6}
               value={code}
@@ -173,6 +175,7 @@ function TwoFactorSetup() {
           <input
             id="mfa-disable-password"
             type="password"
+            autoComplete="current-password"
             value={password}
             onChange={(e) => setPassword(e.target.value)}
             required

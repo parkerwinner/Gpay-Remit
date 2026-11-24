@@ -49,6 +49,8 @@ tags:
     description: Address book and recipient management
   - name: Payment Requests
     description: Requesting and settling payments between users
+  - name: Search
+    description: Transaction search
   - name: Exchange Rates
     description: Currency exchange rates
   - name: Admin
@@ -291,6 +293,11 @@ components:
           example: 2.50
         notes:
           type: string
+        tags:
+          type: array
+          items:
+            type: string
+          description: Normalized, deduplicated payment tags (empty array when none)
         created_at:
           type: string
           format: date-time
@@ -548,6 +555,15 @@ paths:
             type: integer
             default: 20
             maximum: 100
+        - in: query
+          name: tag
+          style: form
+          explode: true
+          schema:
+            type: array
+            items:
+              type: string
+          description: Repeatable tag filter (AND semantics; payment must match all specified tags)
       responses:
         '200':
           description: List of payments
@@ -585,6 +601,10 @@ paths:
                   type: string
                 notes:
                   type: string
+                tags:
+                  type: array
+                  items:
+                    type: string
       responses:
         '201':
           description: Payment created
@@ -653,6 +673,87 @@ paths:
         '404':
           description: Not found
 
+  /remittances/{id}/tags:
+    put:
+      tags: [Remittances]
+      summary: Replace tags on an existing payment owned by the authenticated user
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [tags]
+              properties:
+                tags:
+                  type: array
+                  items:
+                    type: string
+      responses:
+        '200':
+          description: Updated tags
+        '400':
+          description: Validation error
+        '401':
+          description: Unauthorized
+        '404':
+          description: Payment not found
+
+  /remittances/tags/summary:
+    get:
+      tags: [Remittances]
+      summary: Get per-tag completed payment counts and per-asset totals
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: query
+          name: from
+          schema:
+            type: string
+          description: Start date (YYYY-MM-DD or RFC3339)
+        - in: query
+          name: to
+          schema:
+            type: string
+          description: End date (YYYY-MM-DD or RFC3339)
+      responses:
+        '200':
+          description: Tag summary grouped by tag and asset
+        '401':
+          description: Unauthorized
+
+  /remittances/tags/autocomplete:
+    get:
+      tags: [Remittances]
+      summary: Autocomplete user payment tags by prefix
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: query
+          name: q
+          schema:
+            type: string
+          description: Case-insensitive tag prefix
+        - in: query
+          name: limit
+          schema:
+            type: integer
+            default: 10
+            maximum: 25
+      responses:
+        '200':
+          description: Matching tags ordered by usage count descending then alphabetically
+        '401':
+          description: Unauthorized
+
   /remittances/{id}/complete:
     post:
       tags: [Remittances]
@@ -713,6 +814,15 @@ paths:
             type: integer
             default: 20
             maximum: 100
+        - in: query
+          name: tag
+          style: form
+          explode: true
+          schema:
+            type: array
+            items:
+              type: string
+          description: Repeatable tag filter (AND semantics; payment must match all specified tags)
       responses:
         '200':
           description: Paginated list of invoices
@@ -1148,6 +1258,36 @@ paths:
               schema:
                 type: string
 
+  /search/transactions:
+    get:
+      tags: [Search]
+      summary: Search the authenticated user's transactions
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: query
+          name: q
+          required: true
+          schema:
+            type: string
+            maxLength: 200
+        - in: query
+          name: page
+          schema:
+            type: integer
+            minimum: 1
+        - in: query
+          name: page_size
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+      responses:
+        '200':
+          description: Matching transactions
+        '400':
+          description: Invalid search query
+
   /analytics/sla:
     get:
       tags: [Analytics]
@@ -1434,6 +1574,30 @@ paths:
         '401':
           description: Wrong password or invalid token
 
+  /auth/mfa/step-up:
+    post:
+      tags: [Auth]
+      summary: Verify 2FA TOTP code and issue a short-lived step-up token for large transfers
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [code]
+              properties:
+                code:
+                  type: string
+      responses:
+        '200':
+          description: Step-up token issued
+        '400':
+          description: MFA not enabled
+        '401':
+          description: Invalid TOTP code
+
   /auth/mfa/status:
     get:
       tags: [Auth]
@@ -1670,6 +1834,495 @@ paths:
           description: Rate-limit counters
         '403':
           description: Admin role required
+
+  /remittances/batch:
+    post:
+      tags: [Remittances]
+      summary: Create multiple pending remittances atomically in one batch
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [sender_account, asset_code, payments]
+              properties:
+                sender_account:
+                  type: string
+                asset_code:
+                  type: string
+                asset_issuer:
+                  type: string
+                payments:
+                  type: array
+                  minItems: 1
+                  items:
+                    type: object
+                    required: [recipient_account, amount]
+                    properties:
+                      recipient_account:
+                        type: string
+                      amount:
+                        type: integer
+                        format: int64
+                      conditions:
+                        type: object
+                      notes:
+                        type: string
+      responses:
+        '201':
+          description: Batch remittances created
+        '400':
+          description: Validation error (per-item errors or batch size exceeded)
+        '401':
+          description: Unauthorized
+        '403':
+          description: Sender account does not belong to authenticated user
+
+  /templates:
+    get:
+      tags: [Remittances]
+      summary: List payment templates for the authenticated user
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: query
+          name: page
+          schema:
+            type: integer
+        - in: query
+          name: page_size
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: List of payment templates
+        '401':
+          description: Unauthorized
+    post:
+      tags: [Remittances]
+      summary: Create a payment template
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [template_name, recipient_account, amount, asset_code]
+              properties:
+                template_name:
+                  type: string
+                recipient_account:
+                  type: string
+                amount:
+                  type: number
+                asset_code:
+                  type: string
+                asset_issuer:
+                  type: string
+                notes:
+                  type: string
+                tags:
+                  type: array
+                  items:
+                    type: string
+      responses:
+        '201':
+          description: Template created
+        '400':
+          description: Validation error
+        '401':
+          description: Unauthorized
+
+  /templates/{id}:
+    get:
+      tags: [Remittances]
+      summary: Get a payment template by ID
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Payment template
+        '403':
+          description: Forbidden
+        '404':
+          description: Not found
+    put:
+      tags: [Remittances]
+      summary: Update a payment template
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        '200':
+          description: Template updated
+        '400':
+          description: Validation error
+        '403':
+          description: Forbidden
+        '404':
+          description: Not found
+    delete:
+      tags: [Remittances]
+      summary: Delete a payment template
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Template deleted
+        '403':
+          description: Forbidden
+        '404':
+          description: Not found
+
+  /templates/{id}/send:
+    post:
+      tags: [Remittances]
+      summary: Send a remittance from a payment template
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: integer
+      responses:
+        '201':
+          description: Remittance created from template
+        '400':
+          description: Validation error
+        '403':
+          description: Forbidden
+        '404':
+          description: Not found
+
+  /recurring-schedules:
+    get:
+      tags: [Remittances]
+      summary: List recurring remittance schedules for the authenticated user
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: List of recurring schedules
+        '401':
+          description: Unauthorized
+    post:
+      tags: [Remittances]
+      summary: Create a recurring remittance schedule
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [sender_account, recipient_account, amount, currency, frequency]
+              properties:
+                sender_account:
+                  type: string
+                recipient_account:
+                  type: string
+                amount:
+                  type: integer
+                  format: int64
+                currency:
+                  type: string
+                asset_issuer:
+                  type: string
+                frequency:
+                  type: string
+                  enum: [daily, weekly, monthly]
+                next_run_at:
+                  type: string
+                  format: date-time
+                notes:
+                  type: string
+                tags:
+                  type: array
+                  items:
+                    type: string
+      responses:
+        '201':
+          description: Schedule created
+        '400':
+          description: Validation error
+        '403':
+          description: Forbidden
+
+  /recurring-schedules/{id}:
+    get:
+      tags: [Remittances]
+      summary: Get a recurring schedule by ID
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Recurring schedule
+        '403':
+          description: Forbidden
+        '404':
+          description: Not found
+
+  /recurring-schedules/{id}/pause:
+    post:
+      tags: [Remittances]
+      summary: Pause an active recurring schedule
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Schedule paused
+        '400':
+          description: Invalid state transition
+
+  /recurring-schedules/{id}/resume:
+    post:
+      tags: [Remittances]
+      summary: Resume a paused recurring schedule
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Schedule resumed
+        '400':
+          description: Invalid state transition
+
+  /recurring-schedules/{id}/cancel:
+    post:
+      tags: [Remittances]
+      summary: Cancel a recurring schedule permanently
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Schedule cancelled
+
+  /wallet/balances:
+    get:
+      tags: [Exchange Rates]
+      summary: Get multi-currency wallet balances and preferred-currency estimates
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: Wallet balances and conversion estimates
+        '401':
+          description: Unauthorized
+
+  /wallet/preferences:
+    get:
+      tags: [Exchange Rates]
+      summary: Get the authenticated user's preferred display currency
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: Currency preference
+        '401':
+          description: Unauthorized
+    put:
+      tags: [Exchange Rates]
+      summary: Update the authenticated user's preferred display currency
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [preferred_currency]
+              properties:
+                preferred_currency:
+                  type: string
+      responses:
+        '200':
+          description: Updated preference
+        '400':
+          description: Unsupported currency
+        '401':
+          description: Unauthorized
+
+  /email-preferences:
+    get:
+      tags: [Auth]
+      summary: Get email notification preferences
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: Email notification preferences
+        '401':
+          description: Unauthorized
+    put:
+      tags: [Auth]
+      summary: Update email notification preferences
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                transaction_confirmations:
+                  type: boolean
+                marketing:
+                  type: boolean
+                security_alerts:
+                  type: boolean
+      responses:
+        '200':
+          description: Updated email preferences
+        '400':
+          description: Validation error (e.g. attempting to disable security alerts)
+        '401':
+          description: Unauthorized
+
+  /export-schedules:
+    get:
+      tags: [Exports]
+      summary: List scheduled transaction exports
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: List of export schedules
+        '401':
+          description: Unauthorized
+    post:
+      tags: [Exports]
+      summary: Create a scheduled transaction export
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [frequency, format, destination]
+              properties:
+                frequency:
+                  type: string
+                format:
+                  type: string
+                destination:
+                  type: string
+                webhook_url:
+                  type: string
+      responses:
+        '201':
+          description: Export schedule created
+        '400':
+          description: Invalid schedule configuration
+        '401':
+          description: Unauthorized
+
+  /export-schedules/{id}:
+    get:
+      tags: [Exports]
+      summary: Get an export schedule by ID
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Export schedule
+        '404':
+          description: Not found
+    put:
+      tags: [Exports]
+      summary: Update an export schedule
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Export schedule updated
+        '404':
+          description: Not found
+    delete:
+      tags: [Exports]
+      summary: Delete an export schedule
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Export schedule deleted
+        '404':
+          description: Not found
 
   /health:
     servers:

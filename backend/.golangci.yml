@@ -1,0 +1,68 @@
+run:
+  timeout: 5m
+  tests: true
+
+linters:
+  enable:
+    - errcheck
+    - gosec
+    - revive
+    - bodyclose
+    - misspell
+    - gocritic
+
+linters-settings:
+  errcheck:
+    check-type-assertions: false
+    check-blank: true
+  gosec:
+    excludes:
+      - G104  # unhandled errors in test/helpers are common; errcheck covers prod code
+      - G304  # file path from variable is expected in this codebase
+  revive:
+    severity: warning
+    rules:
+      - name: blank-imports
+      - name: context-as-argument
+      - name: context-keys-type
+      - name: dot-imports
+      - name: error-naming
+      - name: error-strings
+      - name: error-return
+      - name: errorf
+      - name: exported
+      - name: increment-decrement
+      - name: indent-error-flow
+      - name: package-comments
+      - name: range
+      - name: receiver-naming
+      - name: time-naming
+      - name: var-declaration
+      - name: var-naming
+  gocritic:
+    enabled-tags:
+      - diagnostic
+      - style
+  misspell:
+    locale: US
+
+issues:
+  exclude-rules:
+    # Test files commonly ignore errors from json.Marshal, io.ReadAll, etc.
+    - path: _test\.go
+      linters:
+        - errcheck
+        - gosec
+        - gocritic
+    # Test helpers and fixtures may have unchecked errors
+    - path: testfixtures|testhelpers|testdata
+      linters:
+        - errcheck
+        - gosec
+    # Chaos testing utilities intentionally ignore some errors
+    - path: chaos/
+      linters:
+        - errcheck
+        - gosec
+  max-issues-per-linter: 0
+  max-same-issues: 0

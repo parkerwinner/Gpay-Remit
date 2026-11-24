@@ -15,6 +15,7 @@ import (
 	"github.com/Gpay-Remit/gpay-remit/middleware"
 	"github.com/Gpay-Remit/gpay-remit/models"
 	"github.com/Gpay-Remit/gpay-remit/services"
+	"github.com/Gpay-Remit/gpay-remit/utils"
 	"github.com/stellar/go/txnbuild"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
@@ -27,11 +28,12 @@ func setupTestDB() *gorm.DB {
 }
 
 type MockStellarClient struct {
-	ValidateAccountFunc func(accountID string) error
-	BuildEscrowTxFunc   func(sender, recipient, assetCode, issuer, amount string) (string, error)
-	SubmitPaymentFunc   func(sourceSecret, destination, assetCode, issuer, amount string) (string, error)
-	BuildPaymentTxFunc  func(sourceAccount txnbuild.Account, destination string, assetCode string, issuer string, amount string) (*txnbuild.Transaction, error)
-	SignTxFunc          func(envelopeXDR string, secretKey string) (string, error)
+	ValidateAccountFunc    func(accountID string) error
+	BuildEscrowTxFunc      func(sender, recipient, assetCode, issuer, amount string) (string, error)
+	SubmitPaymentFunc      func(sourceSecret, destination, assetCode, issuer, amount string) (string, error)
+	BuildPaymentTxFunc     func(sourceAccount txnbuild.Account, destination string, assetCode string, issuer string, amount string) (*txnbuild.Transaction, error)
+	SignTxFunc             func(envelopeXDR string, secretKey string) (string, error)
+	GetAccountBalancesFunc func(accountID string) ([]utils.AccountBalance, error)
 }
 
 func (m *MockStellarClient) ValidateAccount(ctx context.Context, accountID string) error {
@@ -67,6 +69,13 @@ func (m *MockStellarClient) SignTx(ctx context.Context, envelopeXDR string, secr
 		return m.SignTxFunc(envelopeXDR, secretKey)
 	}
 	return "", nil
+}
+
+func (m *MockStellarClient) GetAccountBalances(ctx context.Context, accountID string) ([]utils.AccountBalance, error) {
+	if m.GetAccountBalancesFunc != nil {
+		return m.GetAccountBalancesFunc(accountID)
+	}
+	return []utils.AccountBalance{}, nil
 }
 
 func TestCreateRemittance(t *testing.T) {

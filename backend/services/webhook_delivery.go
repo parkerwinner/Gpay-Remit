@@ -88,15 +88,8 @@ func (s *WebhookDeliveryService) TriggerWebhookWithContext(event string, data ma
 	normalizeAmounts(data)
 
 	for _, webhook := range webhooks {
-		// Check if webhook is subscribed to this event
-		events := strings.Split(webhook.Events, ",")
-		subscribed := false
-		for _, e := range events {
-			if strings.TrimSpace(e) == event || strings.TrimSpace(e) == "*" {
-				subscribed = true
-				break
-			}
-		}
+		// Check if webhook is subscribed to this event (supports exact, "*", and "<prefix>.*")
+		subscribed := webhook.SubscribedTo(event)
 
 		if !subscribed {
 			continue
@@ -246,6 +239,7 @@ func (s *WebhookDeliveryService) deliver(webhook *models.Webhook, delivery *mode
 			delivery.NextRetryAt = nil
 			s.db.Save(delivery)
 			webhookDeliverySuccessCount.Add(1)
+			metrics.WebhookDeliveriesTotal.WithLabelValues("success").Inc()
 			if isRetry {
 				metrics.WebhookRetryAttemptsTotal.WithLabelValues(kind, "success").Inc()
 			}
@@ -259,6 +253,7 @@ func (s *WebhookDeliveryService) deliver(webhook *models.Webhook, delivery *mode
 		if isRetry {
 			metrics.WebhookRetryAttemptsTotal.WithLabelValues(kind, "failure").Inc()
 		}
+		metrics.WebhookDeliveriesTotal.WithLabelValues("failure").Inc()
 
 		// Classify error type for appropriate retry handling
 		errorType := classifyError(err, responseCode)

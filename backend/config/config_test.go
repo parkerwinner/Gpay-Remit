@@ -38,6 +38,7 @@ func clearJWTEnv(t *testing.T) {
 	// file's values and mask what this test is asserting about missing/
 	// invalid env vars.
 	t.Setenv("DATABASE_URL", "postgres://test")
+	t.Setenv("DATABASE_READ_REPLICA_URL", "")
 }
 
 func TestLoadConfig_RequiresJWTSecret(t *testing.T) {

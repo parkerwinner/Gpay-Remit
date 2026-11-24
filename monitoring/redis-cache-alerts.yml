@@ -1,0 +1,11 @@
+groups:
+  - name: gpay-remit-redis-cache
+    rules:
+      - alert: RedisCacheEvictions
+        expr: rate(gpay_remit_redis_evicted_keys_total[5m]) > 0
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: Redis is evicting Gpay-Remit cache keys
+          description: Redis has evicted keys during the last five minutes. Review cache memory limits and workload before hot keys are displaced.

@@ -30,7 +30,6 @@ function ConversionPreview({
 
   const numericAmount = parseFloat(amount);
   const displayRate = rate ?? lastKnownRate;
-  const isStale = !rate && lastKnownRate !== null;
 
   return (
     <div className="conversion-preview" aria-live="polite" aria-atomic="true">

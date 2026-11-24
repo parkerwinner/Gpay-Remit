@@ -52,6 +52,12 @@ func (h *WebhookHandler) CreateWebhook(c *gin.Context) {
 		return
 	}
 
+	normalizedEvents, err := models.NormalizeAndValidateWebhookEvents(req.Events)
+	if err != nil {
+		c.Error(errors.NewValidationError("Invalid webhook events", err.Error()))
+		return
+	}
+
 	// Generate a random secret for HMAC
 	secret, err := generateSecret(32)
 	if err != nil {
@@ -63,7 +69,7 @@ func (h *WebhookHandler) CreateWebhook(c *gin.Context) {
 		UserID:      userID.(uint),
 		URL:         req.URL,
 		Secret:      secret,
-		Events:      strings.Join(req.Events, ","),
+		Events:      normalizedEvents,
 		IsActive:    true,
 		Description: req.Description,
 	}
@@ -76,7 +82,7 @@ func (h *WebhookHandler) CreateWebhook(c *gin.Context) {
 	response := gin.H{
 		"id":          webhook.ID,
 		"url":         webhook.URL,
-		"events":      req.Events,
+		"events":      []string(webhook.Events),
 		"description": webhook.Description,
 		"is_active":   webhook.IsActive,
 		"secret":      secret, // Return secret only on creation
@@ -106,7 +112,7 @@ func (h *WebhookHandler) ListWebhooks(c *gin.Context) {
 		response[i] = gin.H{
 			"id":          webhook.ID,
 			"url":         webhook.URL,
-			"events":      strings.Split(webhook.Events, ","),
+			"events":      []string(webhook.Events),
 			"description": webhook.Description,
 			"is_active":   webhook.IsActive,
 			"created_at":  webhook.CreatedAt,
@@ -139,7 +145,7 @@ func (h *WebhookHandler) GetWebhook(c *gin.Context) {
 	response := gin.H{
 		"id":          webhook.ID,
 		"url":         webhook.URL,
-		"events":      strings.Split(webhook.Events, ","),
+		"events":      []string(webhook.Events),
 		"description": webhook.Description,
 		"is_active":   webhook.IsActive,
 		"created_at":  webhook.CreatedAt,
@@ -178,7 +184,12 @@ func (h *WebhookHandler) UpdateWebhook(c *gin.Context) {
 		webhook.URL = req.URL
 	}
 	if len(req.Events) > 0 {
-		webhook.Events = strings.Join(req.Events, ",")
+		normalizedEvents, err := models.NormalizeAndValidateWebhookEvents(req.Events)
+		if err != nil {
+			c.Error(errors.NewValidationError("Invalid webhook events", err.Error()))
+			return
+		}
+		webhook.Events = normalizedEvents
 	}
 	if req.Description != "" {
 		webhook.Description = req.Description
@@ -195,7 +206,7 @@ func (h *WebhookHandler) UpdateWebhook(c *gin.Context) {
 	response := gin.H{
 		"id":          webhook.ID,
 		"url":         webhook.URL,
-		"events":      strings.Split(webhook.Events, ","),
+		"events":      []string(webhook.Events),
 		"description": webhook.Description,
 		"is_active":   webhook.IsActive,
 		"updated_at":  webhook.UpdatedAt,

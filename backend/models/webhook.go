@@ -2,14 +2,125 @@ package models
 
 import (
 	"context"
+	"database/sql/driver"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 
 	"github.com/Gpay-Remit/gpay-remit/encryption"
 	"gorm.io/gorm"
 )
+
+var webhookEventPattern = regexp.MustCompile(`^(\*|[a-z][a-z0-9_]*\.(\*|[a-z][a-z0-9_]*))$`)
+
+// WebhookEvents stores subscribed webhook event patterns as a JSON array in the database.
+type WebhookEvents []string
+
+// Value implements driver.Valuer to serialize WebhookEvents as a JSON array.
+func (e WebhookEvents) Value() (driver.Value, error) {
+	if e == nil {
+		return "[]", nil
+	}
+	b, err := json.Marshal([]string(e))
+	if err != nil {
+		return nil, err
+	}
+	return string(b), nil
+}
+
+// Scan implements sql.Scanner to deserialize JSON array (or legacy comma-separated) events.
+func (e *WebhookEvents) Scan(value interface{}) error {
+	if value == nil {
+		*e = WebhookEvents{}
+		return nil
+	}
+	var raw string
+	switch v := value.(type) {
+	case []byte:
+		raw = string(v)
+	case string:
+		raw = v
+	default:
+		return fmt.Errorf("unsupported type %T for WebhookEvents", value)
+	}
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		*e = WebhookEvents{}
+		return nil
+	}
+	if strings.HasPrefix(trimmed, "[") {
+		var list []string
+		if err := json.Unmarshal([]byte(trimmed), &list); err != nil {
+			return err
+		}
+		*e = WebhookEvents(list)
+		return nil
+	}
+	parts := strings.Split(trimmed, ",")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if s := strings.TrimSpace(p); s != "" {
+			out = append(out, s)
+		}
+	}
+	*e = WebhookEvents(out)
+	return nil
+}
+
+// ValidateWebhookEventName checks that an event name or wildcard pattern is well-formed
+// (e.g., "*", "payment.*", "payment.created").
+func ValidateWebhookEventName(event string) error {
+	e := strings.ToLower(strings.TrimSpace(event))
+	if e == "" {
+		return errors.New("webhook event name cannot be empty")
+	}
+	if !webhookEventPattern.MatchString(e) {
+		return fmt.Errorf("invalid webhook event name %q: must be '*', '<resource>.*', or '<resource>.<action>'", event)
+	}
+	return nil
+}
+
+// NormalizeAndValidateWebhookEvents validates, normalizes, and deduplicates event patterns.
+func NormalizeAndValidateWebhookEvents(events []string) (WebhookEvents, error) {
+	if len(events) == 0 {
+		return nil, errors.New("at least one webhook event is required")
+	}
+	seen := make(map[string]struct{}, len(events))
+	out := make(WebhookEvents, 0, len(events))
+	for _, raw := range events {
+		e := strings.ToLower(strings.TrimSpace(raw))
+		if err := ValidateWebhookEventName(e); err != nil {
+			return nil, err
+		}
+		if _, ok := seen[e]; ok {
+			continue
+		}
+		seen[e] = struct{}{}
+		out = append(out, e)
+	}
+	return out, nil
+}
+
+// MatchesWebhookEvent reports whether a subscribed pattern matches a concrete event.
+// Supports exact matches, global wildcard ("*"), and namespace wildcards ("payment.*").
+func MatchesWebhookEvent(pattern, event string) bool {
+	p := strings.ToLower(strings.TrimSpace(pattern))
+	ev := strings.ToLower(strings.TrimSpace(event))
+	if p == "" || ev == "" {
+		return false
+	}
+	if p == "*" || p == ev {
+		return true
+	}
+	if strings.HasSuffix(p, ".*") {
+		prefix := strings.TrimSuffix(p, "*") // keeps trailing "."
+		return strings.HasPrefix(ev, prefix)
+	}
+	return false
+}
 
 const webhookSecretCipherPrefix = "enc:v1:"
 
@@ -20,10 +131,20 @@ type Webhook struct {
 	DeletedAt   gorm.DeletedAt `gorm:"index" json:"-"`
 	UserID      uint           `gorm:"index;not null" json:"user_id"`
 	URL         string         `gorm:"size:500;not null" json:"url"`
-	Secret      string         `gorm:"size:512;not null" json:"-"`       // Encrypted HMAC secret for signature verification
-	Events      string         `gorm:"type:text;not null" json:"events"` // Comma-separated list of events
+	Secret      string         `gorm:"size:512;not null" json:"-"`         // Encrypted HMAC secret for signature verification
+	Events      WebhookEvents  `gorm:"type:jsonb;not null" json:"events"`  // JSON array of subscribed event patterns
 	IsActive    bool           `gorm:"index;default:true" json:"is_active"`
 	Description string         `gorm:"size:255" json:"description"`
+}
+
+// SubscribedTo reports whether this webhook matches the given event name.
+func (w *Webhook) SubscribedTo(event string) bool {
+	for _, pattern := range w.Events {
+		if MatchesWebhookEvent(pattern, event) {
+			return true
+		}
+	}
+	return false
 }
 
 type WebhookDelivery struct {

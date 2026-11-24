@@ -1,19 +1,18 @@
 // Base Ledger service structure
-import TransportWebUSB from "@ledgerhq/hw-transport-webusb";
-import Str from "@ledgerhq/hw-app-str";
-
 export class LedgerWalletService {
   private transport: any | null = null;
   private str: any | null = null;
 
-  constructor() {}
-
   async connect(): Promise<{ publicKey: string }> {
     try {
       if (!this.transport) {
+        const [{ default: TransportWebUSB }, { default: Str }] = await Promise.all([
+          import("@ledgerhq/hw-transport-webusb"),
+          import("@ledgerhq/hw-app-str"),
+        ]);
         this.transport = await TransportWebUSB.create();
+        this.str = new Str(this.transport);
       }
-      this.str = new Str(this.transport);
       
       const result = await this.str.getPublicKey("44'/148'/0'");
       return { publicKey: result.publicKey };

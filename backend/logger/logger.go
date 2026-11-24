@@ -12,11 +12,31 @@ import (
 // Initialized with safe defaults so callers never receive a nil logger.
 var Log *logrus.Logger
 
+type defaultFieldsHook struct{}
+
+func (defaultFieldsHook) Levels() []logrus.Level {
+	return logrus.AllLevels
+}
+
+func (defaultFieldsHook) Fire(entry *logrus.Entry) error {
+	if _, ok := entry.Data["request_id"]; !ok {
+		entry.Data["request_id"] = ""
+	}
+	if _, ok := entry.Data["user_id"]; !ok {
+		entry.Data["user_id"] = ""
+	}
+	if _, ok := entry.Data["endpoint"]; !ok {
+		entry.Data["endpoint"] = ""
+	}
+	return nil
+}
+
 func init() {
 	Log = logrus.New()
 	Log.SetOutput(os.Stdout)
 	Log.SetFormatter(&logrus.TextFormatter{FullTimestamp: true})
 	Log.SetLevel(logrus.InfoLevel)
+	Log.AddHook(defaultFieldsHook{})
 }
 
 // Init configures the global logger for the given environment.
@@ -36,6 +56,7 @@ func Init(env string) {
 
 	level := parseLevel(os.Getenv("LOG_LEVEL"))
 	Log.SetLevel(level)
+	Log.AddHook(defaultFieldsHook{})
 }
 
 func parseLevel(s string) logrus.Level {
@@ -54,6 +75,11 @@ func parseLevel(s string) logrus.Level {
 }
 
 // WithFields returns an entry with the given structured fields attached.
+// Standard request fields:
+//   - request_id: request/correlation identifier
+//   - user_id: authenticated user identifier, or empty
+//   - endpoint: HTTP path handled by the request
+//   - method, status, and duration_ms: HTTP request metadata
 func WithFields(fields logrus.Fields) *logrus.Entry {
 	return Log.WithFields(fields)
 }

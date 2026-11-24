@@ -1,0 +1,68 @@
+groups:
+  - name: gpay-remit.availability
+    rules:
+      - alert: GpayRemitHighErrorRate
+        expr: |
+          (
+            sum(rate(gpay_remit_http_requests_total{status=~"5.."}[5m]))
+            /
+            clamp_min(sum(rate(gpay_remit_http_requests_total[5m])), 1)
+          ) > 0.05
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Gpay-Remit HTTP 5xx error rate is above 5%"
+          description: "The five-minute HTTP 5xx error ratio is above 5% (current value: {{ $value | humanizePercentage }})."
+
+      - alert: GpayRemitDatabasePoolExhaustion
+        expr: |
+          gpay_remit_db_connections_in_use
+          /
+          clamp_min(gpay_remit_db_connections_max, 1)
+          > 0.80
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Gpay-Remit database connection pool is over 80%"
+          description: "Database connection pool usage is above 80% (current value: {{ $value | humanizePercentage }})."
+
+      - alert: GpayRemitRedisUnavailable
+        expr: gpay_remit_redis_up == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Gpay-Remit Redis is unavailable"
+          description: "Redis has not been reachable for at least one minute."
+
+      - alert: GpayRemitWebhookFailureRate
+        expr: |
+          (
+            sum(rate(gpay_remit_webhook_deliveries_total{outcome="failure"}[5m]))
+            /
+            clamp_min(
+              sum(rate(gpay_remit_webhook_deliveries_total[5m])),
+              1)
+          ) > 0.20
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Gpay-Remit webhook failure rate is above 20%"
+          description: "The five-minute webhook failure ratio is above 20% (current value: {{ $value | humanizePercentage }})."
+
+      - alert: GpayRemitAPIP99Latency
+        expr: |
+          histogram_quantile(
+            0.99,
+            sum(rate(gpay_remit_http_request_duration_seconds_bucket[5m]))
+              by (le)
+          ) > 1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Gpay-Remit API p99 latency is above one second"
+          description: "The API p99 latency has been above one second for five minutes (current value: {{ $value | humanizeDuration }})."

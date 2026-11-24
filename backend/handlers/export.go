@@ -7,21 +7,27 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
-	"github.com/gin-gonic/gin"
-	"github.com/jung-kurt/gofpdf"
 	"github.com/Gpay-Remit/gpay-remit/errors"
 	"github.com/Gpay-Remit/gpay-remit/models"
+	"github.com/gin-gonic/gin"
+	"github.com/jung-kurt/gofpdf"
 	"gorm.io/gorm"
 )
 
 type ExportHandler struct {
-	db *gorm.DB
+	db     *gorm.DB
+	readDB *gorm.DB
 }
 
-func NewExportHandler(db *gorm.DB) *ExportHandler {
-	return &ExportHandler{db: db}
+func NewExportHandler(db *gorm.DB, readDB ...*gorm.DB) *ExportHandler {
+	read := db
+	if len(readDB) > 0 && readDB[0] != nil {
+		read = readDB[0]
+	}
+	return &ExportHandler{db: db, readDB: read}
 }
 
 // ExportTransactions handles both CSV and PDF export requests
@@ -41,7 +47,8 @@ func (h *ExportHandler) ExportTransactions(c *gin.Context) {
 	pageSize := c.DefaultQuery("page_size", "1000")
 
 	// Build query
-	query := h.db.Model(&models.Payment{})
+	readDB := preferredReadDB(h.db, h.readDB)
+	query := readDB.Model(&models.Payment{})
 
 	// Apply date filters
 	if startDate != "" {
@@ -86,7 +93,7 @@ func (h *ExportHandler) ExportTransactions(c *gin.Context) {
 
 	// Count total matching records
 	var total int64
-	countQuery := h.db.Model(&models.Payment{})
+	countQuery := readDB.Model(&models.Payment{})
 	if startDate != "" {
 		if parsedDate, err := time.Parse("2006-01-02", startDate); err == nil {
 			countQuery = countQuery.Where("created_at >= ?", parsedDate)
@@ -251,7 +258,7 @@ func (h *ExportHandler) exportPDF(c *gin.Context, payments []models.Payment) {
 	// Table header
 	pdf.SetFont("Arial", "B", 8)
 	pdf.SetFillColor(200, 220, 255)
-	
+
 	// Column widths (total: 277mm for A4 landscape)
 	widths := []float64{10, 35, 20, 20, 20, 15, 15, 15, 15, 15, 15, 20, 52}
 	headers := []string{
@@ -333,10 +340,10 @@ func (h *ExportHandler) exportPDF(c *gin.Context, payments []models.Payment) {
 	pdf.Ln(8)
 
 	pdf.SetFont("Arial", "", 9)
-	
+
 	var totalAmount, totalFees int64
 	statusCounts := make(map[string]int)
-	
+
 	for _, p := range payments {
 		totalAmount += p.Amount
 		totalFees += p.Fee
@@ -347,7 +354,7 @@ func (h *ExportHandler) exportPDF(c *gin.Context, payments []models.Payment) {
 	pdf.Ln(6)
 	pdf.Cell(0, 6, fmt.Sprintf("Total Fees Collected: %.4f", float64(totalFees)/100.0))
 	pdf.Ln(6)
-	
+
 	pdf.Cell(0, 6, "Status Breakdown:")
 	pdf.Ln(6)
 	for status, count := range statusCounts {
@@ -444,4 +451,194 @@ func (h *ExportHandler) GetExportJobStatus(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, response)
+}
+
+type CreateExportScheduleRequest struct {
+	Frequency   string `json:"frequency" binding:"required"`
+	Format      string `json:"format" binding:"required"`
+	Destination string `json:"destination" binding:"required"`
+	WebhookURL  string `json:"webhook_url"`
+}
+
+type UpdateExportScheduleRequest struct {
+	Frequency   string `json:"frequency"`
+	Format      string `json:"format"`
+	Destination string `json:"destination"`
+	WebhookURL  string `json:"webhook_url"`
+	IsActive    *bool  `json:"is_active"`
+}
+
+// CreateExportSchedule creates a new scheduled transaction export for the user.
+func (h *ExportHandler) CreateExportSchedule(c *gin.Context) {
+	userID, exists := c.Get("userID")
+	if !exists {
+		c.Error(errors.NewUnauthorizedError("Unauthorized"))
+		return
+	}
+
+	var req CreateExportScheduleRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.Error(errors.NewValidationError("Invalid request body", err.Error()))
+		return
+	}
+
+	freq := strings.ToLower(strings.TrimSpace(req.Frequency))
+	format := strings.ToLower(strings.TrimSpace(req.Format))
+	dest := strings.ToLower(strings.TrimSpace(req.Destination))
+	webhookURL := strings.TrimSpace(req.WebhookURL)
+
+	if !models.IsValidExportFrequency(freq) {
+		c.Error(errors.NewValidationError("Invalid frequency", "frequency must be daily, weekly, or monthly"))
+		return
+	}
+	if !models.IsValidExportFormat(format) {
+		c.Error(errors.NewValidationError("Invalid format", "format must be csv or pdf"))
+		return
+	}
+	if !models.IsValidExportDestination(dest) {
+		c.Error(errors.NewValidationError("Invalid destination", "destination must be email or webhook"))
+		return
+	}
+
+	now := time.Now().UTC()
+	schedule := models.ExportSchedule{
+		UserID:      userID.(uint),
+		Frequency:   freq,
+		Format:      format,
+		Destination: dest,
+		WebhookURL:  webhookURL,
+		IsActive:    true,
+		NextRunAt:   models.ComputeNextExportRun(now, freq),
+	}
+
+	if err := h.db.Create(&schedule).Error; err != nil {
+		c.Error(errors.NewInternalError("Failed to create export schedule", err))
+		return
+	}
+
+	c.JSON(http.StatusCreated, schedule)
+}
+
+// ListExportSchedules returns all export schedules owned by the authenticated user.
+func (h *ExportHandler) ListExportSchedules(c *gin.Context) {
+	userID, exists := c.Get("userID")
+	if !exists {
+		c.Error(errors.NewUnauthorizedError("Unauthorized"))
+		return
+	}
+
+	readDB := preferredReadDB(h.db, h.readDB)
+	var schedules []models.ExportSchedule
+	if err := readDB.Where("user_id = ?", userID.(uint)).Order("created_at DESC").Find(&schedules).Error; err != nil {
+		c.Error(errors.NewInternalError("Failed to list export schedules", err))
+		return
+	}
+
+	c.JSON(http.StatusOK, schedules)
+}
+
+// GetExportSchedule returns a single export schedule owned by the authenticated user.
+func (h *ExportHandler) GetExportSchedule(c *gin.Context) {
+	userID, exists := c.Get("userID")
+	if !exists {
+		c.Error(errors.NewUnauthorizedError("Unauthorized"))
+		return
+	}
+
+	var schedule models.ExportSchedule
+	if err := h.db.Where("id = ? AND user_id = ?", c.Param("id"), userID.(uint)).First(&schedule).Error; err != nil {
+		if err == gorm.ErrRecordNotFound {
+			c.Error(errors.NewNotFoundError("Export schedule not found"))
+		} else {
+			c.Error(errors.NewInternalError("Failed to fetch export schedule", err))
+		}
+		return
+	}
+
+	c.JSON(http.StatusOK, schedule)
+}
+
+// UpdateExportSchedule updates an existing export schedule.
+func (h *ExportHandler) UpdateExportSchedule(c *gin.Context) {
+	userID, exists := c.Get("userID")
+	if !exists {
+		c.Error(errors.NewUnauthorizedError("Unauthorized"))
+		return
+	}
+
+	var schedule models.ExportSchedule
+	if err := h.db.Where("id = ? AND user_id = ?", c.Param("id"), userID.(uint)).First(&schedule).Error; err != nil {
+		if err == gorm.ErrRecordNotFound {
+			c.Error(errors.NewNotFoundError("Export schedule not found"))
+		} else {
+			c.Error(errors.NewInternalError("Failed to fetch export schedule", err))
+		}
+		return
+	}
+
+	var req UpdateExportScheduleRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.Error(errors.NewValidationError("Invalid request body", err.Error()))
+		return
+	}
+
+	if req.Frequency != "" {
+		freq := strings.ToLower(strings.TrimSpace(req.Frequency))
+		if !models.IsValidExportFrequency(freq) {
+			c.Error(errors.NewValidationError("Invalid frequency", "frequency must be daily, weekly, or monthly"))
+			return
+		}
+		schedule.Frequency = freq
+		schedule.NextRunAt = models.ComputeNextExportRun(time.Now().UTC(), freq)
+	}
+	if req.Format != "" {
+		format := strings.ToLower(strings.TrimSpace(req.Format))
+		if !models.IsValidExportFormat(format) {
+			c.Error(errors.NewValidationError("Invalid format", "format must be csv or pdf"))
+			return
+		}
+		schedule.Format = format
+	}
+	if req.Destination != "" {
+		dest := strings.ToLower(strings.TrimSpace(req.Destination))
+		if !models.IsValidExportDestination(dest) {
+			c.Error(errors.NewValidationError("Invalid destination", "destination must be email or webhook"))
+			return
+		}
+		schedule.Destination = dest
+	}
+	if req.WebhookURL != "" {
+		schedule.WebhookURL = strings.TrimSpace(req.WebhookURL)
+	}
+	if req.IsActive != nil {
+		schedule.IsActive = *req.IsActive
+	}
+
+	if err := h.db.Save(&schedule).Error; err != nil {
+		c.Error(errors.NewInternalError("Failed to update export schedule", err))
+		return
+	}
+
+	c.JSON(http.StatusOK, schedule)
+}
+
+// DeleteExportSchedule deletes an export schedule owned by the authenticated user.
+func (h *ExportHandler) DeleteExportSchedule(c *gin.Context) {
+	userID, exists := c.Get("userID")
+	if !exists {
+		c.Error(errors.NewUnauthorizedError("Unauthorized"))
+		return
+	}
+
+	result := h.db.Where("id = ? AND user_id = ?", c.Param("id"), userID.(uint)).Delete(&models.ExportSchedule{})
+	if result.Error != nil {
+		c.Error(errors.NewInternalError("Failed to delete export schedule", result.Error))
+		return
+	}
+	if result.RowsAffected == 0 {
+		c.Error(errors.NewNotFoundError("Export schedule not found"))
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "Export schedule deleted"})
 }

@@ -32,7 +32,16 @@ type Payment struct {
 	NetworkFee    int64 `gorm:"type:bigint;default:0" json:"network_fee"`
 	Conditions      string         `gorm:"type:text" json:"conditions"` // JSON blob of conditions
 	Notes           string         `gorm:"type:text" json:"notes"`
+	Tags            []string       `gorm:"-" json:"tags"`
 	SearchVector    string         `gorm:"type:tsvector" json:"-"`
+}
+
+// AfterFind ensures Tags is always serialized as an empty JSON array rather than null.
+func (p *Payment) AfterFind(tx *gorm.DB) error {
+	if p.Tags == nil {
+		p.Tags = []string{}
+	}
+	return nil
 }
 
 // TableName overrides the table name

@@ -105,8 +105,34 @@ api.interceptors.response.use(
 
 export const sendRemittance = (data, config = {}) => api.post("/remittances", data, config);
 export const getRemittance = (id, config = {}) => api.get(`/remittances/${id}`, config);
-export const getRemittances = (page = 1, pageSize = 20, config = {}) =>
-  api.get(`/remittances?page=${page}&page_size=${pageSize}`, config);
+export const getRemittances = (page = 1, pageSize = 20, config = {}, tags = []) => {
+  const params = new URLSearchParams({
+    page: String(page),
+    page_size: String(pageSize),
+  });
+  if (Array.isArray(tags)) {
+    tags.forEach((t) => {
+      if (t) params.append("tag", t);
+    });
+  }
+  return api.get(`/remittances?${params.toString()}`, config);
+};
+
+export const updateRemittanceTags = (id, tags, config = {}) =>
+  api.put(`/remittances/${id}/tags`, { tags }, config);
+
+export const getTagSummary = (params = {}, config = {}) => {
+  const searchParams = new URLSearchParams();
+  if (params.from) searchParams.set("from", params.from);
+  if (params.to) searchParams.set("to", params.to);
+  const qs = searchParams.toString();
+  return api.get(`/remittances/tags/summary${qs ? `?${qs}` : ""}`, config);
+};
+
+export const autocompleteTags = (q, limit = 10, config = {}) => {
+  const params = new URLSearchParams({ q: String(q || ""), limit: String(limit) });
+  return api.get(`/remittances/tags/autocomplete?${params.toString()}`, config);
+};
 
 export const createInvoice = (data, config = {}) => api.post("/invoices", data, config);
 export const getInvoice = (id, config = {}) => api.get(`/invoices/${id}`, config);
@@ -114,6 +140,28 @@ export const getInvoices = (config = {}) => api.get("/invoices", config);
 
 export const getExchangeRate = (from, to, config = {}) =>
   api.get(`/exchange-rates?from=${from}&to=${to}`, config);
+
+// ── Payment Templates ───────────────────────────────────────────────────
+export const getTemplates = (page = 1, pageSize = 20, config = {}) =>
+  api.get(`/templates?page=${page}&page_size=${pageSize}`, config);
+export const createTemplate = (data, config = {}) => api.post("/templates", data, config);
+export const updateTemplate = (id, data, config = {}) => api.put(`/templates/${id}`, data, config);
+export const deleteTemplate = (id, config = {}) => api.delete(`/templates/${id}`, config);
+export const sendFromTemplate = (id, config = {}) => api.post(`/templates/${id}/send`, {}, config);
+export const calculateFee = (amount, config = {}) => api.get(`/fees/calculate?amount=${amount}`, config);
+
+// ── Recurring Schedules ─────────────────────────────────────────────────
+export const getRecurringSchedules = (config = {}) => api.get("/recurring-schedules", config);
+export const createRecurringSchedule = (data, config = {}) => api.post("/recurring-schedules", data, config);
+export const pauseRecurringSchedule = (id, config = {}) => api.post(`/recurring-schedules/${id}/pause`, {}, config);
+export const resumeRecurringSchedule = (id, config = {}) => api.post(`/recurring-schedules/${id}/resume`, {}, config);
+export const cancelRecurringSchedule = (id, config = {}) => api.post(`/recurring-schedules/${id}/cancel`, {}, config);
+
+// ── Multi-Currency Wallet ───────────────────────────────────────────────
+export const getWalletBalances = (config = {}) => api.get("/wallet/balances", config);
+export const getWalletPreferences = (config = {}) => api.get("/wallet/preferences", config);
+export const updateWalletPreferences = (preferredCurrency, config = {}) =>
+  api.put("/wallet/preferences", { preferred_currency: preferredCurrency }, config);
 
 // ── Auth & 2FA ──────────────────────────────────────────────────────────
 export const register = (data) => api.post("/auth/register", data);
@@ -128,6 +176,20 @@ export const resetPassword = (token, newPassword) =>
 export const setupMFA = (password) => api.post("/auth/mfa/setup", { password });
 export const verifyMFA = (code) => api.post("/auth/mfa/verify", { code });
 export const disableMFA = (password) => api.post("/auth/mfa/disable", { password });
+export const stepUpMFA = (code) => api.post("/auth/mfa/step-up", { code });
 export const getMFAStatus = () => api.get("/auth/mfa/status");
+
+// ── Email Preferences ───────────────────────────────────────────────────
+export const getEmailPreferences = (config = {}) => api.get("/email-preferences", config);
+export const updateEmailPreferences = (prefs, config = {}) =>
+  api.put("/email-preferences", prefs, config);
+
+// ── Export Schedules ────────────────────────────────────────────────────
+export const getExportSchedules = (config = {}) => api.get("/export-schedules", config);
+export const createExportSchedule = (data, config = {}) => api.post("/export-schedules", data, config);
+export const updateExportSchedule = (id, data, config = {}) =>
+  api.put(`/export-schedules/${id}`, data, config);
+export const deleteExportSchedule = (id, config = {}) =>
+  api.delete(`/export-schedules/${id}`, config);
 
 export default api;

@@ -1,5 +1,5 @@
-export * from "./api";
 import type { paths, components } from "./api";
+export * from "./api";
 
 export type Paths = paths;
 export type Components = components;

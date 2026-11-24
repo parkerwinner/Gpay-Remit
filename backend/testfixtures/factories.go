@@ -410,7 +410,7 @@ type WebhookOption func(*models.Webhook)
 
 // WithWebhookEvents overrides the subscribed event list.
 func WithWebhookEvents(events ...string) WebhookOption {
-	return func(w *models.Webhook) { w.Events = strings.Join(events, ",") }
+	return func(w *models.Webhook) { w.Events = models.WebhookEvents(events) }
 }
 
 // WithWebhookInactive disables the webhook.
@@ -426,7 +426,7 @@ func NewWebhook(opts ...WebhookOption) *models.Webhook {
 		// Long enough to be a plausible HMAC key rather than a short token that
 		// would pass a length check the real secret would not.
 		Secret:      gofakeit.Regex("[a-zA-Z0-9]{48}"),
-		Events:      "payment.completed,payment.failed",
+		Events:      models.WebhookEvents{"payment.completed", "payment.failed"},
 		IsActive:    true,
 		Description: gofakeit.Sentence(5),
 	}

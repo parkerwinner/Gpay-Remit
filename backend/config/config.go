@@ -139,6 +139,7 @@ type Config struct {
 	Environment       string
 	TLSEnabled        bool
 	DatabaseURL       string
+	ReadReplicaURL    string
 	StellarNetwork    string
 	StellarHorizonURL string
 	HorizonURL        string
@@ -191,6 +192,20 @@ type Config struct {
 	// development and integration testing. Controlled by the
 	// SANDBOX_MODE environment variable.
 	SandboxMode bool
+
+	// Batch remittance configuration
+	MaxBatchSize int
+
+	// 2FA step-up threshold for large transfers (minor units, e.g. 100000 = $1,000.00).
+	// Transfers strictly above this amount require recent 2FA verification.
+	Requires2FAThreshold int64
+
+	// Recurring remittance worker configuration (off by default)
+	RecurringWorkerEnabled   bool
+	RecurringWorkerInterval  time.Duration
+	RecurringWorkerBatchSize int
+	RecurringWorkerTimeout   time.Duration
+	RecurringMaxFailures     int
 
 	// CORS is configured with explicit origins; credentials are only sent
 	// to exact origins listed in CORS_ALLOWED_ORIGINS.
@@ -326,6 +341,7 @@ func LoadConfig() (*Config, error) {
 		Port:              getEnvOrDefault("PORT", "8080"),
 		Environment:       getEnvOrDefault("APP_ENV", "development"),
 		DatabaseURL:       os.Getenv("DATABASE_URL"),
+		ReadReplicaURL:    strings.TrimSpace(os.Getenv("DATABASE_READ_REPLICA_URL")),
 		StellarNetwork:    stellarNetwork,
 		StellarHorizonURL: horizonURL,
 		HorizonURL:        horizonURL,
@@ -361,6 +377,15 @@ func LoadConfig() (*Config, error) {
 		ExchangeRateCacheTTL: getEnvAsDuration("EXCHANGE_RATE_CACHE_TTL", 60*time.Second),
 
 		SandboxMode: sandbox,
+
+		MaxBatchSize:         getEnvAsInt("MAX_BATCH_SIZE", 100),
+		Requires2FAThreshold: int64(getEnvAsInt("REQUIRES_2FA_THRESHOLD", 100000)),
+
+		RecurringWorkerEnabled:   getEnvOrDefault("RECURRING_WORKER_ENABLED", "false") == "true",
+		RecurringWorkerInterval:  getEnvAsDuration("RECURRING_WORKER_INTERVAL", 1*time.Minute),
+		RecurringWorkerBatchSize: getEnvAsInt("RECURRING_WORKER_BATCH_SIZE", 50),
+		RecurringWorkerTimeout:   getEnvAsDuration("RECURRING_WORKER_TIMEOUT", 30*time.Second),
+		RecurringMaxFailures:     getEnvAsInt("RECURRING_MAX_FAILURES", 3),
 
 		CORSAllowedOrigins:   corsAllowedOrigins,
 		CORSAllowedMethods:   corsAllowedMethods,
@@ -402,6 +427,9 @@ func (c *Config) Validate() error {
 		errs = append(errs, "DATABASE_URL is required")
 	} else if !strings.HasPrefix(c.DatabaseURL, "postgres://") && !strings.HasPrefix(c.DatabaseURL, "postgresql://") {
 		errs = append(errs, "DATABASE_URL must be a valid postgres connection URI (starting with postgres:// or postgresql://)")
+	}
+	if replicaURL := strings.TrimSpace(c.ReadReplicaURL); replicaURL != "" && !strings.HasPrefix(replicaURL, "postgres://") && !strings.HasPrefix(replicaURL, "postgresql://") {
+		errs = append(errs, "DATABASE_READ_REPLICA_URL must be a valid postgres connection URI (starting with postgres:// or postgresql://)")
 	}
 
 	// 3. Environment
@@ -632,6 +660,26 @@ func InitDB(cfg *Config) (*gorm.DB, error) {
 	return db, nil
 }
 
+// InitReadDB opens the optional read replica without making startup depend on
+// it. Callers fall back to the primary when this returns nil.
+func InitReadDB(cfg *Config) (*gorm.DB, error) {
+	if strings.TrimSpace(cfg.ReadReplicaURL) == "" {
+		return nil, nil
+	}
+	db, err := gorm.Open(postgres.Open(cfg.ReadReplicaURL), &gorm.Config{Logger: newGormLogger(cfg.Environment)})
+	if err != nil {
+		return nil, fmt.Errorf("failed to connect to read replica: %w", err)
+	}
+	sqlDB, err := db.DB()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get read replica sql.DB: %w", err)
+	}
+	sqlDB.SetMaxIdleConns(cfg.DBMaxIdleConns)
+	sqlDB.SetMaxOpenConns(cfg.DBMaxOpenConns)
+	sqlDB.SetConnMaxLifetime(cfg.DBConnMaxLifetime)
+	return db, nil
+}
+
 // MonitorConnectionPool monitors database connection pool stats and logs alerts
 func MonitorConnectionPool(ctx context.Context, db *sql.DB) {
 	ticker := time.NewTicker(30 * time.Second)
@@ -734,7 +782,7 @@ func getEnvAsFloat(key string, defaultValue float64) float64 {
 }
 
 // isEnvSet returns true when the given environment variable is explicitly set
-// (even to an empty string). This distinguishes "not set" from "set to ''".
+// (even to an empty string). This distinguishes "not set" from "set to ”".
 func isEnvSet(key string) bool {
 	_, ok := os.LookupEnv(key)
 	return ok

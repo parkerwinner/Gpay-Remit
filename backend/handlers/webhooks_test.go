@@ -63,14 +63,14 @@ func TestListWebhooks(t *testing.T) {
 		UserID:   1,
 		URL:      "https://example.com/webhook1",
 		Secret:   "secret1",
-		Events:   "payment.completed",
+		Events:   models.WebhookEvents{"payment.completed"},
 		IsActive: true,
 	})
 	db.Create(&models.Webhook{
 		UserID:   1,
 		URL:      "https://example.com/webhook2",
 		Secret:   "secret2",
-		Events:   "payment.failed",
+		Events:   models.WebhookEvents{"payment.failed"},
 		IsActive: false,
 	})
 
@@ -101,7 +101,7 @@ func TestGetWebhook(t *testing.T) {
 		UserID:      1,
 		URL:         "https://example.com/webhook",
 		Secret:      "secret123",
-		Events:      "payment.completed",
+		Events:      models.WebhookEvents{"payment.completed"},
 		IsActive:    true,
 		Description: "Test webhook",
 	}
@@ -135,7 +135,7 @@ func TestUpdateWebhook(t *testing.T) {
 		UserID:   1,
 		URL:      "https://example.com/webhook",
 		Secret:   "secret123",
-		Events:   "payment.completed",
+		Events:   models.WebhookEvents{"payment.completed"},
 		IsActive: true,
 	}
 	db.Create(&webhook)
@@ -176,7 +176,7 @@ func TestDeleteWebhook(t *testing.T) {
 		UserID:   1,
 		URL:      "https://example.com/webhook",
 		Secret:   "secret123",
-		Events:   "payment.completed",
+		Events:   models.WebhookEvents{"payment.completed"},
 		IsActive: true,
 	}
 	db.Create(&webhook)
@@ -209,7 +209,7 @@ func TestGetWebhookDeliveries(t *testing.T) {
 		UserID:   1,
 		URL:      "https://example.com/webhook",
 		Secret:   "secret123",
-		Events:   "payment.completed",
+		Events:   models.WebhookEvents{"payment.completed"},
 		IsActive: true,
 	}
 	db.Create(&webhook)
