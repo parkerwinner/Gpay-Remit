@@ -8,33 +8,17 @@ Thank you for your interest in contributing to **Gpay-Remit**! This document pro
 
 Ensure you have the following toolchains and dependencies installed before starting:
 
-- **Go**: Version `1.25.0` or higher (strictly enforced by CI).
-- **Node.js**: Version `20.x` LTS or higher, with `npm` 10+.
-- **Rust**: Version `1.75.0` or higher with target `wasm32-unknown-unknown` for Soroban smart contracts.
-- **Soroban CLI**: `cargo install soroban-cli`
-- **PostgreSQL**: Version `15+` (or via Docker Compose).
-- **Redis**: Version `7+` (or via Docker Compose).
-- **Docker & Docker Compose**: For containerized local development and services.
+### Local Development with Docker Compose
 
----
+To spin up all required dependencies (PostgreSQL 15, Redis 7, Backend, and Frontend) with development volume mounts and live reload:
 
-## 2. Local Environment Setup
+```bash
+make dev
+# Or directly via docker compose:
+docker compose -f docker-compose.yml -f docker-compose.dev.yml up --build
+```
 
-### 2.1 Repository Setup
-
-1. Fork the repository on GitHub and clone your fork:
-   ```bash
-   git clone https://github.com/<your-username>/Gpay-Remit.git
-   cd Gpay-Remit
-   git remote add upstream https://github.com/parkerwinner/Gpay-Remit.git
-   ```
-
-2. Start background services (PostgreSQL & Redis) using Docker Compose:
-   ```bash
-   docker-compose up -d postgres redis
-   ```
-
-### 2.2 Backend Setup
+### Backend
 
 1. Navigate to the backend directory:
    ```bash
