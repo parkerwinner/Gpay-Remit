@@ -7,6 +7,10 @@
 #
 # Environment:
 #   NETWORK                  stellar CLI network name (default: testnet)
+#   SOROBAN_RPC_URL          Soroban RPC endpoint (optional; used for deployment metadata)
+#   SOROBAN_NETWORK_PASSPHRASE
+#                            network passphrase (optional; defaults to Stellar CLI network)
+#   ADMIN_SECRET             admin/deployer secret key (preferred in this script)
 #   STELLAR_DEPLOYER_SECRET  deployer secret key. Optional on testnet: when
 #                            unset, a throwaway key is generated and funded by
 #                            friendbot (contracts are then admin-less in
@@ -33,6 +37,15 @@ CONTRACTS="${CONTRACTS:-mock-oracle mock-kyc mock-aml escrow hub}"
 SKIP_OVERSIZE="${SKIP_OVERSIZE:-0}"
 MAX_STALENESS_SECONDS="${MAX_STALENESS_SECONDS:-3600}"
 DEFAULT_MAX_WASM_BYTES=131072
+
+if [ -f "$CONTRACTS_DIR/.env" ]; then
+  set -a
+  # shellcheck disable=SC1091
+  . "$CONTRACTS_DIR/.env"
+  set +a
+fi
+
+STELLAR_DEPLOYER_SECRET="${STELLAR_DEPLOYER_SECRET:-${ADMIN_SECRET:-}}"
 
 log() { printf '\n==> %s\n' "$*"; }
 warn() {

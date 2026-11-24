@@ -4,36 +4,59 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"math"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
-	"github.com/gin-gonic/gin"
 	"github.com/Gpay-Remit/gpay-remit/config"
 	"github.com/Gpay-Remit/gpay-remit/errors"
 	"github.com/Gpay-Remit/gpay-remit/middleware"
 	"github.com/Gpay-Remit/gpay-remit/models"
 	"github.com/Gpay-Remit/gpay-remit/services"
 	"github.com/Gpay-Remit/gpay-remit/utils"
+	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 type RemittanceHandler struct {
 	db            *gorm.DB
+	readDB        *gorm.DB
 	config        *config.Config
 	stellarClient utils.StellarClientInterface
 	fees          *services.FeeService
 	emailService  *services.EmailService
 }
 
-func NewRemittanceHandler(db *gorm.DB, cfg *config.Config) *RemittanceHandler {
+func NewRemittanceHandler(db *gorm.DB, cfg *config.Config, readDB ...*gorm.DB) *RemittanceHandler {
+	read := db
+	if len(readDB) > 0 && readDB[0] != nil {
+		read = readDB[0]
+	}
 	return &RemittanceHandler{
 		db:            db,
+		readDB:        read,
 		config:        cfg,
 		stellarClient: utils.NewStellarClient(cfg.StellarHorizonURL, cfg.NetworkPassphrase),
 		fees:          services.NewFeeService(cfg),
 		emailService:  services.NewEmailService(cfg.SMTPHost, cfg.SMTPPort, cfg.SMTPUser, cfg.SMTPPassword, cfg.SMTPFrom, cfg.EmailEnabled),
 	}
+}
+
+// NewRemittanceHandlerWithStellarClient allows tests and alternate runtime
+// environments to provide a Stellar client implementation.
+func NewRemittanceHandlerWithStellarClient(
+	db *gorm.DB,
+	cfg *config.Config,
+	client utils.StellarClientInterface,
+) *RemittanceHandler {
+	handler := NewRemittanceHandler(db, cfg)
+	if client != nil {
+		handler.stellarClient = client
+	}
+	return handler
 }
 
 const (
@@ -59,17 +82,17 @@ func DecodeCursor(encoded string) (PaginationCursor, error) {
 	if encoded == "" {
 		return cursor, nil
 	}
-	
+
 	data, err := base64.StdEncoding.DecodeString(encoded)
 	if err != nil {
 		return cursor, fmt.Errorf("invalid cursor encoding: %w", err)
 	}
-	
+
 	err = json.Unmarshal(data, &cursor)
 	if err != nil {
 		return cursor, fmt.Errorf("invalid cursor format: %w", err)
 	}
-	
+
 	return cursor, nil
 }
 
@@ -104,18 +127,20 @@ func Paginate(c *gin.Context) func(db *gorm.DB) *gorm.DB {
 }
 
 type CreateRemittanceRequest struct {
-	SenderAccount   string                 `json:"sender_account" binding:"required"`
-	RecipientAccount string                `json:"recipient_account" binding:"required"`
-	Amount          int64                  `json:"amount" binding:"required,gt=0"`
-	AssetCode       string                 `json:"asset_code" binding:"required"`
-	AssetIssuer     string                 `json:"asset_issuer"`
-	Conditions      map[string]interface{} `json:"conditions"`
-	Notes           string                 `json:"notes"`
+	SenderAccount    string                 `json:"sender_account" binding:"required"`
+	RecipientAccount string                 `json:"recipient_account" binding:"required"`
+	Amount           int64                  `json:"amount" binding:"required,gt=0"`
+	AssetCode        string                 `json:"asset_code" binding:"required"`
+	AssetIssuer      string                 `json:"asset_issuer"`
+	Conditions       map[string]interface{} `json:"conditions"`
+	Notes            string                 `json:"notes"`
+	Tags             []string               `json:"tags"`
+	TOTPCode         string                 `json:"totp_code"`
 }
 
 type BatchPaymentItem struct {
-	RecipientAccount string                 `json:"recipient_account" binding:"required"`
-	Amount           int64                  `json:"amount" binding:"required,gt=0"`
+	RecipientAccount string                 `json:"recipient_account"`
+	Amount           int64                  `json:"amount"`
 	Conditions       map[string]interface{} `json:"conditions"`
 	Notes            string                 `json:"notes"`
 }
@@ -124,22 +149,105 @@ type CreateBatchRemittanceRequest struct {
 	SenderAccount string             `json:"sender_account" binding:"required"`
 	AssetCode     string             `json:"asset_code" binding:"required"`
 	AssetIssuer   string             `json:"asset_issuer"`
-	Payments      []BatchPaymentItem `json:"payments" binding:"required,min=1,max=100"`
+	Payments      []BatchPaymentItem `json:"payments" binding:"required"`
+	TOTPCode      string             `json:"totp_code"`
+}
+
+type BatchItemError struct {
+	Index int    `json:"index"`
+	Error string `json:"error"`
+}
+
+type BatchPaymentResult struct {
+	Index            int                   `json:"index"`
+	RemittanceID     uint                  `json:"remittance_id"`
+	Status           string                `json:"status"`
+	RecipientAccount string                `json:"recipient_account"`
+	Amount           int64                 `json:"amount"`
+	Fee              int64                 `json:"fee"`
+	FeeBreakdown     services.FeeBreakdown `json:"fee_breakdown"`
 }
 
 type SendRemittanceRequest struct {
-	SenderID       uint    `json:"sender_id" binding:"required"`
-	RecipientID    uint    `json:"recipient_id" binding:"required"`
-	Amount         int64   `json:"amount" binding:"required,gt=0"`
-	Currency       string  `json:"currency" binding:"required"`
-	TargetCurrency string  `json:"target_currency"`
-	Notes          string  `json:"notes"`
+	SenderID       uint     `json:"sender_id" binding:"required"`
+	RecipientID    uint     `json:"recipient_id" binding:"required"`
+	Amount         int64    `json:"amount" binding:"required,gt=0"`
+	Currency       string   `json:"currency" binding:"required"`
+	TargetCurrency string   `json:"target_currency"`
+	Notes          string   `json:"notes"`
+	Tags           []string `json:"tags"`
+	TOTPCode       string   `json:"totp_code"`
+}
+
+// verifyLargeTransfer2FA enforces step-up 2FA verification when a transfer
+// amount exceeds config.Requires2FAThreshold. Returns true if the request is
+// authorized to proceed, or writes a 403 error response and returns false.
+func (h *RemittanceHandler) verifyLargeTransfer2FA(c *gin.Context, userID uint, amount int64, inlineTOTP string) bool {
+	if h.config == nil || h.config.Requires2FAThreshold <= 0 || amount <= h.config.Requires2FAThreshold {
+		return true
+	}
+
+	var user models.User
+	if err := h.db.First(&user, userID).Error; err != nil {
+		c.Error(errors.NewUnauthorizedError("User not found"))
+		return false
+	}
+
+	if !user.MFAEnabled {
+		c.JSON(http.StatusForbidden, gin.H{
+			"error": gin.H{
+				"code":         "MFA_SETUP_REQUIRED",
+				"message":      "Two-factor authentication must be enabled for transfers above the threshold",
+				"requires_2fa": true,
+				"threshold":    h.config.Requires2FAThreshold,
+			},
+		})
+		return false
+	}
+
+	stepUpToken := strings.TrimSpace(c.GetHeader("X-Step-Up-Token"))
+	if stepUpToken != "" {
+		if err := VerifyStepUpToken(stepUpToken, h.config.JWTSecret, userID); err == nil {
+			return true
+		}
+	}
+
+	if strings.TrimSpace(inlineTOTP) != "" && user.VerifyTOTP(strings.TrimSpace(inlineTOTP)) {
+		return true
+	}
+
+	c.JSON(http.StatusForbidden, gin.H{
+		"error": gin.H{
+			"code":         "STEP_UP_2FA_REQUIRED",
+			"message":      "2FA verification required for transfers above threshold",
+			"requires_2fa": true,
+			"threshold":    h.config.Requires2FAThreshold,
+		},
+	})
+	return false
 }
 
 func (h *RemittanceHandler) SendRemittance(c *gin.Context) {
 	var req SendRemittanceRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.Error(errors.NewValidationError("Invalid request body", err.Error()))
+		return
+	}
+
+	normalizedTags, err := models.NormalizeAndValidateTags(req.Tags)
+	if err != nil {
+		c.Error(err)
+		return
+	}
+
+	ownerID := req.SenderID
+	if uid, exists := c.Get("userID"); exists {
+		if id, ok := uid.(uint); ok && id > 0 {
+			ownerID = id
+		}
+	}
+
+	if !h.verifyLargeTransfer2FA(c, ownerID, req.Amount, req.TOTPCode) {
 		return
 	}
 
@@ -157,12 +265,28 @@ func (h *RemittanceHandler) SendRemittance(c *gin.Context) {
 		ComplianceFee:  feeBreakdown.ComplianceFee,
 		NetworkFee:     feeBreakdown.NetworkFee,
 		Notes:          req.Notes,
+		Tags:           []string{},
 	}
 
-	if err := h.db.Create(&payment).Error; err != nil {
+	if err := h.db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Create(&payment).Error; err != nil {
+			return err
+		}
+		for _, tag := range normalizedTags {
+			if err := tx.Create(&models.PaymentTag{
+				PaymentID: payment.ID,
+				UserID:    ownerID,
+				Tag:       tag,
+			}).Error; err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
 		c.Error(errors.NewInternalError("Failed to create payment", err))
 		return
 	}
+	payment.Tags = normalizedTags
 
 	// Set response for idempotency caching
 	middleware.SetIdempotencyResponse(c, payment)
@@ -195,36 +319,40 @@ func (h *RemittanceHandler) CreateRemittance(c *gin.Context) {
 		c.Error(errors.NewUnauthorizedError("Unauthorized"))
 		return
 	}
+	if !h.verifyLargeTransfer2FA(c, userID.(uint), req.Amount, req.TOTPCode) {
+		return
+	}
 	ctx = utils.WithRequestContext(ctx, c.GetString("requestID"), userID)
 
 	// For simplicity, we'll assume the recipient user exists or we just store the account
 	// In a real app, we'd lookup or create the recipient user.
 	// For now, we'll just set RecipientID to 0 if not found, or use a placeholder.
 
-	conditionsJSON, _ := json.Marshal(req.Conditions)
+	normalizedTags, tagErr := models.NormalizeAndValidateTags(req.Tags)
+	if tagErr != nil {
+		c.Error(tagErr)
+		return
+	}
 
-	feeBreakdown := h.fees.Calculate(req.Amount)
-	payment := models.Payment{
+	params := services.RemittanceCreateParams{
 		SenderID:         userID.(uint),
 		SenderAccount:    req.SenderAccount,
 		RecipientAccount: req.RecipientAccount,
 		Amount:           req.Amount,
-		Currency:         req.AssetCode,
-		Status:           "pending",
-		Fee:              feeBreakdown.TotalFee,
-		PlatformFee:      feeBreakdown.PlatformFee,
-		ForexFee:         feeBreakdown.ForexFee,
-		ComplianceFee:    feeBreakdown.ComplianceFee,
-		NetworkFee:       feeBreakdown.NetworkFee,
-		Conditions:       string(conditionsJSON),
+		AssetCode:        req.AssetCode,
+		Conditions:       req.Conditions,
 		Notes:            req.Notes,
+		Tags:             normalizedTags,
 	}
 
+	var payment *models.Payment
+	var feeBreakdown services.FeeBreakdown
 	var xdr string
 	err := h.db.Transaction(func(tx *gorm.DB) error {
-		// DB Save
-		if err := tx.Create(&payment).Error; err != nil {
-			return err
+		var txErr error
+		payment, feeBreakdown, txErr = services.CreateRemittanceInTx(tx, h.fees, params)
+		if txErr != nil {
+			return txErr
 		}
 
 		// Stellar Integration: Build escrow transaction envelope
@@ -259,86 +387,189 @@ func (h *RemittanceHandler) CreateRemittance(c *gin.Context) {
 	c.JSON(http.StatusCreated, response)
 }
 
+func (h *RemittanceHandler) maxBatchSize() int {
+	if h.config != nil && h.config.MaxBatchSize > 0 {
+		return h.config.MaxBatchSize
+	}
+	return 100
+}
+
 func (h *RemittanceHandler) CreateBatchRemittance(c *gin.Context) {
+	userIDVal, exists := c.Get("userID")
+	if !exists {
+		c.Error(errors.NewUnauthorizedError("Unauthorized"))
+		return
+	}
+	userID, ok := userIDVal.(uint)
+	if !ok {
+		c.Error(errors.NewUnauthorizedError("Invalid user context"))
+		return
+	}
+
 	var req CreateBatchRemittanceRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.Error(errors.NewValidationError("Invalid request body", err.Error()))
 		return
 	}
 
-	ctx := utils.WithRequestContext(c.Request.Context(), c.GetString("requestID"), nil)
+	req.SenderAccount = strings.TrimSpace(req.SenderAccount)
+	req.AssetCode = strings.ToUpper(strings.TrimSpace(req.AssetCode))
 
-	// Validate sender account
+	maxBatch := h.maxBatchSize()
+	if len(req.Payments) == 0 {
+		c.Error(errors.NewValidationError("Batch payments list cannot be empty", nil))
+		return
+	}
+	if len(req.Payments) > maxBatch {
+		c.Error(errors.NewValidationError(fmt.Sprintf("Batch size cannot exceed %d payments", maxBatch), nil))
+		return
+	}
+
+	var totalBatchAmount int64
+	for _, p := range req.Payments {
+		if p.Amount > 0 {
+			totalBatchAmount += p.Amount
+		}
+	}
+	if !h.verifyLargeTransfer2FA(c, userID, totalBatchAmount, req.TOTPCode) {
+		return
+	}
+
+	// Verify sender account belongs to the authenticated user.
+	var sender models.User
+	if err := h.db.First(&sender, userID).Error; err != nil {
+		if err == gorm.ErrRecordNotFound {
+			c.Error(errors.NewUnauthorizedError("Authenticated user not found"))
+		} else {
+			c.Error(errors.NewInternalError("Failed to verify sender account", err))
+		}
+		return
+	}
+	if !sender.IsActive {
+		c.Error(errors.NewForbiddenError("Sender account is inactive"))
+		return
+	}
+	if sender.StellarAddress == "" || req.SenderAccount != sender.StellarAddress {
+		c.Error(errors.NewForbiddenError("Sender account does not belong to the authenticated user"))
+		return
+	}
+
+	ctx := utils.WithRequestContext(c.Request.Context(), c.GetString("requestID"), userID)
+
 	if err := h.stellarClient.ValidateAccount(ctx, req.SenderAccount); err != nil {
 		c.Error(errors.NewValidationError("Invalid sender account", err.Error()))
 		return
 	}
 
-	userID, exists := c.Get("userID")
-	if !exists {
-		c.Error(errors.NewUnauthorizedError("Unauthorized"))
+	// Validate all entries before creating any database records.
+	var itemErrors []BatchItemError
+	var totalAmount int64
+	var totalFees int64
+	for i, item := range req.Payments {
+		recipient := strings.TrimSpace(item.RecipientAccount)
+		if recipient == "" {
+			itemErrors = append(itemErrors, BatchItemError{Index: i, Error: "recipient_account is required"})
+			continue
+		}
+		if item.Amount <= 0 {
+			itemErrors = append(itemErrors, BatchItemError{Index: i, Error: "amount must be greater than 0"})
+			continue
+		}
+		if err := h.stellarClient.ValidateAccount(ctx, recipient); err != nil {
+			itemErrors = append(itemErrors, BatchItemError{Index: i, Error: fmt.Sprintf("invalid recipient account: %v", err)})
+			continue
+		}
+
+		fee := h.fees.Calculate(item.Amount)
+		if totalAmount > math.MaxInt64-item.Amount || totalFees > math.MaxInt64-fee.TotalFee {
+			itemErrors = append(itemErrors, BatchItemError{Index: i, Error: "aggregate batch amount exceeds maximum limit"})
+			continue
+		}
+		totalAmount += item.Amount
+		totalFees += fee.TotalFee
+	}
+
+	if len(itemErrors) > 0 {
+		c.Error(errors.NewValidationError("One or more batch items are invalid", itemErrors))
 		return
 	}
-	ctx = utils.WithRequestContext(ctx, c.GetString("requestID"), userID)
+
+	if totalAmount > math.MaxInt64-totalFees {
+		c.Error(errors.NewValidationError("Aggregate batch amount and fees exceed maximum limit", nil))
+		return
+	}
 
 	var payments []models.Payment
-	tx := h.db.Begin()
-	if tx.Error != nil {
-		c.Error(errors.NewInternalError("Failed to start transaction", tx.Error))
-		return
-	}
+	var results []BatchPaymentResult
+	var failedIndex = -1
 
-	for _, p := range req.Payments {
-		if err := h.stellarClient.ValidateAccount(ctx, p.RecipientAccount); err != nil {
-			tx.Rollback()
-			c.Error(errors.NewValidationError("Invalid recipient account", fmt.Sprintf("Account %s is invalid", p.RecipientAccount)))
-			return
+	err := h.db.Transaction(func(tx *gorm.DB) error {
+		// Lock sender user row on PostgreSQL to serialize concurrent batch requests.
+		var lockedSender models.User
+		lockQuery := tx
+		if tx.Dialector.Name() == "postgres" {
+			lockQuery = lockQuery.Clauses(clause.Locking{Strength: "UPDATE"})
+		}
+		if err := lockQuery.First(&lockedSender, userID).Error; err != nil {
+			return err
 		}
 
-		conditionsJSON, _ := json.Marshal(p.Conditions)
-		feeBreakdown := h.fees.Calculate(p.Amount)
-
-		payment := models.Payment{
-			SenderID:         userID.(uint),
-			SenderAccount:    req.SenderAccount,
-			RecipientAccount: p.RecipientAccount,
-			Amount:           p.Amount,
-			Currency:         req.AssetCode,
-			Status:           "pending",
-			Fee:              feeBreakdown.TotalFee,
-			PlatformFee:      feeBreakdown.PlatformFee,
-			ForexFee:         feeBreakdown.ForexFee,
-			ComplianceFee:    feeBreakdown.ComplianceFee,
-			NetworkFee:       feeBreakdown.NetworkFee,
-			Conditions:       string(conditionsJSON),
-			Notes:            p.Notes,
+		for i, item := range req.Payments {
+			params := services.RemittanceCreateParams{
+				SenderID:         userID,
+				SenderAccount:    req.SenderAccount,
+				RecipientAccount: strings.TrimSpace(item.RecipientAccount),
+				Amount:           item.Amount,
+				AssetCode:        req.AssetCode,
+				Conditions:       item.Conditions,
+				Notes:            item.Notes,
+			}
+			payment, feeBreakdown, err := services.CreateRemittanceInTx(tx, h.fees, params)
+			if err != nil {
+				failedIndex = i
+				return err
+			}
+			payments = append(payments, *payment)
+			results = append(results, BatchPaymentResult{
+				Index:            i,
+				RemittanceID:     payment.ID,
+				Status:           payment.Status,
+				RecipientAccount: payment.RecipientAccount,
+				Amount:           payment.Amount,
+				Fee:              payment.Fee,
+				FeeBreakdown:     feeBreakdown,
+			})
 		}
-
-		if err := tx.Create(&payment).Error; err != nil {
-			tx.Rollback()
-			c.Error(errors.NewInternalError("Failed to create remittance record", err))
-			return
-		}
-
-		payments = append(payments, payment)
-	}
-
-	if err := tx.Commit().Error; err != nil {
-		c.Error(errors.NewInternalError("Failed to commit transaction", err))
-		return
-	}
-
-	c.JSON(http.StatusCreated, gin.H{
-		"message":  "Batch remittance initiated successfully",
-		"payments": payments,
+		return nil
 	})
+
+	if err != nil {
+		if failedIndex >= 0 {
+			c.Error(errors.NewInternalError(fmt.Sprintf("Failed to create batch remittance at item index %d", failedIndex), err))
+		} else {
+			c.Error(errors.NewInternalError("Failed to create batch remittance", err))
+		}
+		return
+	}
+
+	response := gin.H{
+		"message":      "Batch remittance initiated successfully",
+		"total_amount": totalAmount,
+		"total_fees":   totalFees,
+		"results":      results,
+		"payments":     payments,
+	}
+
+	middleware.SetIdempotencyResponse(c, response)
+
+	c.JSON(http.StatusCreated, response)
 }
 
 func (h *RemittanceHandler) GetRemittance(c *gin.Context) {
 	id := c.Param("id")
 	var payment models.Payment
 
-	if err := h.db.First(&payment, id).Error; err != nil {
+	if err := preferredReadDB(h.db, h.readDB).First(&payment, id).Error; err != nil {
 		if err == gorm.ErrRecordNotFound {
 			c.Error(errors.NewNotFoundError("Payment not found"))
 		} else {
@@ -347,27 +578,75 @@ func (h *RemittanceHandler) GetRemittance(c *gin.Context) {
 		return
 	}
 
+	var uidPtr *uint
+	if uid, exists := c.Get("userID"); exists {
+		if u, ok := uid.(uint); ok {
+			uidPtr = &u
+		}
+	}
+	paymentsSlice := []models.Payment{payment}
+	if err := populatePaymentTags(preferredReadDB(h.db, h.readDB), paymentsSlice, uidPtr); err != nil {
+		c.Error(errors.NewInternalError("Failed to fetch payment tags", err))
+		return
+	}
+	payment = paymentsSlice[0]
+
 	c.JSON(http.StatusOK, payment)
 }
 
 type ListRemittancesResponse struct {
-	Data       []models.Payment `json:"data"`
-	Page       int              `json:"page,omitempty"`       // Deprecated: use cursor instead
-	PageSize   int              `json:"page_size,omitempty"`  // Deprecated: use limit instead
-	NextCursor string           `json:"next_cursor,omitempty"`
-	HasMore    bool             `json:"has_more"`
-	TotalCount *int64           `json:"total_count,omitempty"`
-	HasNext    *bool            `json:"has_next,omitempty"`
-	HasPrevious *bool           `json:"has_previous,omitempty"`
+	Data        []models.Payment `json:"data"`
+	Page        int              `json:"page,omitempty"`      // Deprecated: use cursor instead
+	PageSize    int              `json:"page_size,omitempty"` // Deprecated: use limit instead
+	NextCursor  string           `json:"next_cursor,omitempty"`
+	HasMore     bool             `json:"has_more"`
+	TotalCount  *int64           `json:"total_count,omitempty"`
+	HasNext     *bool            `json:"has_next,omitempty"`
+	HasPrevious *bool            `json:"has_previous,omitempty"`
 }
 
 func (h *RemittanceHandler) ListRemittances(c *gin.Context) {
 	var payments []models.Payment
 
+	rawTags := c.QueryArray("tag")
+	var filterTags []string
+	if len(rawTags) > 0 {
+		var tagErr error
+		filterTags, tagErr = models.NormalizeAndValidateTags(rawTags)
+		if tagErr != nil {
+			c.Error(tagErr)
+			return
+		}
+	}
+
+	var uidPtr *uint
+	if uid, exists := c.Get("userID"); exists {
+		if u, ok := uid.(uint); ok && u > 0 {
+			uidPtr = &u
+		}
+	}
+	if len(filterTags) > 0 && uidPtr == nil {
+		c.Error(errors.NewUnauthorizedError("Unauthorized"))
+		return
+	}
+
+	applyTagAndUserFilter := func(q *gorm.DB) *gorm.DB {
+		if uidPtr != nil {
+			q = q.Where("sender_id = ? OR recipient_id = ?", *uidPtr, *uidPtr)
+		}
+		if len(filterTags) > 0 && uidPtr != nil {
+			q = q.Where(
+				"id IN (SELECT payment_id FROM payment_tags WHERE user_id = ? AND tag IN ? GROUP BY payment_id HAVING COUNT(DISTINCT tag) = ?)",
+				*uidPtr, filterTags, len(filterTags),
+			)
+		}
+		return q
+	}
+
 	// Support both cursor-based and legacy offset-based pagination
 	cursor := c.Query("cursor")
 	limitStr := c.Query("limit")
-	
+
 	// Cursor-based pagination (preferred)
 	if cursor != "" || limitStr != "" {
 		// Cursor-based pagination eliminates overflow risk (#198)
@@ -384,11 +663,12 @@ func (h *RemittanceHandler) ListRemittances(c *gin.Context) {
 			return
 		}
 
-		query := h.db.Model(&models.Payment{}).Order("created_at DESC, id DESC")
-		
+		readDB := preferredReadDB(h.db, h.readDB)
+		query := applyTagAndUserFilter(readDB.Model(&models.Payment{})).Order("created_at DESC, id DESC")
+
 		// Apply cursor filtering: WHERE created_at < cursor.CreatedAt OR (created_at = cursor.CreatedAt AND id < cursor.ID)
 		if !decodedCursor.CreatedAt.IsZero() {
-			query = query.Where("created_at < ? OR (created_at = ? AND id < ?)", 
+			query = query.Where("created_at < ? OR (created_at = ? AND id < ?)",
 				decodedCursor.CreatedAt, decodedCursor.CreatedAt, decodedCursor.ID)
 		}
 
@@ -407,6 +687,11 @@ func (h *RemittanceHandler) ListRemittances(c *gin.Context) {
 				CreatedAt: lastItem.CreatedAt,
 				ID:        lastItem.ID,
 			})
+		}
+
+		if err := populatePaymentTags(readDB, payments, uidPtr); err != nil {
+			c.Error(errors.NewInternalError("Failed to fetch payment tags", err))
+			return
 		}
 
 		response := ListRemittancesResponse{
@@ -431,8 +716,12 @@ func (h *RemittanceHandler) ListRemittances(c *gin.Context) {
 		pageSize = 20
 	}
 
-	// Cache key based on query params
-	cacheKey := fmt.Sprintf("payments:list:%d:%d", page, pageSize)
+	// Cache key based on query params (only cache untagged, unscoped legacy requests)
+	uidKey := uint(0)
+	if uidPtr != nil {
+		uidKey = *uidPtr
+	}
+	cacheKey := fmt.Sprintf("payments:list:%d:%d:%d:%s", uidKey, page, pageSize, strings.Join(filterTags, ","))
 
 	// Try cache
 	if found, _ := utils.GetCached(cacheKey, &payments); found {
@@ -448,10 +737,11 @@ func (h *RemittanceHandler) ListRemittances(c *gin.Context) {
 
 	// Count total records for metadata
 	var totalCount int64
-	h.db.Model(&models.Payment{}).Count(&totalCount)
+	readDB := preferredReadDB(h.db, h.readDB)
+	applyTagAndUserFilter(readDB.Model(&models.Payment{})).Count(&totalCount)
 
 	// DB query with pagination - check for pagination error from MaxPage validation
-	if err := h.db.Scopes(Paginate(c)).Order("created_at DESC").Find(&payments).Error; err != nil {
+	if err := applyTagAndUserFilter(readDB.Model(&models.Payment{})).Scopes(Paginate(c)).Order("created_at DESC").Find(&payments).Error; err != nil {
 		c.Error(errors.NewInternalError("Failed to fetch payments", err))
 		return
 	}
@@ -459,6 +749,11 @@ func (h *RemittanceHandler) ListRemittances(c *gin.Context) {
 	// Check if MaxPage validation failed
 	if paginationErr, exists := c.Get("pagination_error"); exists {
 		c.Error(paginationErr.(error))
+		return
+	}
+
+	if err := populatePaymentTags(readDB, payments, uidPtr); err != nil {
+		c.Error(errors.NewInternalError("Failed to fetch payment tags", err))
 		return
 	}
 
@@ -511,12 +806,12 @@ func (h *RemittanceHandler) CompleteRemittance(c *gin.Context) {
 }
 
 type CreateInvoiceRequest struct {
-	PaymentID   uint    `json:"payment_id" binding:"required"`
-	IssuerID    uint    `json:"issuer_id" binding:"required"`
-	RecipientID uint    `json:"recipient_id" binding:"required"`
-	Amount      int64   `json:"amount" binding:"required,gt=0"`
-	Currency    string  `json:"currency" binding:"required"`
-	Description string  `json:"description"`
+	PaymentID   uint   `json:"payment_id" binding:"required"`
+	IssuerID    uint   `json:"issuer_id" binding:"required"`
+	RecipientID uint   `json:"recipient_id" binding:"required"`
+	Amount      int64  `json:"amount" binding:"required,gt=0"`
+	Currency    string `json:"currency" binding:"required"`
+	Description string `json:"description"`
 }
 
 func (h *RemittanceHandler) CreateInvoice(c *gin.Context) {
@@ -554,7 +849,7 @@ func (h *RemittanceHandler) GetInvoice(c *gin.Context) {
 	id := c.Param("id")
 	var invoice models.Invoice
 
-	if err := h.db.Preload("Payment").First(&invoice, id).Error; err != nil {
+	if err := preferredReadDB(h.db, h.readDB).Preload("Payment").First(&invoice, id).Error; err != nil {
 		if err == gorm.ErrRecordNotFound {
 			c.Error(errors.NewNotFoundError("Invoice not found"))
 		} else {
@@ -591,7 +886,8 @@ func (h *RemittanceHandler) ListInvoices(c *gin.Context) {
 		pageSize = 20
 	}
 
-	query := h.db.Model(&models.Invoice{}).
+	readDB := preferredReadDB(h.db, h.readDB)
+	query := readDB.Model(&models.Invoice{}).
 		Where("issuer_id = ? OR recipient_id = ?", userID, userID)
 
 	if status := c.Query("status"); status != "" {
@@ -628,7 +924,7 @@ func (h *RemittanceHandler) ListInvoices(c *gin.Context) {
 			paymentIDs[i] = inv.PaymentID
 		}
 		var payments []models.Payment
-		if err := h.db.Where("id IN ?", paymentIDs).Find(&payments).Error; err != nil {
+		if err := readDB.Where("id IN ?", paymentIDs).Find(&payments).Error; err != nil {
 			c.Error(errors.NewInternalError("Failed to fetch payments for invoices", err))
 			return
 		}

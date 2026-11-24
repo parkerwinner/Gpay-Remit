@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/Gpay-Remit/gpay-remit/models"
+	"gorm.io/gorm"
 )
 
 // htmlTagPattern matches any `<...>` sequence, used by sanitizeEmailField
@@ -62,6 +63,7 @@ type EmailService struct {
 	smtpPassword string
 	fromEmail    string
 	enabled      bool
+	db           *gorm.DB
 }
 
 type EmailTemplate struct {
@@ -79,6 +81,50 @@ func NewEmailService(host, port, user, password, from string, enabled bool) *Ema
 		fromEmail:    from,
 		enabled:      enabled,
 	}
+}
+
+// WithDB attaches a database handle so EmailService can look up per-user
+// EmailPreferences before sending non-security emails.
+func (s *EmailService) WithDB(db *gorm.DB) *EmailService {
+	s.db = db
+	return s
+}
+
+// CanSendEmail reports whether an email of the given category may be sent to
+// the user given optional EmailPreferences. Security alerts cannot be disabled.
+func CanSendEmail(user *models.User, prefs *models.EmailPreferences, category models.EmailCategory) bool {
+	if category == models.EmailCategorySecurity {
+		return true
+	}
+	if user != nil && !user.EmailNotifications {
+		return false
+	}
+	if prefs != nil {
+		return prefs.Allows(category)
+	}
+	// Without explicit preference rows, transaction confirmations default to
+	// enabled while marketing emails default to opt-in (false).
+	return category != models.EmailCategoryMarketing
+}
+
+func (s *EmailService) shouldSendEmail(user *models.User, category models.EmailCategory) bool {
+	if category == models.EmailCategorySecurity {
+		return true
+	}
+	if user == nil {
+		return false
+	}
+	if !user.EmailNotifications {
+		return false
+	}
+	if s.db != nil && user.ID != 0 {
+		var prefs models.EmailPreferences
+		err := s.db.Where("user_id = ?", user.ID).First(&prefs).Error
+		if err == nil {
+			return prefs.Allows(category)
+		}
+	}
+	return CanSendEmail(user, nil, category)
 }
 
 // SendEmail sends an email using SMTP
@@ -162,7 +208,7 @@ func (s *EmailService) SendEmail(to, subject, body string) error {
 
 // SendPaymentCompletedEmail sends notification when payment is completed
 func (s *EmailService) SendPaymentCompletedEmail(user *models.User, payment *models.Payment) error {
-	if !user.EmailNotifications {
+	if !s.shouldSendEmail(user, models.EmailCategoryTransaction) {
 		return nil // User has opted out
 	}
 
@@ -256,7 +302,7 @@ func (s *EmailService) SendPaymentCompletedEmail(user *models.User, payment *mod
 
 // SendEscrowExpirationWarningEmail sends warning when escrow is about to expire
 func (s *EmailService) SendEscrowExpirationWarningEmail(user *models.User, payment *models.Payment, hoursRemaining int) error {
-	if !user.EmailNotifications {
+	if !s.shouldSendEmail(user, models.EmailCategoryTransaction) {
 		return nil // User has opted out
 	}
 
@@ -357,7 +403,7 @@ func (s *EmailService) SendEscrowExpirationWarningEmail(user *models.User, payme
 
 // SendPaymentFailedEmail sends notification when payment fails
 func (s *EmailService) SendPaymentFailedEmail(user *models.User, payment *models.Payment, reason string) error {
-	if !user.EmailNotifications {
+	if !s.shouldSendEmail(user, models.EmailCategoryTransaction) {
 		return nil // User has opted out
 	}
 
@@ -582,7 +628,7 @@ func (s *EmailService) SendAccountUnlockEmail(user *models.User, token string) e
 
 // SendPaymentRequestAcceptedEmail sends notification when a payment request is accepted
 func (s *EmailService) SendPaymentRequestAcceptedEmail(user *models.User, pr *models.PaymentRequest) error {
-	if !user.EmailNotifications {
+	if !s.shouldSendEmail(user, models.EmailCategoryTransaction) {
 		return nil
 	}
 
@@ -664,7 +710,7 @@ func (s *EmailService) SendPaymentRequestAcceptedEmail(user *models.User, pr *mo
 
 // SendPaymentRequestRejectedEmail sends notification when a payment request is rejected
 func (s *EmailService) SendPaymentRequestRejectedEmail(user *models.User, pr *models.PaymentRequest) error {
-	if !user.EmailNotifications {
+	if !s.shouldSendEmail(user, models.EmailCategoryTransaction) {
 		return nil
 	}
 
@@ -751,7 +797,7 @@ func (s *EmailService) SendPaymentRequestRejectedEmail(user *models.User, pr *mo
 
 // SendPaymentRequestReceivedEmail sends notification when a new payment request is received
 func (s *EmailService) SendPaymentRequestReceivedEmail(user *models.User, pr *models.PaymentRequest, requesterName string) error {
-	if !user.EmailNotifications {
+	if !s.shouldSendEmail(user, models.EmailCategoryTransaction) {
 		return nil
 	}
 
@@ -840,4 +886,39 @@ func (s *EmailService) SendPaymentRequestReceivedEmail(user *models.User, pr *mo
 
 	subject := fmt.Sprintf("New Payment Request #%d from %s", pr.ID, sanitizeEmailField(requesterName))
 	return s.SendEmail(user.Email, subject, body.String())
+}
+
+// SendMarketingEmail sends promotional/marketing emails only if the user opted in.
+func (s *EmailService) SendMarketingEmail(user *models.User, subject, content string) error {
+	if !s.shouldSendEmail(user, models.EmailCategoryMarketing) {
+		return nil
+	}
+
+	tmpl := `<!DOCTYPE html>
+<html>
+<head><style>body { font-family: Arial, sans-serif; color: #333; }</style></head>
+<body>
+  <div style="max-width:600px;margin:0 auto;padding:20px;">
+    <h2>{{.Subject}}</h2>
+    <p>Hello {{.UserName}},</p>
+    <div>{{.Content}}</div>
+  </div>
+</body>
+</html>`
+
+	t, err := template.New("marketing").Parse(tmpl)
+	if err != nil {
+		return fmt.Errorf("failed to parse template: %w", err)
+	}
+
+	var body bytes.Buffer
+	if err := t.Execute(&body, map[string]interface{}{
+		"UserName": sanitizeEmailField(user.Name),
+		"Subject":  sanitizeEmailField(subject),
+		"Content":  sanitizeEmailField(content),
+	}); err != nil {
+		return fmt.Errorf("failed to execute template: %w", err)
+	}
+
+	return s.SendEmail(user.Email, sanitizeEmailField(subject), body.String())
 }

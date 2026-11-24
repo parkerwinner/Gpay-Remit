@@ -652,6 +652,93 @@ func (h *AuthHandler) DisableMFA(c *gin.Context) {
 	})
 }
 
+const stepUpTokenTTL = 5 * time.Minute
+
+// StepUpMFA verifies a TOTP code for an already-authenticated user and issues
+// a short-lived step-up token required for high-value transfers.
+func (h *AuthHandler) StepUpMFA(c *gin.Context) {
+	var req VerifyMFARequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.Error(errors.NewValidationError("Invalid request body", err.Error()))
+		return
+	}
+
+	userIDVal, exists := c.Get("userID")
+	if !exists {
+		c.Error(errors.NewUnauthorizedError("Unauthorized"))
+		return
+	}
+
+	var user models.User
+	if err := h.DB.First(&user, userIDVal).Error; err != nil {
+		c.Error(errors.NewUnauthorizedError("User not found"))
+		return
+	}
+
+	if !user.MFAEnabled {
+		c.Error(errors.NewValidationError("MFA not enabled", "two-factor authentication must be enabled before step-up verification"))
+		return
+	}
+
+	if !user.VerifyTOTP(req.Code) {
+		c.Error(errors.NewUnauthorizedError("Invalid TOTP code"))
+		return
+	}
+
+	now := time.Now().UTC()
+	claims := jwt.MapClaims{
+		"sub":     user.ID,
+		"purpose": "mfa_step_up",
+		"iat":     now.Unix(),
+		"exp":     now.Add(stepUpTokenTTL).Unix(),
+	}
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	signed, err := token.SignedString([]byte(h.Cfg.JWTSecret))
+	if err != nil {
+		c.Error(errors.NewInternalError("Failed to generate step-up token", err))
+		return
+	}
+
+	logger.Log.WithFields(logrus.Fields{
+		"user_id":  user.ID,
+		"endpoint": "/auth/mfa/step-up",
+	}).Info("MFA step-up verified")
+
+	c.JSON(http.StatusOK, gin.H{
+		"step_up_token": signed,
+		"expires_in":    int(stepUpTokenTTL.Seconds()),
+	})
+}
+
+// VerifyStepUpToken validates a short-lived 2FA step-up token for the given user.
+func VerifyStepUpToken(tokenString, secret string, expectedUserID uint) error {
+	if strings.TrimSpace(tokenString) == "" {
+		return fmt.Errorf("missing step-up token")
+	}
+	token, err := jwt.Parse(tokenString, func(t *jwt.Token) (interface{}, error) {
+		if _, ok := t.Method.(*jwt.SigningMethodHMAC); !ok {
+			return nil, fmt.Errorf("unexpected signing method")
+		}
+		return []byte(secret), nil
+	})
+	if err != nil || !token.Valid {
+		return fmt.Errorf("invalid or expired step-up token")
+	}
+	claims, ok := token.Claims.(jwt.MapClaims)
+	if !ok {
+		return fmt.Errorf("invalid step-up token claims")
+	}
+	purpose, _ := claims["purpose"].(string)
+	if purpose != "mfa_step_up" {
+		return fmt.Errorf("invalid token purpose")
+	}
+	subFloat, ok := claims["sub"].(float64)
+	if !ok || uint(subFloat) != expectedUserID {
+		return fmt.Errorf("step-up token subject mismatch")
+	}
+	return nil
+}
+
 // ResetPassword completes the password reset flow using the token
 func (h *AuthHandler) ResetPassword(c *gin.Context) {
 	var req ResetPasswordRequest

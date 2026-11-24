@@ -41,7 +41,7 @@ func failingEndpoint(t *testing.T, status int) (*httptest.Server, *atomic.Int64)
 
 func seedRetryWebhook(t *testing.T, db *gorm.DB, url string, userID uint) *models.Webhook {
 	t.Helper()
-	wh := &models.Webhook{UserID: userID, URL: url, Secret: "s", Events: "payment.completed", IsActive: true}
+	wh := &models.Webhook{UserID: userID, URL: url, Secret: "s", Events: models.WebhookEvents{"payment.completed"}, IsActive: true}
 	require.NoError(t, db.Create(wh).Error)
 	return wh
 }

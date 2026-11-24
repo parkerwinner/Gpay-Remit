@@ -1,16 +1,21 @@
 import { formatMinorUnits } from '../utils/currency';
 // #112 — transaction history page with filtering and detail view.
 // #358 — pagination controls with total count and current page indicator.
-import React, { useState, useCallback } from "react";
-import { getRemittances } from "../services/api";
+// #455 — payment tags, tag filtering, tag summary dashboard, and tag autocomplete.
+import React, { useState, useCallback, useEffect } from "react";
+import { useSearchParams } from "react-router-dom";
+import { getRemittances, getTagSummary, updateRemittanceTags } from "../services/api";
 import { usePolling } from "../hooks/usePolling";
 import SkeletonLoader from "../components/SkeletonLoader";
 import TransactionDetails from "../components/TransactionDetails";
+import TagInputCombobox from "../components/TagInputCombobox";
+import TagSummaryDashboard from "../components/TagSummaryDashboard";
 
 const STATUS_OPTIONS = ["all", "pending", "completed", "failed"];
 const PAGE_SIZE_OPTIONS = [10, 20, 50, 100];
 
 function TransactionHistory() {
+  const [searchParams, setSearchParams] = useSearchParams();
   const [transactions, setTransactions] = useState([]);
   const [totalCount, setTotalCount] = useState(null); // null = unknown
   const [loading, setLoading] = useState(true);
@@ -20,16 +25,45 @@ function TransactionHistory() {
   const [selected, setSelected] = useState(null);
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(PAGE_SIZE_OPTIONS[1]);
+  const [selectedTags, setSelectedTags] = useState(() => searchParams.getAll("tag"));
+  const [tagSummary, setTagSummary] = useState([]);
+  const [summaryLoading, setSummaryLoading] = useState(true);
+  const [summaryError, setSummaryError] = useState(null);
+  const [editingTagsTxId, setEditingTagsTxId] = useState(null);
+  const [tagSaveError, setTagSaveError] = useState(null);
 
-  const fetchTransactions = useCallback(async (targetPage = page, targetPageSize = pageSize) => {
+  const fetchSummary = useCallback(async () => {
+    setSummaryLoading(true);
+    try {
+      const res = await getTagSummary();
+      setTagSummary(res.data?.tags ?? []);
+      setSummaryError(null);
+    } catch (err) {
+      setSummaryError(err?.message || err?.response?.data?.error || "Failed to load tag summary.");
+    } finally {
+      setSummaryLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchSummary();
+  }, [fetchSummary]);
+
+  const fetchTransactions = useCallback(async (targetPage = page, targetPageSize = pageSize, targetTags = selectedTags) => {
     setLoading(true);
     try {
-      const response = await getRemittances(targetPage, targetPageSize);
+      const response = await getRemittances(targetPage, targetPageSize, {}, targetTags);
 
       // Handle both paginated shape { data: [], total: N } and plain array
       if (response.data && typeof response.data === "object" && !Array.isArray(response.data)) {
         setTransactions(response.data.data ?? []);
-        setTotalCount(typeof response.data.total === "number" ? response.data.total : null);
+        setTotalCount(
+          typeof response.data.total_count === "number"
+            ? response.data.total_count
+            : typeof response.data.total === "number"
+            ? response.data.total
+            : null
+        );
       } else {
         setTransactions(response.data ?? []);
         setTotalCount(null);
@@ -41,7 +75,31 @@ function TransactionHistory() {
     } finally {
       setLoading(false);
     }
-  }, [page, pageSize]);
+  }, [page, pageSize, selectedTags]);
+
+  const handleTagFilterChange = (nextTags) => {
+    setSelectedTags(nextTags);
+    setPage(1);
+    const nextParams = new URLSearchParams(searchParams);
+    nextParams.delete("tag");
+    nextTags.forEach((t) => nextParams.append("tag", t));
+    setSearchParams(nextParams, { replace: true });
+    fetchTransactions(1, pageSize, nextTags);
+  };
+
+  const handleSavePaymentTags = async (txId, nextTags) => {
+    try {
+      setTagSaveError(null);
+      const res = await updateRemittanceTags(txId, nextTags);
+      const savedTags = res.data?.tags ?? nextTags;
+      setTransactions((prev) =>
+        prev.map((item) => (item.id === txId ? { ...item, tags: savedTags } : item))
+      );
+      fetchSummary();
+    } catch (err) {
+      setTagSaveError(err?.message || err?.response?.data?.error || "Failed to update tags.");
+    }
+  };
 
   // Poll every 10 s for real-time updates (#113).
   usePolling(fetchTransactions, 10_000);
@@ -94,21 +152,36 @@ function TransactionHistory() {
         </select>
       </div>
 
-      {loading && <SkeletonLoader rows={5} columns={6} />}
+      <div className="tag-filter-bar">
+        <TagInputCombobox
+          id="tx-tag-filter"
+          label="Filter by tags"
+          placeholder="Type a tag to filter…"
+          tags={selectedTags}
+          onChange={handleTagFilterChange}
+        />
+      </div>
+
+      {tagSaveError && <p role="alert" className="alert-error">{tagSaveError}</p>}
+
+      <TagSummaryDashboard summary={tagSummary} loading={summaryLoading} error={summaryError} />
+
+      {loading && <SkeletonLoader rows={5} columns={7} />}
       {error && <p role="alert" className="error">{error}</p>}
 
       {!loading && !error && (
-        <table aria-labelledby="tx-history-heading">
+        <div className="table-responsive">
+          <table aria-labelledby="tx-history-heading">
           <thead>
             <tr>
               <th scope="col">ID</th><th scope="col">Sender</th><th scope="col">Recipient</th>
-              <th scope="col">Amount</th><th scope="col">Status</th><th scope="col">Date</th>
+              <th scope="col">Amount</th><th scope="col">Status</th><th scope="col">Tags</th><th scope="col">Date</th>
               <th scope="col"><span className="sr-only">Actions</span></th>
             </tr>
           </thead>
           <tbody>
             {filtered.length === 0 ? (
-              <tr><td colSpan={7}>No transactions found.</td></tr>
+              <tr><td colSpan={8}>No transactions found.</td></tr>
             ) : (
               filtered.map((tx) => (
                 <tr
@@ -128,6 +201,30 @@ function TransactionHistory() {
                   <td>{tx.id}</td><td>{tx.sender_id}</td><td>{tx.recipient_id}</td>
                   <td>{formatMinorUnits(tx.amount, tx.currency)} {tx.currency}</td>
                   <td><span className={`status-badge status-${tx.status?.toLowerCase()}`}>{tx.status}</span></td>
+                  <td onClick={(e) => e.stopPropagation()}>
+                    <div className="tag-chip-list">
+                      {(tx.tags || []).map((tag) => (
+                        <span key={tag} className="tag-chip">{tag}</span>
+                      ))}
+                    </div>
+                    {editingTagsTxId === tx.id ? (
+                      <TagInputCombobox
+                        id={`tx-edit-tags-${tx.id}`}
+                        label={`Edit tags for transaction ${tx.id}`}
+                        tags={tx.tags || []}
+                        onChange={(nextTags) => handleSavePaymentTags(tx.id, nextTags)}
+                      />
+                    ) : (
+                      <button
+                        type="button"
+                        className="secondary-btn tag-edit-btn"
+                        onClick={() => setEditingTagsTxId(tx.id)}
+                        aria-label={`Edit tags for transaction ${tx.id}`}
+                      >
+                        Edit tags
+                      </button>
+                    )}
+                  </td>
                   <td>{new Date(tx.created_at).toLocaleDateString()}</td>
                   <td>
                     <button type="button" onClick={(event) => { event.stopPropagation(); setSelected(tx); }}
@@ -138,6 +235,7 @@ function TransactionHistory() {
             )}
           </tbody>
         </table>
+        </div>
       )}
 
       {!error && (

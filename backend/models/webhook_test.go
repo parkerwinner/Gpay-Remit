@@ -48,7 +48,7 @@ func TestWebhookSecretEncryptedAtRestAndDecryptedOnRead(t *testing.T) {
 		UserID: 1,
 		URL:    "https://example.com/webhook",
 		Secret: plaintext,
-		Events: "payment.completed",
+		Events: WebhookEvents{"payment.completed"},
 	}
 	require.NoError(t, db.Create(&webhook).Error)
 
@@ -97,4 +97,56 @@ func TestEncryptLegacyWebhookSecrets(t *testing.T) {
 
 	require.NoError(t, EncryptLegacyWebhookSecrets(db))
 	assert.Equal(t, encrypted, rawWebhookSecret(t, db, webhook.ID))
+}
+
+func TestWebhookEvents_ValidationAndWildcardMatching(t *testing.T) {
+	// Valid patterns
+	normalized, err := NormalizeAndValidateWebhookEvents([]string{" Payment.Created ", "payment.*", "payment.created"})
+	require.NoError(t, err)
+	assert.Equal(t, WebhookEvents{"payment.created", "payment.*"}, normalized)
+
+	// Invalid patterns
+	_, err = NormalizeAndValidateWebhookEvents([]string{})
+	assert.Error(t, err)
+	_, err = NormalizeAndValidateWebhookEvents([]string{"invalid-event"})
+	assert.Error(t, err)
+	_, err = NormalizeAndValidateWebhookEvents([]string{"payment.*.extra"})
+	assert.Error(t, err)
+
+	// Wildcard matching
+	wh := Webhook{Events: WebhookEvents{"payment.*", "invoice.paid"}}
+	assert.True(t, wh.SubscribedTo("payment.created"))
+	assert.True(t, wh.SubscribedTo("payment.completed"))
+	assert.True(t, wh.SubscribedTo("invoice.paid"))
+	assert.False(t, wh.SubscribedTo("payment_request.created"))
+	assert.False(t, wh.SubscribedTo("invoice.failed"))
+
+	all := Webhook{Events: WebhookEvents{"*"}}
+	assert.True(t, all.SubscribedTo("anything.happened"))
+}
+
+func TestWebhookEvents_JSONArrayPersistenceAndLegacyScan(t *testing.T) {
+	useWebhookTestEncryptor(t)
+	db := setupWebhookDB(t)
+
+	wh := Webhook{
+		UserID: 1,
+		URL:    "https://example.com/hook",
+		Secret: "whsec_json_array_secret",
+		Events: WebhookEvents{"payment.*", "invoice.paid"},
+	}
+	require.NoError(t, db.Create(&wh).Error)
+
+	var rawEvents string
+	require.NoError(t, db.Raw("SELECT events FROM webhooks WHERE id = ?", wh.ID).Scan(&rawEvents).Error)
+	assert.Equal(t, `["payment.*","invoice.paid"]`, rawEvents)
+
+	var loaded Webhook
+	require.NoError(t, db.First(&loaded, wh.ID).Error)
+	assert.Equal(t, WebhookEvents{"payment.*", "invoice.paid"}, loaded.Events)
+
+	// Legacy comma-separated string scan compatibility
+	var legacy WebhookEvents
+	require.NoError(t, legacy.Scan("payment.created, payment.failed"))
+	assert.Equal(t, WebhookEvents{"payment.created", "payment.failed"}, legacy)
 }

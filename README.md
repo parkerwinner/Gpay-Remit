@@ -110,7 +110,10 @@ Copy `.env.example` to `.env` and configure:
 - `STELLAR_NETWORK`: testnet or pubnet (network passphrase is derived automatically)
 - `STELLAR_HORIZON_URL`: Stellar Horizon API endpoint (`HORIZON_URL` is accepted as a backwards-compatible alias)
 - `DATABASE_URL`: PostgreSQL connection string
+- `DATABASE_READ_REPLICA_URL`: optional PostgreSQL standby; analytics and history reads use it when healthy and current (see [read replica operations](docs/operations/read-replica.md))
 - `CONTRACT_ID`: Deployed Soroban contract ID
+
+The GraphQL endpoint enforces depth and field-count limits; see [GraphQL query limits](docs/operations/graphql-limits.md). After a frontend build, `npm run analyze:bundle` reports JavaScript asset sizes and enforces entry/total bundle budgets.
 
 ## Testing
 

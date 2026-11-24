@@ -8,31 +8,38 @@ export const options = {
     { duration: '30s', target: 0 },
   ],
   thresholds: {
-    http_req_duration: ['p(95)<500'],
+    'http_req_duration{endpoint:read}': ['p(99)<500'],
+    checks: ['rate>0.95'],
   },
 };
 
-const BASE_URL = __ENV.BASE_URL || 'http://localhost:8080/api/v1';
+const BASE_URL = (__ENV.BASE_URL || 'http://localhost:8080').replace(/\/$/, '');
+const API_BASE_URL = `${BASE_URL}/api/v1`;
 
-export default function () {
-  // Test health check endpoint (assuming it exists)
-  let healthRes = http.get(`${BASE_URL}/health`);
+export function setup() {
+  const loginRes = http.post(`${API_BASE_URL}/auth/login`, JSON.stringify({
+    email: __ENV.TEST_EMAIL || 'integration@example.com',
+    password: __ENV.TEST_PASSWORD || 'Integration-FullFlow-2026!9',
+  }), { headers: { 'Content-Type': 'application/json' } });
+  const accessToken = loginRes.json('access_token');
+  if (loginRes.status !== 200 || !accessToken) {
+    throw new Error(`Staging load-test login failed with status ${loginRes.status}`);
+  }
+  return { accessToken };
+}
+
+export default function (data) {
+  const healthRes = http.get(`${BASE_URL}/health/ready`, { tags: { endpoint: 'read' } });
   check(healthRes, {
-    'health check status is 200': (r) => r.status === 200,
+    'readiness check status is 200': (r) => r.status === 200,
   });
 
-  // Simulated typical user flow (if tokens were available)
-  // For a basic load test without complex auth flow per VU, 
-  // we can test public endpoints or mock auth endpoints.
-  let loginRes = http.post(`${BASE_URL}/auth/login`, JSON.stringify({
-    email: 'integration@example.com',
-    password: 'securepass123',
-  }), { headers: { 'Content-Type': 'application/json' } });
-
-  // Not checking login status strictly here since the user might not exist in load test DB,
-  // but we can check if it returns a valid response format.
-  check(loginRes, {
-    'login responded': (r) => r.status === 200 || r.status === 401 || r.status === 404,
+  const remittancesRes = http.get(`${API_BASE_URL}/remittances?page_size=20`, {
+    headers: { Authorization: `Bearer ${data.accessToken}` },
+    tags: { endpoint: 'read' },
+  });
+  check(remittancesRes, {
+    'remittance read status is 200': (r) => r.status === 200,
   });
 
   sleep(1);

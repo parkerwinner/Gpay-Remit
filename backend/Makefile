@@ -1,4 +1,4 @@
-.PHONY: test integration-test chaos-test mutation-test coverage coverage-html check fmt-check
+.PHONY: test integration-test chaos-test mutation-test coverage coverage-html check fmt-check lint
 
 test:
 	go test ./...
@@ -41,3 +41,6 @@ check:
 
 fmt-check:
 	@gofmt -l . || true
+
+lint:
+	golangci-lint run --timeout=5m

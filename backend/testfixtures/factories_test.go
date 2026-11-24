@@ -261,7 +261,7 @@ func TestNewWebhookIsActiveWithAPlausibleSecret(t *testing.T) {
 func TestWithWebhookEventsJoinsTheList(t *testing.T) {
 	w := NewWebhook(WithWebhookEvents("invoice.paid", "payment.failed"))
 
-	assert.Equal(t, "invoice.paid,payment.failed", w.Events)
+	assert.Equal(t, models.WebhookEvents{"invoice.paid", "payment.failed"}, w.Events)
 }
 
 func TestFailedDeliveryPopulatesTheRetryFields(t *testing.T) {

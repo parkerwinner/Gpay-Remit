@@ -36,7 +36,7 @@ export function WalletSelectModal({ onSelect, onClose, isConnecting, error }) {
       style={{
         position: "fixed",
         inset: 0,
-        background: "rgba(0,0,0,0.5)",
+        background: "var(--overlay-bg, rgba(0, 0, 0, 0.5))",
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
@@ -48,10 +48,12 @@ export function WalletSelectModal({ onSelect, onClose, isConnecting, error }) {
     >
       <div
         style={{
-          background: "#fff",
+          background: "var(--surface)",
+          color: "var(--text)",
+          border: "1px solid var(--border)",
           borderRadius: "12px",
           padding: "24px",
-          minWidth: "320px",
+          minWidth: "280px",
           maxWidth: "400px",
           width: "100%",
         }}
@@ -59,7 +61,7 @@ export function WalletSelectModal({ onSelect, onClose, isConnecting, error }) {
         <h2 style={{ margin: "0 0 16px", fontSize: "1.2rem" }}>Connect a wallet</h2>
 
         {error && (
-          <p role="alert" style={{ color: "#c00", marginBottom: "12px", fontSize: "0.9rem" }}>
+          <p role="alert" style={{ color: "var(--danger-text)", marginBottom: "12px", fontSize: "0.9rem" }}>
             {error}
           </p>
         )}
@@ -68,6 +70,7 @@ export function WalletSelectModal({ onSelect, onClose, isConnecting, error }) {
           {WALLET_OPTIONS.map((w) => (
             <li key={w.id}>
               <button
+                type="button"
                 onClick={() => onSelect(w.id)}
                 disabled={isConnecting}
                 style={{
@@ -77,9 +80,10 @@ export function WalletSelectModal({ onSelect, onClose, isConnecting, error }) {
                   width: "100%",
                   padding: "12px 16px",
                   marginBottom: "8px",
-                  border: "1px solid #e0e0e0",
+                  border: "1px solid var(--border)",
                   borderRadius: "8px",
-                  background: isConnecting ? "#f5f5f5" : "#fff",
+                  background: isConnecting ? "var(--surface-subtle)" : "var(--surface)",
+                  color: "var(--text)",
                   cursor: isConnecting ? "not-allowed" : "pointer",
                   textAlign: "left",
                   fontSize: "1rem",
@@ -89,7 +93,7 @@ export function WalletSelectModal({ onSelect, onClose, isConnecting, error }) {
                 <span>
                   <strong>{w.label}</strong>
                   <br />
-                  <small style={{ color: "#666" }}>{w.description}</small>
+                  <small style={{ color: "var(--muted-text)" }}>{w.description}</small>
                 </span>
               </button>
             </li>
@@ -97,6 +101,7 @@ export function WalletSelectModal({ onSelect, onClose, isConnecting, error }) {
         </ul>
 
         <button
+          type="button"
           onClick={onClose}
           disabled={isConnecting}
           style={{
@@ -106,7 +111,7 @@ export function WalletSelectModal({ onSelect, onClose, isConnecting, error }) {
             border: "none",
             background: "transparent",
             cursor: "pointer",
-            color: "#666",
+            color: "var(--muted-text)",
           }}
         >
           Cancel

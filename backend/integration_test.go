@@ -7,8 +7,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -17,7 +21,9 @@ import (
 	"github.com/Gpay-Remit/gpay-remit/middleware"
 	"github.com/Gpay-Remit/gpay-remit/models"
 	"github.com/Gpay-Remit/gpay-remit/services"
+	"github.com/Gpay-Remit/gpay-remit/utils"
 	"github.com/gin-gonic/gin"
+	"github.com/stellar/go/txnbuild"
 	"github.com/stretchr/testify/require"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
@@ -27,7 +33,7 @@ import (
 )
 
 func setupTestDB(t *testing.T) (*gorm.DB, func()) {
-	t := t.Helper()
+	t.Helper()
 	ctx := context.Background()
 
 	req := testcontainers.ContainerRequest{
@@ -68,12 +74,41 @@ func setupTestDB(t *testing.T) (*gorm.DB, func()) {
 		return sqlDB.Ping() == nil
 	}, 30*time.Second, 500*time.Millisecond)
 
-	require.NoError(t, db.AutoMigrate(&models.User{}, &models.Payment{}, &models.Invoice{}, &models.Webhook{}, &models.WebhookDelivery{}, &models.IdempotencyRecord{}))
+	migrations, err := os.ReadDir("migrations")
+	require.NoError(t, err)
+	for _, migration := range migrations {
+		if migration.IsDir() || !strings.HasSuffix(migration.Name(), ".up.sql") {
+			continue
+		}
+		migrationSQL, readErr := os.ReadFile(filepath.Join("migrations", migration.Name()))
+		require.NoError(t, readErr, migration.Name())
+		require.NoError(t, db.Exec(string(migrationSQL)).Error, migration.Name())
+	}
 
 	return db, cleanup
 }
 
-func setupRouter(db *gorm.DB) *gin.Engine {
+type integrationStellarClient struct{}
+
+func (integrationStellarClient) SubmitPayment(context.Context, string, string, string, string, string) (string, error) {
+	return "mock-tx-hash", nil
+}
+
+func (integrationStellarClient) ValidateAccount(context.Context, string) error { return nil }
+
+func (integrationStellarClient) BuildEscrowTx(context.Context, string, string, string, string, string) (string, error) {
+	return "mock-escrow-xdr", nil
+}
+
+func (integrationStellarClient) BuildPaymentTx(context.Context, txnbuild.Account, string, string, string, string) (*txnbuild.Transaction, error) {
+	return nil, nil
+}
+
+func (integrationStellarClient) SignTx(context.Context, string, string) (string, error) {
+	return "mock-signed-xdr", nil
+}
+
+func setupRouter(db *gorm.DB, clients ...utils.StellarClientInterface) *gin.Engine {
 	gin.SetMode(gin.TestMode)
 	cfg := &config.Config{
 		DatabaseURL:       "",
@@ -95,7 +130,14 @@ func setupRouter(db *gorm.DB) *gin.Engine {
 
 	protected := router.Group("/api/v1")
 	protected.Use(middleware.JwtAuthMiddleware(db, cfg))
-	remittanceHandler := handlers.NewRemittanceHandler(db, cfg)
+	var stellarClient utils.StellarClientInterface = integrationStellarClient{}
+	if len(clients) > 0 && clients[0] != nil {
+		stellarClient = clients[0]
+	}
+	remittanceHandler := handlers.NewRemittanceHandlerWithStellarClient(db, cfg, stellarClient)
+	contactHandler := handlers.NewContactHandler(db, cfg, stellarClient)
+	protected.POST("/contacts", contactHandler.CreateContact)
+	protected.POST("/remittances/create", remittanceHandler.CreateRemittance)
 	protected.POST("/remittances", remittanceHandler.SendRemittance)
 	protected.GET("/remittances", remittanceHandler.ListRemittances)
 
@@ -103,10 +145,16 @@ func setupRouter(db *gorm.DB) *gin.Engine {
 }
 
 func registerAndLogin(t *testing.T, router *gin.Engine) string {
+	t.Helper()
+	previousTransport := http.DefaultTransport
+	http.DefaultTransport = integrationHTTPTransport{fallback: previousTransport}
+	defer func() { http.DefaultTransport = previousTransport }()
+	const password = "Integration-FullFlow-2026!9"
+
 	registerPayload := map[string]any{
 		"email":           "integration@example.com",
 		"name":            "Integration Tester",
-		"password":        "securepass123",
+		"password":        password,
 		"stellar_address": "GCFXW67O6JYQXZF3ZKCRNGEF6W6C64KP3S2ZMLHJH33A6YSFWTQZ7Q2Z",
 		"country":         "US",
 	}
@@ -121,7 +169,7 @@ func registerAndLogin(t *testing.T, router *gin.Engine) string {
 
 	loginPayload := map[string]any{
 		"email":    "integration@example.com",
-		"password": "securepass123",
+		"password": password,
 	}
 	body, err = json.Marshal(loginPayload)
 	require.NoError(t, err)
@@ -137,6 +185,22 @@ func registerAndLogin(t *testing.T, router *gin.Engine) string {
 	require.NotEmpty(t, resp["access_token"])
 
 	return resp["access_token"].(string)
+}
+
+type integrationHTTPTransport struct {
+	fallback http.RoundTripper
+}
+
+func (transport integrationHTTPTransport) RoundTrip(request *http.Request) (*http.Response, error) {
+	if request.URL.Host == "api.pwnedpasswords.com" {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     make(http.Header),
+			Body:       io.NopCloser(strings.NewReader("")),
+			Request:    request,
+		}, nil
+	}
+	return transport.fallback.RoundTrip(request)
 }
 
 func TestIntegrationAuthAndPayments(t *testing.T) {
@@ -184,6 +248,59 @@ func TestIntegrationAuthAndPayments(t *testing.T) {
 	var listResp []map[string]any
 	require.NoError(t, json.Unmarshal(r.Body.Bytes(), &listResp))
 	require.NotEmpty(t, listResp)
+}
+
+func TestIntegrationUserContactAndRemittanceFlow(t *testing.T) {
+	db, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	stellar := integrationStellarClient{}
+	router := setupRouter(db, stellar)
+	token := registerAndLogin(t, router)
+	var sender models.User
+	require.NoError(t, db.Where("email = ?", "integration@example.com").First(&sender).Error)
+
+	recipientAddress := "GBZC6YRFWINCGYH6FFIK3VY4KF3WZJQR7CD3S5Y4GVNIKU5RM3JY7YEX"
+	contactBody, err := json.Marshal(map[string]string{
+		"nickname":        "Remittance recipient",
+		"stellar_address": recipientAddress,
+		"currency":        "USDC",
+	})
+	require.NoError(t, err)
+	contactResponse := httptest.NewRecorder()
+	contactRequest := httptest.NewRequest(http.MethodPost, "/api/v1/contacts", bytes.NewReader(contactBody))
+	contactRequest.Header.Set("Authorization", "Bearer "+token)
+	contactRequest.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(contactResponse, contactRequest)
+	require.Equal(t, http.StatusCreated, contactResponse.Code, contactResponse.Body.String())
+
+	var savedContact models.Contact
+	require.NoError(t, db.Where("user_id = ? AND stellar_address = ?", sender.ID, recipientAddress).First(&savedContact).Error)
+	require.Equal(t, sender.ID, savedContact.UserID)
+
+	remittanceBody, err := json.Marshal(map[string]any{
+		"sender_account":    sender.StellarAddress,
+		"recipient_account": savedContact.StellarAddress,
+		"amount":            50_000_000,
+		"asset_code":        "USDC",
+	})
+	require.NoError(t, err)
+	remittanceResponse := httptest.NewRecorder()
+	remittanceRequest := httptest.NewRequest(http.MethodPost, "/api/v1/remittances/create", bytes.NewReader(remittanceBody))
+	remittanceRequest.Header.Set("Authorization", "Bearer "+token)
+	remittanceRequest.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(remittanceResponse, remittanceRequest)
+	require.Equal(t, http.StatusCreated, remittanceResponse.Code, remittanceResponse.Body.String())
+
+	var response map[string]any
+	require.NoError(t, json.Unmarshal(remittanceResponse.Body.Bytes(), &response))
+	require.Equal(t, "mock-escrow-xdr", response["tx_envelope"])
+
+	var payment models.Payment
+	require.NoError(t, db.Where("sender_id = ? AND recipient_account = ?", sender.ID, recipientAddress).First(&payment).Error)
+	require.EqualValues(t, 50_000_000, payment.Amount)
+	require.Equal(t, "USDC", payment.Currency)
+	require.Equal(t, "pending", payment.Status)
 }
 
 func TestIntegrationStandardizedErrors(t *testing.T) {

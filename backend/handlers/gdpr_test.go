@@ -67,7 +67,7 @@ func seedGDPRUser(t *testing.T, db *gorm.DB) (userID uint, otherID uint) {
 
 	require.NoError(t, db.Create(&models.Webhook{
 		UserID: user.ID, URL: "https://example.com/hook", Secret: "super-secret-signing-key",
-		Events: "payment.completed", IsActive: true, Description: "ledger sync",
+		Events: models.WebhookEvents{"payment.completed"}, IsActive: true, Description: "ledger sync",
 	}).Error)
 
 	userIDPtr := user.ID

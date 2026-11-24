@@ -9,6 +9,28 @@
       content="Gpay-Remit - Cross-border payments on Stellar"
     />
     <title>Gpay-Remit</title>
+    <script>
+      (function () {
+        try {
+          var stored = localStorage.getItem("gpay_dark_mode");
+          var isDark =
+            stored === "true"
+              ? true
+              : stored === "false"
+              ? false
+              : typeof window.matchMedia === "function" &&
+                window.matchMedia("(prefers-color-scheme: dark)").matches;
+          if (isDark) {
+            document.documentElement.classList.add("dark", "dark-mode");
+            document.documentElement.setAttribute("data-theme", "dark");
+          } else {
+            document.documentElement.setAttribute("data-theme", "light");
+          }
+        } catch (e) {
+          // Storage blocked; App.js will apply theme on mount
+        }
+      })();
+    </script>
   </head>
   <body>
     <noscript>You need to enable JavaScript to run this app.</noscript>

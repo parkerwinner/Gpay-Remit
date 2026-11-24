@@ -102,6 +102,56 @@ var (
 		},
 		[]string{"reason"},
 	)
+
+	CacheOperationsTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "gpay_remit",
+			Name:      "cache_operations_total",
+			Help:      "Cache operations by operation and outcome (hit, miss, success, error, unavailable).",
+		},
+		[]string{"operation", "result"},
+	)
+
+	RedisEvictedKeysTotal = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "gpay_remit",
+			Name:      "redis_evicted_keys_total",
+			Help:      "Redis key evictions observed by this process; use rate() to alert on eviction pressure.",
+		},
+	)
+
+	WebhookDeliveriesTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "gpay_remit",
+			Name:      "webhook_deliveries_total",
+			Help:      "Webhook delivery attempts by outcome.",
+		},
+		[]string{"outcome"},
+	)
+
+	DBConnectionsInUse = prometheus.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: "gpay_remit",
+			Name:      "db_connections_in_use",
+			Help:      "Current number of in-use database connections.",
+		},
+	)
+
+	DBConnectionsMax = prometheus.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: "gpay_remit",
+			Name:      "db_connections_max",
+			Help:      "Configured maximum number of database connections.",
+		},
+	)
+
+	RedisUp = prometheus.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: "gpay_remit",
+			Name:      "redis_up",
+			Help:      "Whether Redis is reachable (1 for reachable, 0 otherwise).",
+		},
+	)
 )
 
 func init() {
@@ -115,6 +165,12 @@ func init() {
 		ExchangeRateLookupsTotal,
 		WebhookRetryAttemptsTotal,
 		WebhookDeadLettersTotal,
+		CacheOperationsTotal,
+		RedisEvictedKeysTotal,
+		WebhookDeliveriesTotal,
+		DBConnectionsInUse,
+		DBConnectionsMax,
+		RedisUp,
 	)
 }
 

@@ -90,11 +90,13 @@ func RequestLogger() gin.HandlerFunc {
 		fields := logrus.Fields{
 			"method":         c.Request.Method,
 			"path":           path,
+			"endpoint":       path,
 			"status":         status,
 			"duration_ms":    duration.Milliseconds(),
 			"ip":             c.ClientIP(),
 			"request_id":     c.GetString("requestID"),
 			"correlation_id": correlationID,
+			"user_id":        nil,
 		}
 
 		if query != "" {

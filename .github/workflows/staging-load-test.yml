@@ -1,0 +1,47 @@
+name: Staging Load Test
+
+on:
+  schedule:
+    - cron: "0 5 * * 1"
+  push:
+    branches:
+      - "release/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  k6:
+    name: k6 staging SLO
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Require staging test configuration
+        env:
+          BASE_URL: ${{ secrets.STAGING_BASE_URL }}
+          TEST_EMAIL: ${{ secrets.K6_TEST_EMAIL }}
+          TEST_PASSWORD: ${{ secrets.K6_TEST_PASSWORD }}
+        run: |
+          test -n "$BASE_URL" || { echo "STAGING_BASE_URL secret is required" >&2; exit 1; }
+          test -n "$TEST_EMAIL" || { echo "K6_TEST_EMAIL secret is required" >&2; exit 1; }
+          test -n "$TEST_PASSWORD" || { echo "K6_TEST_PASSWORD secret is required" >&2; exit 1; }
+
+      - uses: grafana/setup-k6-action@v1
+
+      - name: Run staging load test and enforce read SLO
+        env:
+          BASE_URL: ${{ secrets.STAGING_BASE_URL }}
+          TEST_EMAIL: ${{ secrets.K6_TEST_EMAIL }}
+          TEST_PASSWORD: ${{ secrets.K6_TEST_PASSWORD }}
+        run: k6 run --summary-export=loadtest-summary.json backend/loadtest/k6_test.js
+
+      - name: Upload k6 summary
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: staging-k6-summary-${{ github.run_id }}
+          path: loadtest-summary.json
+          if-no-files-found: ignore
+          retention-days: 14

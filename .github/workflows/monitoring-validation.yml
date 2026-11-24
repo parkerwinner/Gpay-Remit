@@ -34,6 +34,11 @@ jobs:
           yamllint -d '{extends: default, rules: {line-length: {max: 120}}}' \
             monitoring/alerting.yml
 
+      - name: Lint Prometheus and Alertmanager configuration
+        run: |
+          yamllint -d '{extends: default, rules: {line-length: {max: 120}}}' \
+            monitoring/alerts.yml monitoring/alertmanager.yml
+
   validate-content:
     name: Validate Monitor Content
     runs-on: ubuntu-latest

@@ -10,6 +10,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/redis/go-redis/v9"
 	"github.com/Gpay-Remit/gpay-remit/config"
+	"github.com/Gpay-Remit/gpay-remit/metrics"
 	"gorm.io/gorm"
 )
 
@@ -153,6 +154,8 @@ func (h *HealthHandler) checkDatabase() databaseStatus {
 		return databaseStatus{dependencyStatus: dependencyStatus{Status: "unhealthy", Error: err.Error()}}
 	}
 	pool := collectPoolMetrics(sqlDB)
+	metrics.DBConnectionsInUse.Set(float64(pool.InUse))
+	metrics.DBConnectionsMax.Set(float64(pool.MaxOpenConnections))
 	return databaseStatus{
 		dependencyStatus: dependencyStatus{Status: "healthy", Latency: time.Since(start).String()},
 		Pool:             pool,
@@ -197,6 +200,7 @@ func (h *HealthHandler) checkHorizon() dependencyStatus {
 
 func (h *HealthHandler) checkRedis() dependencyStatus {
 	if h.RedisClient == nil {
+		metrics.RedisUp.Set(0)
 		return dependencyStatus{Status: "unconfigured", Error: "redis client not initialized"}
 	}
 	start := time.Now()
@@ -204,7 +208,9 @@ func (h *HealthHandler) checkRedis() dependencyStatus {
 	defer cancel()
 
 	if err := h.RedisClient.Ping(ctx).Err(); err != nil {
+		metrics.RedisUp.Set(0)
 		return dependencyStatus{Status: "unhealthy", Error: err.Error()}
 	}
+	metrics.RedisUp.Set(1)
 	return dependencyStatus{Status: "healthy", Latency: time.Since(start).String()}
 }
