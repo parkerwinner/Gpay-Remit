@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 
+	"github.com/Gpay-Remit/gpay-remit/errors"
 	"github.com/gin-gonic/gin"
 )
 
@@ -36,22 +37,19 @@ func CSRFProtection() gin.HandlerFunc {
 		// Unsafe methods: validate CSRF token
 		cookieToken, err := c.Cookie("csrf_token")
 		if err != nil || cookieToken == "" {
-			c.JSON(http.StatusForbidden, gin.H{"error": "Missing CSRF cookie"})
-			c.Abort()
+			AbortWithError(c, http.StatusForbidden, errors.CodeForbidden, "Missing CSRF cookie", nil)
 			return
 		}
 
 		headerToken := c.GetHeader("X-CSRF-Token")
 		if headerToken == "" {
-			c.JSON(http.StatusForbidden, gin.H{"error": "Missing CSRF header"})
-			c.Abort()
+			AbortWithError(c, http.StatusForbidden, errors.CodeForbidden, "Missing CSRF header", nil)
 			return
 		}
 
 		// Timing-safe comparison to prevent timing attacks
 		if subtle.ConstantTimeCompare([]byte(cookieToken), []byte(headerToken)) != 1 {
-			c.JSON(http.StatusForbidden, gin.H{"error": "Invalid CSRF token"})
-			c.Abort()
+			AbortWithError(c, http.StatusForbidden, errors.CodeForbidden, "Invalid CSRF token", nil)
 			return
 		}
 

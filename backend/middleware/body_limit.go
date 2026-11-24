@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/http"
 
+	"github.com/Gpay-Remit/gpay-remit/errors"
 	"github.com/gin-gonic/gin"
 )
 
@@ -41,9 +42,8 @@ func BodyLimit(defaultMax int64, routeLimits map[string]int64) gin.HandlerFunc {
 		}
 
 		if c.Request.ContentLength > limit {
-			c.AbortWithStatusJSON(http.StatusRequestEntityTooLarge, gin.H{
-				"error": fmt.Sprintf("request body exceeds maximum size of %d bytes", limit),
-			})
+			AbortWithError(c, http.StatusRequestEntityTooLarge, errors.CodePayloadTooLarge,
+				fmt.Sprintf("request body exceeds maximum size of %d bytes", limit), nil)
 			return
 		}
 

@@ -116,7 +116,7 @@ cargo test
 - Use ESLint: `npm run lint`.
 
 ### 4.3 Rust / Soroban Standards
-- Format contracts using `cargo fmt`.
+- Format contracts using `make fmt` (runs `cargo fmt --all`); `make fmt-check` runs the same check CI uses.
 - Check for linter warnings: `cargo clippy --all-targets`.
 - Ensure all public contract functions use explicit authorization (`env.current_contract_address()` or caller `Address::require_auth()`).
 

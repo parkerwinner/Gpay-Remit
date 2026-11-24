@@ -84,6 +84,14 @@ func WithFields(fields logrus.Fields) *logrus.Entry {
 	return Log.WithFields(fields)
 }
 
+// ForRequest returns a log entry tagged with the request ID, so every line
+// logged while handling a request can be correlated with that request's access
+// log entry and error response. Use it in handlers and services instead of
+// Log.WithFields when a request ID is available.
+func ForRequest(requestID string) *logrus.Entry {
+	return Log.WithField("request_id", requestID)
+}
+
 // WithCorrelation returns a log entry pre-populated with correlation identifiers.
 // Use this whenever you want to tie a log line to a specific request or user.
 func WithCorrelation(correlationID, requestID string, userID interface{}) *logrus.Entry {

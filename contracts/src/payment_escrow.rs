@@ -1075,7 +1075,9 @@ impl PaymentEscrowContract {
             .get(&DataKey::ComplianceRules)
             .unwrap_or_else(|| Vec::new(&env));
         rules.push_back(rule);
-        env.storage().instance().set(&DataKey::ComplianceRules, &rules);
+        env.storage()
+            .instance()
+            .set(&DataKey::ComplianceRules, &rules);
 
         events::emit(
             &env,
@@ -1103,7 +1105,9 @@ impl PaymentEscrowContract {
             return Err(Error::Unauthorized);
         }
 
-        env.storage().instance().set(&DataKey::UserJurisdiction(user.clone()), &country);
+        env.storage()
+            .instance()
+            .set(&DataKey::UserJurisdiction(user.clone()), &country);
 
         events::emit(
             &env,
@@ -1184,8 +1188,12 @@ impl PaymentEscrowContract {
             .get(&DataKey::Escrow(escrow_id))
             .ok_or(Error::EscrowNotFound)?;
         escrow.compliant = true;
-        env.storage().instance().set(&DataKey::Escrow(escrow_id), &escrow);
-        env.storage().instance().set(&DataKey::EscrowComplianceOverride(escrow_id), &true);
+        env.storage()
+            .instance()
+            .set(&DataKey::Escrow(escrow_id), &escrow);
+        env.storage()
+            .instance()
+            .set(&DataKey::EscrowComplianceOverride(escrow_id), &true);
 
         events::emit(
             &env,
@@ -1760,7 +1768,9 @@ impl PaymentEscrowContract {
         amount: i128,
         token_address: Address,
     ) -> Result<(), Error> {
-        Self::with_reentrancy_guard(&env, || Self::deposit_impl(env.clone(), escrow_id, caller, amount, token_address))
+        Self::with_reentrancy_guard(&env, || {
+            Self::deposit_impl(env.clone(), escrow_id, caller, amount, token_address)
+        })
     }
 
     fn deposit_impl(
@@ -1863,7 +1873,9 @@ impl PaymentEscrowContract {
         amount: i128,
         token_address: Address,
     ) -> Result<(), Error> {
-        Self::with_reentrancy_guard(&env, || Self::deposit_asset_impl(env.clone(), escrow_id, caller, asset, amount, token_address))
+        Self::with_reentrancy_guard(&env, || {
+            Self::deposit_asset_impl(env.clone(), escrow_id, caller, asset, amount, token_address)
+        })
     }
 
     fn deposit_asset_impl(
@@ -2477,7 +2489,9 @@ impl PaymentEscrowContract {
         caller: Address,
         token_address: Address,
     ) -> Result<(), Error> {
-        Self::with_reentrancy_guard(&env, || Self::release_escrow_impl(env.clone(), escrow_id, caller, token_address))
+        Self::with_reentrancy_guard(&env, || {
+            Self::release_escrow_impl(env.clone(), escrow_id, caller, token_address)
+        })
     }
 
     fn release_escrow_impl(
@@ -2488,7 +2502,6 @@ impl PaymentEscrowContract {
     ) -> Result<(), Error> {
         caller.require_auth();
         let rate_limit_admin = Self::enforce_rate_limit(&env, &caller, FunctionType::Release)?;
-
 
         let mut escrow: Escrow = env
             .storage()
@@ -2577,7 +2590,11 @@ impl PaymentEscrowContract {
         token_client.transfer(&contract_address, &escrow.recipient, &recipient_amount);
 
         if fee_amount > 0 {
-            token_client.transfer(&contract_address, &Self::fee_destination(&env, &stored_admin), &fee_amount);
+            token_client.transfer(
+                &contract_address,
+                &Self::fee_destination(&env, &stored_admin),
+                &fee_amount,
+            );
         }
 
         escrow.released_amount = escrow
@@ -2635,7 +2652,6 @@ impl PaymentEscrowContract {
             },
         );
 
-
         Ok(())
     }
 
@@ -2646,7 +2662,9 @@ impl PaymentEscrowContract {
         asset: Asset,
         token_address: Address,
     ) -> Result<(), Error> {
-        Self::with_reentrancy_guard(&env, || Self::release_asset_impl(env.clone(), escrow_id, caller, asset, token_address))
+        Self::with_reentrancy_guard(&env, || {
+            Self::release_asset_impl(env.clone(), escrow_id, caller, asset, token_address)
+        })
     }
 
     fn release_asset_impl(
@@ -2704,7 +2722,11 @@ impl PaymentEscrowContract {
         let contract_address = env.current_contract_address();
         token_client.transfer(&contract_address, &escrow.recipient, &recipient_amount);
         if fee_breakdown.total_fee > 0 {
-            token_client.transfer(&contract_address, &Self::fee_destination(&env, &stored_admin), &fee_breakdown.total_fee);
+            token_client.transfer(
+                &contract_address,
+                &Self::fee_destination(&env, &stored_admin),
+                &fee_breakdown.total_fee,
+            );
         }
 
         escrow.released_amounts.set(asset.clone(), deposited);
@@ -2773,7 +2795,15 @@ impl PaymentEscrowContract {
         token_address: Address,
         release_amount: i128,
     ) -> Result<(), Error> {
-        Self::with_reentrancy_guard(&env, || Self::release_partial_impl(env.clone(), escrow_id, caller, token_address, release_amount))
+        Self::with_reentrancy_guard(&env, || {
+            Self::release_partial_impl(
+                env.clone(),
+                escrow_id,
+                caller,
+                token_address,
+                release_amount,
+            )
+        })
     }
 
     fn release_partial_impl(
@@ -2792,7 +2822,6 @@ impl PaymentEscrowContract {
         if release_amount <= 0 {
             return Err(Error::InvalidAmount);
         }
-
 
         let mut escrow: Escrow = env
             .storage()
@@ -2872,7 +2901,11 @@ impl PaymentEscrowContract {
         token_client.transfer(&contract_address, &escrow.recipient, &recipient_amount);
 
         if fee_amount > 0 {
-            token_client.transfer(&contract_address, &Self::fee_destination(&env, &stored_admin), &fee_amount);
+            token_client.transfer(
+                &contract_address,
+                &Self::fee_destination(&env, &stored_admin),
+                &fee_amount,
+            );
         }
 
         escrow.released_amount = escrow
@@ -2920,7 +2953,6 @@ impl PaymentEscrowContract {
             partial_status,
             EventData::EscrowReleased(escrow_id, recipient_amount),
         );
-
 
         Ok(())
     }
@@ -3221,7 +3253,9 @@ impl PaymentEscrowContract {
         token_address: Address,
         reason: RefundReason,
     ) -> Result<(), Error> {
-        Self::with_reentrancy_guard(&env, || Self::refund_escrow_impl(env.clone(), escrow_id, caller, token_address, reason))
+        Self::with_reentrancy_guard(&env, || {
+            Self::refund_escrow_impl(env.clone(), escrow_id, caller, token_address, reason)
+        })
     }
 
     fn refund_escrow_impl(
@@ -3236,7 +3270,6 @@ impl PaymentEscrowContract {
         }
         caller.require_auth();
         let rate_limit_admin = Self::enforce_rate_limit(&env, &caller, FunctionType::Refund)?;
-
 
         let mut escrow: Escrow = env
             .storage()
@@ -3325,7 +3358,11 @@ impl PaymentEscrowContract {
             token_client.transfer(&contract_address, &escrow.sender, &refund_amount);
 
             if processing_fee > 0 {
-                token_client.transfer(&contract_address, &Self::fee_destination(&env, &stored_admin), &processing_fee);
+                token_client.transfer(
+                    &contract_address,
+                    &Self::fee_destination(&env, &stored_admin),
+                    &processing_fee,
+                );
             }
         }
 
@@ -3384,7 +3421,6 @@ impl PaymentEscrowContract {
             },
         );
 
-
         Ok(())
     }
 
@@ -3396,7 +3432,9 @@ impl PaymentEscrowContract {
         token_address: Address,
         reason: RefundReason,
     ) -> Result<(), Error> {
-        Self::with_reentrancy_guard(&env, || Self::refund_asset_impl(env.clone(), escrow_id, caller, asset, token_address, reason))
+        Self::with_reentrancy_guard(&env, || {
+            Self::refund_asset_impl(env.clone(), escrow_id, caller, asset, token_address, reason)
+        })
     }
 
     fn refund_asset_impl(
@@ -3469,7 +3507,11 @@ impl PaymentEscrowContract {
         let contract_address = env.current_contract_address();
         token_client.transfer(&contract_address, &escrow.sender, &refund_amount);
         if processing_fee > 0 {
-            token_client.transfer(&contract_address, &Self::fee_destination(&env, &stored_admin), &processing_fee);
+            token_client.transfer(
+                &contract_address,
+                &Self::fee_destination(&env, &stored_admin),
+                &processing_fee,
+            );
         }
 
         escrow.refunded_amounts.set(
@@ -3548,7 +3590,16 @@ impl PaymentEscrowContract {
         refund_amount: i128,
         reason: RefundReason,
     ) -> Result<(), Error> {
-        Self::with_reentrancy_guard(&env, || Self::refund_partial_impl(env.clone(), escrow_id, caller, token_address, refund_amount, reason))
+        Self::with_reentrancy_guard(&env, || {
+            Self::refund_partial_impl(
+                env.clone(),
+                escrow_id,
+                caller,
+                token_address,
+                refund_amount,
+                reason,
+            )
+        })
     }
 
     fn refund_partial_impl(
@@ -3568,7 +3619,6 @@ impl PaymentEscrowContract {
         if refund_amount <= 0 {
             return Err(Error::InvalidRefundAmount);
         }
-
 
         let mut escrow: Escrow = env
             .storage()
@@ -3645,7 +3695,11 @@ impl PaymentEscrowContract {
         token_client.transfer(&contract_address, &escrow.sender, &net_refund);
 
         if processing_fee > 0 {
-            token_client.transfer(&contract_address, &Self::fee_destination(&env, &stored_admin), &processing_fee);
+            token_client.transfer(
+                &contract_address,
+                &Self::fee_destination(&env, &stored_admin),
+                &processing_fee,
+            );
         }
 
         escrow.refunded_amount = escrow
@@ -3700,7 +3754,6 @@ impl PaymentEscrowContract {
             EventData::EscrowRefunded(escrow_id, net_refund),
         );
 
-
         Ok(())
     }
 
@@ -3744,7 +3797,9 @@ impl PaymentEscrowContract {
         token_address: Address,
         reason: String,
     ) -> Result<(), Error> {
-        Self::with_reentrancy_guard(&env, || Self::cancel_escrow_impl(env.clone(), escrow_id, caller, token_address, reason))
+        Self::with_reentrancy_guard(&env, || {
+            Self::cancel_escrow_impl(env.clone(), escrow_id, caller, token_address, reason)
+        })
     }
 
     fn cancel_escrow_impl(
@@ -3756,14 +3811,11 @@ impl PaymentEscrowContract {
     ) -> Result<(), Error> {
         caller.require_auth();
 
-
         let mut escrow: Escrow = env
             .storage()
             .instance()
             .get(&DataKey::Escrow(escrow_id))
-            .ok_or({
-                Error::EscrowNotFound
-            })?;
+            .ok_or({ Error::EscrowNotFound })?;
 
         let stored_admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
         if caller != escrow.sender && caller != stored_admin {
@@ -3847,7 +3899,6 @@ impl PaymentEscrowContract {
             symbol_short!("cancel"),
             EventData::AdminAction(symbol_short!("cancel")),
         );
-
 
         Ok(())
     }
@@ -7287,7 +7338,10 @@ mod reentrancy_test {
         }
 
         pub fn attempts(env: Env) -> u32 {
-            env.storage().instance().get(&MockKey::Attempts).unwrap_or(0)
+            env.storage()
+                .instance()
+                .get(&MockKey::Attempts)
+                .unwrap_or(0)
         }
 
         pub fn last_result(env: Env) -> Option<u32> {
@@ -7443,7 +7497,8 @@ mod reentrancy_test {
         set_lock(&s);
 
         assert_eq!(
-            s.client.try_release_escrow(&id, &s.recipient, &s.token.address),
+            s.client
+                .try_release_escrow(&id, &s.recipient, &s.token.address),
             Err(Ok(Error::ReentrantCall))
         );
         assert_eq!(
@@ -7456,12 +7511,18 @@ mod reentrancy_test {
             Err(Ok(Error::ReentrantCall))
         );
         assert_eq!(
-            s.client.try_release_partial(&id, &s.recipient, &s.token.address, &100),
+            s.client
+                .try_release_partial(&id, &s.recipient, &s.token.address, &100),
             Err(Ok(Error::ReentrantCall))
         );
         assert_eq!(
-            s.client
-                .try_refund_partial(&id, &s.sender, &s.token.address, &100, &RefundReason::SenderRequest),
+            s.client.try_refund_partial(
+                &id,
+                &s.sender,
+                &s.token.address,
+                &100,
+                &RefundReason::SenderRequest
+            ),
             Err(Ok(Error::ReentrantCall))
         );
         assert_eq!(
@@ -7501,7 +7562,8 @@ mod reentrancy_test {
     fn test_lock_cleared_after_failed_call() {
         let s = setup();
         assert_eq!(
-            s.client.try_release_escrow(&999, &s.recipient, &s.token.address),
+            s.client
+                .try_release_escrow(&999, &s.recipient, &s.token.address),
             Err(Ok(Error::EscrowNotFound))
         );
         assert!(!lock_is_set(&s));
@@ -7544,12 +7606,8 @@ mod reentrancy_test {
 
         s.token
             .arm(&s.escrow_contract, &id, &s.sender, &REENTRY_REFUND);
-        s.client.refund_escrow(
-            &id,
-            &s.sender,
-            &s.token.address,
-            &RefundReason::Expiration,
-        );
+        s.client
+            .refund_escrow(&id, &s.sender, &s.token.address, &RefundReason::Expiration);
 
         assert_eq!(s.token.attempts(), 1);
         let result = s.token.last_result().unwrap();

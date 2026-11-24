@@ -36,7 +36,7 @@ func (h *ComplianceHandler) GenerateComplianceReport(c *gin.Context) {
 	if !roleExists || userRole.(string) != "admin" {
 		// Log compliance report access attempt by non-admin
 		uid := userID.(uint)
-		h.logComplianceAccess(&uid, http.StatusForbidden, "admin role required")
+		h.logComplianceAccess(c.GetString("requestID"), &uid, http.StatusForbidden, "admin role required")
 		c.Error(errors.NewForbiddenError("Only admins can generate compliance reports"))
 		return
 	}
@@ -130,7 +130,7 @@ func (h *ComplianceHandler) GenerateComplianceReport(c *gin.Context) {
 
 	// Audit log successful compliance report access
 	uid := userID.(uint)
-	h.logComplianceAccess(&uid, http.StatusOK, fmt.Sprintf("compliance report with %d transactions", len(payments)))
+	h.logComplianceAccess(c.GetString("requestID"), &uid, http.StatusOK, fmt.Sprintf("compliance report with %d transactions", len(payments)))
 
 	c.Header("Content-Description", "Compliance Report")
 	c.Header("Content-Disposition", fmt.Sprintf("attachment; filename=%s", filename))
@@ -138,7 +138,7 @@ func (h *ComplianceHandler) GenerateComplianceReport(c *gin.Context) {
 }
 
 // logComplianceAccess creates an audit log entry for compliance report access
-func (h *ComplianceHandler) logComplianceAccess(userID *uint, statusCode int, details string) {
+func (h *ComplianceHandler) logComplianceAccess(requestID string, userID *uint, statusCode int, details string) {
 	auditLog := models.AuditLog{
 		UserID:         userID,
 		Action:         "compliance_report_access",
@@ -148,6 +148,6 @@ func (h *ComplianceHandler) logComplianceAccess(userID *uint, statusCode int, de
 	}
 
 	if err := h.db.Create(&auditLog).Error; err != nil {
-		logger.Log.Errorf("Failed to create audit log: %v", err)
+		logger.ForRequest(requestID).Errorf("Failed to create audit log: %v", err)
 	}
 }

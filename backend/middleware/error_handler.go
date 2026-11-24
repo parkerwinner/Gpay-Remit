@@ -4,10 +4,11 @@ import (
 	"net/http"
 	"runtime/debug"
 
+	"github.com/Gpay-Remit/gpay-remit/errors"
+	"github.com/Gpay-Remit/gpay-remit/logger"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"github.com/sirupsen/logrus"
-	"github.com/Gpay-Remit/gpay-remit/errors"
 )
 
 // RequestIDMiddleware adds a unique request ID to each request
@@ -23,13 +24,34 @@ func RequestIDMiddleware() gin.HandlerFunc {
 	}
 }
 
-// ErrorResponse is the standardized JSON error response
+// ErrorResponse is the standardized JSON error response. Every error body the
+// API returns has this shape: a machine-readable code, a human-readable
+// message, optional details, and the request ID for log correlation.
 type ErrorResponse struct {
 	Error struct {
-		Code    errors.ErrorCode `json:"code"`
-		Message string           `json:"message"`
-		Details interface{}      `json:"details,omitempty"`
+		Code      errors.ErrorCode `json:"code"`
+		Message   string           `json:"message"`
+		Details   interface{}      `json:"details,omitempty"`
+		RequestID string           `json:"request_id,omitempty"`
 	} `json:"error"`
+}
+
+// newErrorResponse builds the standard error body for the request in c.
+func newErrorResponse(c *gin.Context, code errors.ErrorCode, message string, details interface{}) ErrorResponse {
+	resp := ErrorResponse{}
+	resp.Error.Code = code
+	resp.Error.Message = message
+	resp.Error.Details = details
+	resp.Error.RequestID = c.GetString("requestID")
+	return resp
+}
+
+// AbortWithError writes the standard error response with the given status and
+// stops the handler chain. Middleware uses it so the response is correct even
+// when the global ErrorHandler is not in the chain. Inside handlers prefer
+// c.Error(...) with an *errors.AppError, which ErrorHandler renders and logs.
+func AbortWithError(c *gin.Context, status int, code errors.ErrorCode, message string, details interface{}) {
+	c.AbortWithStatusJSON(status, newErrorResponse(c, code, message, details))
 }
 
 // ErrorHandler handles panics and standardized error responses
@@ -43,7 +65,7 @@ func ErrorHandler() gin.HandlerFunc {
 				requestID := c.GetString("requestID")
 				userID, _ := c.Get("userID")
 
-				logrus.WithFields(logrus.Fields{
+				logger.Log.WithFields(logrus.Fields{
 					"panic":      err,
 					"stack":      string(stack),
 					"request_id": requestID,
@@ -52,9 +74,7 @@ func ErrorHandler() gin.HandlerFunc {
 				}).Error("Panic recovered")
 
 				// Standard 500 response
-				resp := ErrorResponse{}
-				resp.Error.Code = errors.CodeInternal
-				resp.Error.Message = "An internal server error occurred"
+				resp := newErrorResponse(c, errors.CodeInternal, "An internal server error occurred", nil)
 
 				c.AbortWithStatusJSON(http.StatusInternalServerError, resp)
 			}
@@ -93,9 +113,9 @@ func ErrorHandler() gin.HandlerFunc {
 
 			// Log based on severity
 			if appErr.HTTPStatus >= 500 {
-				logrus.WithFields(logFields).Error(appErr.Message)
+				logger.Log.WithFields(logFields).Error(appErr.Message)
 			} else {
-				logrus.WithFields(logFields).Warn(appErr.Message)
+				logger.Log.WithFields(logFields).Warn(appErr.Message)
 			}
 
 			// Prepare response - hide internal details for 500 errors
@@ -104,10 +124,7 @@ func ErrorHandler() gin.HandlerFunc {
 				message = "An internal server error occurred"
 			}
 
-			resp := ErrorResponse{}
-			resp.Error.Code = appErr.Code
-			resp.Error.Message = message
-			resp.Error.Details = appErr.Details
+			resp := newErrorResponse(c, appErr.Code, message, appErr.Details)
 
 			// If response was already written, we can't change it
 			if !c.Writer.Written() {

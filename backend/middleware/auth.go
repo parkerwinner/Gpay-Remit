@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/Gpay-Remit/gpay-remit/config"
+	apperrors "github.com/Gpay-Remit/gpay-remit/errors"
 	"github.com/Gpay-Remit/gpay-remit/models"
 	"github.com/Gpay-Remit/gpay-remit/utils"
 	"github.com/gin-gonic/gin"
@@ -65,15 +66,13 @@ func JwtAuthMiddleware(db *gorm.DB, cfg *config.Config) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		authHeader := c.GetHeader("Authorization")
 		if authHeader == "" {
-			c.JSON(http.StatusUnauthorized, gin.H{"error": "Authorization header is required"})
-			c.Abort()
+			AbortWithError(c, http.StatusUnauthorized, apperrors.CodeUnauthorized, "Authorization header is required", nil)
 			return
 		}
 
 		parts := strings.Split(authHeader, " ")
 		if len(parts) != 2 || parts[0] != "Bearer" {
-			c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid authorization header format"})
-			c.Abort()
+			AbortWithError(c, http.StatusUnauthorized, apperrors.CodeUnauthorized, "Invalid authorization header format", nil)
 			return
 		}
 
@@ -89,17 +88,15 @@ func JwtAuthMiddleware(db *gorm.DB, cfg *config.Config) gin.HandlerFunc {
 
 		if err != nil {
 			if errors.Is(err, jwt.ErrTokenExpired) {
-				c.JSON(http.StatusUnauthorized, gin.H{"error": "Token has expired", "code": "ExpiredToken"})
+				AbortWithError(c, http.StatusUnauthorized, apperrors.CodeUnauthorized, "Token has expired", gin.H{"reason": "ExpiredToken"})
 			} else {
-				c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid token", "code": "InvalidToken"})
+				AbortWithError(c, http.StatusUnauthorized, apperrors.CodeUnauthorized, "Invalid token", gin.H{"reason": "InvalidToken"})
 			}
-			c.Abort()
 			return
 		}
 
 		if !token.Valid {
-			c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid token", "code": "InvalidToken"})
-			c.Abort()
+			AbortWithError(c, http.StatusUnauthorized, apperrors.CodeUnauthorized, "Invalid token", gin.H{"reason": "InvalidToken"})
 			return
 		}
 
@@ -108,8 +105,7 @@ func JwtAuthMiddleware(db *gorm.DB, cfg *config.Config) gin.HandlerFunc {
 			var isRevoked bool
 			found, err := utils.GetCached("revoked:"+claims.ID, &isRevoked)
 			if err == nil && found && isRevoked {
-				c.JSON(http.StatusUnauthorized, gin.H{"error": "Token has been revoked", "code": "RevokedToken"})
-				c.Abort()
+				AbortWithError(c, http.StatusUnauthorized, apperrors.CodeUnauthorized, "Token has been revoked", gin.H{"reason": "RevokedToken"})
 				return
 			}
 		}
@@ -119,13 +115,11 @@ func JwtAuthMiddleware(db *gorm.DB, cfg *config.Config) gin.HandlerFunc {
 		}
 		if err := db.Model(&models.User{}).Select("password_changed_at").
 			Where("id = ?", claims.UserID).Take(&tokenState).Error; err != nil {
-			c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid token", "code": "InvalidToken"})
-			c.Abort()
+			AbortWithError(c, http.StatusUnauthorized, apperrors.CodeUnauthorized, "Invalid token", gin.H{"reason": "InvalidToken"})
 			return
 		}
 		if TokenIsStale(claims, tokenState.PasswordChangedAt) {
-			c.JSON(http.StatusUnauthorized, gin.H{"error": "Token was issued before the last password change", "code": "StaleToken"})
-			c.Abort()
+			AbortWithError(c, http.StatusUnauthorized, apperrors.CodeUnauthorized, "Token was issued before the last password change", gin.H{"reason": "StaleToken"})
 			return
 		}
 
@@ -142,15 +136,13 @@ func RequireRole(roles ...string) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		userRole, exists := c.Get("role")
 		if !exists {
-			c.JSON(http.StatusUnauthorized, gin.H{"error": "User role not found in context"})
-			c.Abort()
+			AbortWithError(c, http.StatusUnauthorized, apperrors.CodeUnauthorized, "User role not found in context", nil)
 			return
 		}
 
 		roleStr, ok := userRole.(string)
 		if !ok {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Invalid role type in context"})
-			c.Abort()
+			AbortWithError(c, http.StatusInternalServerError, apperrors.CodeInternal, "Invalid role type in context", nil)
 			return
 		}
 
@@ -163,8 +155,7 @@ func RequireRole(roles ...string) gin.HandlerFunc {
 		}
 
 		if !hasRole {
-			c.JSON(http.StatusForbidden, gin.H{"error": "Forbidden: insufficient permissions"})
-			c.Abort()
+			AbortWithError(c, http.StatusForbidden, apperrors.CodeForbidden, "Forbidden: insufficient permissions", nil)
 			return
 		}
 

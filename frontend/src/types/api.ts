@@ -2390,8 +2390,26 @@ export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
         Error: {
-            /** @example Invalid request body */
-            error?: string;
+            /** @description Error details. Every error response uses this shape. */
+            error: {
+                /**
+                 * @description Machine-readable error code, for example VALIDATION_ERROR, UNAUTHORIZED, FORBIDDEN, NOT_FOUND, CONFLICT, RATE_LIMITED or PAYLOAD_TOO_LARGE.
+                 * @example VALIDATION_ERROR
+                 */
+                code: string;
+                /**
+                 * @description Human-readable summary of the error. Server errors (5xx) always carry a generic message.
+                 * @example Invalid request body
+                 */
+                message: string;
+                /** @description Optional extra context whose shape depends on the code, for example the rejected fields for VALIDATION_ERROR or retry_after and reset_at for RATE_LIMITED. */
+                details?: unknown;
+                /**
+                 * @description Request identifier. Also sent in the X-Request-ID response header and written to the server logs for this request.
+                 * @example 3f2c1d7e-8a4b-4c2e-9f10-6b7d8e9a0c11
+                 */
+                request_id?: string;
+            };
         };
         RegisterRequest: {
             /**

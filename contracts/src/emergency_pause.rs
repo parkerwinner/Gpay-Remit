@@ -144,11 +144,7 @@ pub fn init_pause_config(
 }
 
 /// Add a new signer to the pause mechanism. Admin-only.
-pub fn add_signer(
-    env: &Env,
-    admin: &Address,
-    signer: &Address,
-) -> Result<(), PauseError> {
+pub fn add_signer(env: &Env, admin: &Address, signer: &Address) -> Result<(), PauseError> {
     admin.require_auth();
 
     let mut config: PauseConfig = env
@@ -175,11 +171,7 @@ pub fn add_signer(
 }
 
 /// Remove a signer from the pause mechanism. Admin-only.
-pub fn remove_signer(
-    env: &Env,
-    admin: &Address,
-    signer: &Address,
-) -> Result<(), PauseError> {
+pub fn remove_signer(env: &Env, admin: &Address, signer: &Address) -> Result<(), PauseError> {
     admin.require_auth();
 
     let mut config: PauseConfig = env
@@ -247,11 +239,7 @@ pub fn vote_pause(env: &Env, signer: &Address) -> Result<(), PauseError> {
 
     let now = env.ledger().timestamp();
 
-    let mut vote: PauseVote = match env
-        .storage()
-        .persistent()
-        .get(&PauseStorageKey::ActiveVote)
-    {
+    let mut vote: PauseVote = match env.storage().persistent().get(&PauseStorageKey::ActiveVote) {
         Some(v) => v,
         None => PauseVote {
             action: PauseAction::Pause,
@@ -286,7 +274,10 @@ pub fn vote_pause(env: &Env, signer: &Address) -> Result<(), PauseError> {
 
     // Check if quorum is reached
     if vote.vote_count >= config.quorum {
-        let expiration = env.ledger().sequence().saturating_add(config.pause_duration);
+        let expiration = env
+            .ledger()
+            .sequence()
+            .saturating_add(config.pause_duration);
         config.pause_expiration = Some(expiration);
         env.storage()
             .persistent()
@@ -338,11 +329,7 @@ pub fn vote_unpause(env: &Env, signer: &Address) -> Result<(), PauseError> {
 
     let now = env.ledger().timestamp();
 
-    let mut vote: PauseVote = match env
-        .storage()
-        .persistent()
-        .get(&PauseStorageKey::ActiveVote)
-    {
+    let mut vote: PauseVote = match env.storage().persistent().get(&PauseStorageKey::ActiveVote) {
         Some(v) => v,
         None => PauseVote {
             action: PauseAction::Unpause,
@@ -457,11 +444,7 @@ pub fn is_paused(env: &Env) -> bool {
 ///
 /// The new expiration must be later than the current ledger and later than
 /// the existing expiration, so this can only lengthen a pause.
-pub fn extend_pause(
-    env: &Env,
-    admin: &Address,
-    new_expiration: u32,
-) -> Result<(), PauseError> {
+pub fn extend_pause(env: &Env, admin: &Address, new_expiration: u32) -> Result<(), PauseError> {
     admin.require_auth();
     expire_pause_if_due(env);
 
@@ -635,7 +618,8 @@ mod tests {
             assert_eq!(get_config(&env).unwrap().pause_expiration, Some(extended));
 
             // The original expiration no longer ends the pause.
-            env.ledger().set_sequence_number(START_LEDGER + PAUSE_DURATION + 1);
+            env.ledger()
+                .set_sequence_number(START_LEDGER + PAUSE_DURATION + 1);
             assert!(is_paused(&env));
 
             env.ledger().set_sequence_number(extended + 1);

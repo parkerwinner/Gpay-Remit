@@ -62,17 +62,21 @@ fn rl_config() -> RateLimitConfig {
     }
 }
 
-const UNAUTH: Result<RemittanceError, soroban_sdk::InvokeError> =
-    Ok(RemittanceError::Unauthorized);
+const UNAUTH: Result<RemittanceError, soroban_sdk::InvokeError> = Ok(RemittanceError::Unauthorized);
 
 // ── Non-admin callers are rejected ───────────────────────────────────
 
 #[test]
 fn non_admin_cannot_set_oracle() {
     let s = setup();
-    let r = s.client.try_set_oracle(&s.attacker, &s.attacker, &s.attacker);
+    let r = s
+        .client
+        .try_set_oracle(&s.attacker, &s.attacker, &s.attacker);
     assert_eq!(r.unwrap_err(), UNAUTH);
-    assert_ne!(s.client.get_oracle_config().unwrap().primary_oracle, s.attacker);
+    assert_ne!(
+        s.client.get_oracle_config().unwrap().primary_oracle,
+        s.attacker
+    );
 }
 
 #[test]
@@ -88,7 +92,9 @@ fn non_admin_cannot_set_cached_rate() {
     let s = setup();
     let from = String::from_str(&s.env, "USDC");
     let to = String::from_str(&s.env, "EUR");
-    let r = s.client.try_set_cached_rate(&s.attacker, &from, &to, &1, &1);
+    let r = s
+        .client
+        .try_set_cached_rate(&s.attacker, &from, &to, &1, &1);
     assert_eq!(r.unwrap_err(), UNAUTH);
 }
 
@@ -146,9 +152,9 @@ fn non_admin_cannot_set_max_batch_size() {
 #[test]
 fn non_admin_cannot_set_rate_limit_config() {
     let s = setup();
-    let r = s
-        .client
-        .try_set_rate_limit_config(&s.attacker, &FunctionType::Remittance, &rl_config());
+    let r =
+        s.client
+            .try_set_rate_limit_config(&s.attacker, &FunctionType::Remittance, &rl_config());
     assert_eq!(r.unwrap_err(), UNAUTH);
 }
 
@@ -225,7 +231,10 @@ fn setup_without_auth<'a>() -> Setup<'a> {
 #[test]
 fn admin_without_signature_cannot_set_oracle() {
     let s = setup_without_auth();
-    assert!(s.client.try_set_oracle(&s.admin, &s.admin, &s.admin).is_err());
+    assert!(s
+        .client
+        .try_set_oracle(&s.admin, &s.admin, &s.admin)
+        .is_err());
 }
 
 #[test]
@@ -248,7 +257,10 @@ fn admin_without_signature_cannot_set_cached_rate() {
 #[test]
 fn admin_without_signature_cannot_set_fee_config() {
     let s = setup_without_auth();
-    assert!(s.client.try_set_fee_config(&s.admin, &fee_config()).is_err());
+    assert!(s
+        .client
+        .try_set_fee_config(&s.admin, &fee_config())
+        .is_err());
 }
 
 #[test]
@@ -332,7 +344,9 @@ fn uninitialized_hub_rejects_admin_functions() {
     let to = String::from_str(&env, "EUR");
 
     assert_eq!(
-        client.try_set_oracle(&caller, &caller, &caller).unwrap_err(),
+        client
+            .try_set_oracle(&caller, &caller, &caller)
+            .unwrap_err(),
         Ok(RemittanceError::OracleNotConfigured)
     );
     assert_eq!(
@@ -346,7 +360,9 @@ fn uninitialized_hub_rejects_admin_functions() {
         Ok(RemittanceError::OracleNotConfigured)
     );
     assert_eq!(
-        client.try_set_fee_config(&caller, &fee_config()).unwrap_err(),
+        client
+            .try_set_fee_config(&caller, &fee_config())
+            .unwrap_err(),
         UNAUTH
     );
     assert_eq!(
@@ -420,7 +436,8 @@ fn admin_can_call_admin_functions() {
         .set_rate_limit_config(&s.admin, &FunctionType::Remittance, &rl_config());
     s.client
         .set_global_rate_limit_config(&s.admin, &FunctionType::Remittance, &rl_config());
-    s.client.set_rate_limit_exemption(&s.admin, &s.attacker, &true);
+    s.client
+        .set_rate_limit_exemption(&s.admin, &s.attacker, &true);
     s.client
         .reset_metric(&s.admin, &MetricType::Volume, &0, &false);
 

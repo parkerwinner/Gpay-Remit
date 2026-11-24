@@ -252,10 +252,7 @@ impl RemittanceHubContract {
     /// performed by the corresponding `upgradeable` function. Fails closed
     /// with `Unauthorized` when the hub is not initialized instead of
     /// panicking.
-    fn check_upgrade_admin(
-        env: &Env,
-        admin: &Address,
-    ) -> Result<(), upgradeable::UpgradeError> {
+    fn check_upgrade_admin(env: &Env, admin: &Address) -> Result<(), upgradeable::UpgradeError> {
         let stored_admin: Address = env
             .storage()
             .persistent()
@@ -394,10 +391,18 @@ impl RemittanceHubContract {
         env.storage().persistent().get(&HubOracleKey::OracleConfig)
     }
 
-    pub fn set_fee_config(env: Env, admin: Address, config: FeeConfig) -> Result<(), RemittanceError> {
+    pub fn set_fee_config(
+        env: Env,
+        admin: Address,
+        config: FeeConfig,
+    ) -> Result<(), RemittanceError> {
         Self::require_admin(&env, &admin, RemittanceError::Unauthorized)?;
 
-        if config.percentage < 0 || config.percentage > 10000 || config.min_fee < 0 || config.max_fee < config.min_fee {
+        if config.percentage < 0
+            || config.percentage > 10000
+            || config.min_fee < 0
+            || config.max_fee < config.min_fee
+        {
             return Err(RemittanceError::InvalidAmount);
         }
 
@@ -436,7 +441,9 @@ impl RemittanceHubContract {
         if admin != stored_admin {
             return Err(RemittanceError::Unauthorized);
         }
-        env.storage().persistent().set(&DataKey::Treasury, &treasury);
+        env.storage()
+            .persistent()
+            .set(&DataKey::Treasury, &treasury);
 
         events::emit(
             &env,
@@ -463,11 +470,15 @@ impl RemittanceHubContract {
     }
 
     fn calculate_fee(env: &Env, amount: i128) -> i128 {
-        let config: FeeConfig = env.storage().persistent().get(&DataKey::FeeConfig).unwrap_or(FeeConfig {
-            percentage: 250,
-            min_fee: 0,
-            max_fee: i128::MAX,
-        });
+        let config: FeeConfig = env
+            .storage()
+            .persistent()
+            .get(&DataKey::FeeConfig)
+            .unwrap_or(FeeConfig {
+                percentage: 250,
+                min_fee: 0,
+                max_fee: i128::MAX,
+            });
 
         // floor(amount * pct / 10000) without intermediate overflow. On overflow
         // saturate (then clamp to max_fee) rather than returning 0, which would
@@ -2762,7 +2773,9 @@ mod test {
         let client = RemittanceHubContractClient::new(&env, &contract_id);
 
         let token_admin = Address::generate(&env);
-        let token_id = env.register_stellar_asset_contract_v2(token_admin.clone()).address();
+        let token_id = env
+            .register_stellar_asset_contract_v2(token_admin.clone())
+            .address();
         let token_client = soroban_sdk::token::StellarAssetClient::new(&env, &token_id);
 
         let sender = Address::generate(&env);

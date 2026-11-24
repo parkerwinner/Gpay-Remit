@@ -130,7 +130,7 @@ func (h *AuthHandler) Register(c *gin.Context) {
 
 	hash, err := models.HashPassword(req.Password)
 	if err != nil {
-		logger.Log.WithFields(logrus.Fields{
+		logger.ForRequest(c.GetString("requestID")).WithFields(logrus.Fields{
 			"endpoint": "/auth/register",
 		}).Warn("Registration rejected: weak password")
 		c.Error(errors.NewValidationError("Invalid password", err.Error()))
@@ -150,14 +150,14 @@ func (h *AuthHandler) Register(c *gin.Context) {
 			c.Error(errors.NewConflictError("Email already registered"))
 			return
 		}
-		logger.Log.WithFields(logrus.Fields{
+		logger.ForRequest(c.GetString("requestID")).WithFields(logrus.Fields{
 			"endpoint": "/auth/register",
 		}).Error("Failed to create user")
 		c.Error(errors.NewInternalError("Failed to create user", err))
 		return
 	}
 
-	logger.Log.WithFields(logrus.Fields{
+	logger.ForRequest(c.GetString("requestID")).WithFields(logrus.Fields{
 		"user_id":  user.ID,
 		"endpoint": "/auth/register",
 	}).Info("User registered")
@@ -184,7 +184,7 @@ func (h *AuthHandler) Login(c *gin.Context) {
 	}
 
 	if user.IsAccountLocked() {
-		logger.Log.WithFields(logrus.Fields{
+		logger.ForRequest(c.GetString("requestID")).WithFields(logrus.Fields{
 			"user_id":  user.ID,
 			"endpoint": "/auth/login",
 		}).Warn("Login attempt on locked account")
@@ -202,12 +202,12 @@ func (h *AuthHandler) Login(c *gin.Context) {
 
 	if !models.ComparePassword(user.PasswordHash, req.Password) {
 		if err := user.RecordFailedLogin(h.DB); err != nil {
-			logger.Log.WithFields(logrus.Fields{
+			logger.ForRequest(c.GetString("requestID")).WithFields(logrus.Fields{
 				"user_id": user.ID,
 			}).Error("Failed to record failed login attempt")
 		}
 
-		logger.Log.WithFields(logrus.Fields{
+		logger.ForRequest(c.GetString("requestID")).WithFields(logrus.Fields{
 			"user_id":  user.ID,
 			"endpoint": "/auth/login",
 			"attempts": user.FailedLoginAttempts,
@@ -233,12 +233,12 @@ func (h *AuthHandler) Login(c *gin.Context) {
 
 		if !user.VerifyTOTP(req.TOTPCode) {
 			if err := user.RecordFailedLogin(h.DB); err != nil {
-				logger.Log.WithFields(logrus.Fields{
+				logger.ForRequest(c.GetString("requestID")).WithFields(logrus.Fields{
 					"user_id": user.ID,
 				}).Error("Failed to record failed TOTP attempt")
 			}
 
-			logger.Log.WithFields(logrus.Fields{
+			logger.ForRequest(c.GetString("requestID")).WithFields(logrus.Fields{
 				"user_id":  user.ID,
 				"endpoint": "/auth/login",
 			}).Warn("Invalid TOTP code")
@@ -257,7 +257,7 @@ func (h *AuthHandler) Login(c *gin.Context) {
 
 	// Reset failed login attempts on successful login
 	if err := user.ResetFailedLoginAttempts(h.DB); err != nil {
-		logger.Log.WithFields(logrus.Fields{
+		logger.ForRequest(c.GetString("requestID")).WithFields(logrus.Fields{
 			"user_id": user.ID,
 		}).Error("Failed to reset login attempts")
 	}
@@ -274,7 +274,7 @@ func (h *AuthHandler) Login(c *gin.Context) {
 		return
 	}
 
-	logger.Log.WithFields(logrus.Fields{
+	logger.ForRequest(c.GetString("requestID")).WithFields(logrus.Fields{
 		"user_id":  user.ID,
 		"endpoint": "/auth/login",
 	}).Info("User logged in")
@@ -360,13 +360,13 @@ func (h *AuthHandler) ForgotPassword(c *gin.Context) {
 	limiter := middleware.GetRateLimiter(h.Cfg)
 	allowed, _, _ := limiter.IncrementAndCheck("forgot-password:"+req.Email, 3, time.Hour)
 	if !allowed {
-		c.JSON(http.StatusTooManyRequests, gin.H{"error": "Too many password reset requests. Please try again later."})
+		c.Error(errors.NewRateLimitedError("Too many password reset requests. Please try again later."))
 		return
 	}
 
 	ipAllowed, _, _ := limiter.IncrementAndCheck("forgot-password-ip:"+c.ClientIP(), 5, time.Hour)
 	if !ipAllowed {
-		c.JSON(http.StatusTooManyRequests, gin.H{"error": "Too many password reset requests from this IP. Please try again later."})
+		c.Error(errors.NewRateLimitedError("Too many password reset requests from this IP. Please try again later."))
 		return
 	}
 
@@ -404,17 +404,19 @@ func (h *AuthHandler) ForgotPassword(c *gin.Context) {
 		return
 	}
 
-	// Send password reset email asynchronously
+	// Send password reset email asynchronously. The request ID is read here,
+	// not inside the goroutine: the gin.Context is reused after the handler returns.
+	requestID := c.GetString("requestID")
 	go func() {
 		if err := h.EmailService.SendPasswordResetEmail(&user, token); err != nil {
-			logger.Log.WithFields(logrus.Fields{
+			logger.ForRequest(requestID).WithFields(logrus.Fields{
 				"user_id":  user.ID,
 				"endpoint": "/auth/forgot-password",
 			}).Error("Failed to send password reset email")
 		}
 	}()
 
-	logger.Log.WithFields(logrus.Fields{
+	logger.ForRequest(c.GetString("requestID")).WithFields(logrus.Fields{
 		"user_id":  user.ID,
 		"endpoint": "/auth/forgot-password",
 	}).Info("Password reset requested")
@@ -436,7 +438,7 @@ func (h *AuthHandler) RequestUnlock(c *gin.Context) {
 	limiter := middleware.GetRateLimiter(h.Cfg)
 	allowed, _, _ := limiter.IncrementAndCheck("unlock:"+c.ClientIP(), 3, time.Hour)
 	if !allowed {
-		c.JSON(http.StatusTooManyRequests, gin.H{"error": "Too many unlock requests. Please try again later."})
+		c.Error(errors.NewRateLimitedError("Too many unlock requests. Please try again later."))
 		return
 	}
 
@@ -458,9 +460,10 @@ func (h *AuthHandler) RequestUnlock(c *gin.Context) {
 			return
 		}
 
+		requestID := c.GetString("requestID")
 		go func() {
 			if err := h.EmailService.SendAccountUnlockEmail(&user, token); err != nil {
-				logger.Log.WithFields(logrus.Fields{
+				logger.ForRequest(requestID).WithFields(logrus.Fields{
 					"user_id":  user.ID,
 					"endpoint": "/auth/request-unlock",
 				}).Error("Failed to send account unlock email")
@@ -561,7 +564,7 @@ func (h *AuthHandler) SetupMFA(c *gin.Context) {
 		return
 	}
 
-	logger.Log.WithFields(logrus.Fields{
+	logger.ForRequest(c.GetString("requestID")).WithFields(logrus.Fields{
 		"user_id":  user.ID,
 		"endpoint": "/auth/mfa/setup",
 	}).Info("MFA setup initiated")
@@ -602,7 +605,7 @@ func (h *AuthHandler) VerifyMFA(c *gin.Context) {
 		return
 	}
 
-	logger.Log.WithFields(logrus.Fields{
+	logger.ForRequest(c.GetString("requestID")).WithFields(logrus.Fields{
 		"user_id":  user.ID,
 		"endpoint": "/auth/mfa/verify",
 	}).Info("MFA enabled")
@@ -642,7 +645,7 @@ func (h *AuthHandler) DisableMFA(c *gin.Context) {
 		return
 	}
 
-	logger.Log.WithFields(logrus.Fields{
+	logger.ForRequest(c.GetString("requestID")).WithFields(logrus.Fields{
 		"user_id":  user.ID,
 		"endpoint": "/auth/mfa/disable",
 	}).Info("MFA disabled")
@@ -699,7 +702,7 @@ func (h *AuthHandler) StepUpMFA(c *gin.Context) {
 		return
 	}
 
-	logger.Log.WithFields(logrus.Fields{
+	logger.ForRequest(c.GetString("requestID")).WithFields(logrus.Fields{
 		"user_id":  user.ID,
 		"endpoint": "/auth/mfa/step-up",
 	}).Info("MFA step-up verified")
@@ -786,7 +789,7 @@ func (h *AuthHandler) ResetPassword(c *gin.Context) {
 		return
 	}
 
-	logger.Log.WithFields(logrus.Fields{
+	logger.ForRequest(c.GetString("requestID")).WithFields(logrus.Fields{
 		"user_id":  user.ID,
 		"endpoint": "/auth/reset-password",
 	}).Info("Password reset successfully")
@@ -842,7 +845,7 @@ func (h *AuthHandler) ChangePassword(c *gin.Context) {
 		return
 	}
 
-	logger.Log.WithFields(logrus.Fields{
+	logger.ForRequest(c.GetString("requestID")).WithFields(logrus.Fields{
 		"user_id":  user.ID,
 		"endpoint": "/auth/change-password",
 	}).Info("Password changed successfully")
@@ -883,7 +886,7 @@ func (h *AuthHandler) Logout(c *gin.Context) {
 		userID = claims.UserID
 	}
 
-	logger.Log.WithFields(logrus.Fields{
+	logger.ForRequest(c.GetString("requestID")).WithFields(logrus.Fields{
 		"user_id":  userID,
 		"endpoint": "/auth/logout",
 	}).Info("User logged out")

@@ -131,11 +131,7 @@ func versionsBySource(sources []versionSource) map[string]string {
 }
 
 func abortUnsupportedVersion(c *gin.Context, message string, details gin.H) {
-	resp := ErrorResponse{}
-	resp.Error.Code = errors.CodeUnsupportedVersion
-	resp.Error.Message = message
-	resp.Error.Details = details
-	c.AbortWithStatusJSON(http.StatusBadRequest, resp)
+	AbortWithError(c, http.StatusBadRequest, errors.CodeUnsupportedVersion, message, details)
 }
 
 func setDeprecationHeaders(c *gin.Context, version string) {
@@ -213,12 +209,11 @@ func RequireVersion(allowedVersions ...string) gin.HandlerFunc {
 		}
 
 		if !allowed {
-			c.JSON(http.StatusNotAcceptable, gin.H{
-				"error":             "This endpoint is not available in the requested API version",
-				"current_version":   currentVersion,
-				"required_versions": allowedVersions,
-			})
-			c.Abort()
+			AbortWithError(c, http.StatusNotAcceptable, errors.CodeUnsupportedVersion,
+				"This endpoint is not available in the requested API version", gin.H{
+					"current_version":   currentVersion,
+					"required_versions": allowedVersions,
+				})
 			return
 		}
 

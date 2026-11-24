@@ -21,6 +21,14 @@ const (
 // does not exist, or names two different versions (path vs header).
 const CodeUnsupportedVersion ErrorCode = "UNSUPPORTED_API_VERSION"
 
+// Codes for statuses that previously had no shared constant and were written
+// inline with an ad-hoc body.
+const (
+	CodeRateLimited     ErrorCode = "RATE_LIMITED"
+	CodePayloadTooLarge ErrorCode = "PAYLOAD_TOO_LARGE"
+	CodeRequestTimeout  ErrorCode = "REQUEST_TIMEOUT"
+)
+
 // AppError represents a standardized application error
 type AppError struct {
 	Code       ErrorCode   `json:"code"`
@@ -75,4 +83,8 @@ func NewForbiddenError(message string) *AppError {
 
 func NewConflictError(message string) *AppError {
 	return NewAppError(http.StatusConflict, CodeConflict, message, nil, nil)
+}
+
+func NewRateLimitedError(message string) *AppError {
+	return NewAppError(http.StatusTooManyRequests, CodeRateLimited, message, nil, nil)
 }

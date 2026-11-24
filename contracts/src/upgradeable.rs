@@ -180,9 +180,7 @@ pub fn upgrade_to(
         // Data layout is behind the code version: never stack another upgrade on top.
         return Err(UpgradeError::VersionMismatch);
     }
-    let expected = current
-        .checked_add(1)
-        .ok_or(UpgradeError::UpgradeFailed)?;
+    let expected = current.checked_add(1).ok_or(UpgradeError::UpgradeFailed)?;
     if target_version != expected {
         return Err(UpgradeError::VersionSkipped);
     }

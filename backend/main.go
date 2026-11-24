@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/Gpay-Remit/gpay-remit/config"
+	apperrors "github.com/Gpay-Remit/gpay-remit/errors"
 	"github.com/Gpay-Remit/gpay-remit/graphql"
 	"github.com/Gpay-Remit/gpay-remit/handlers"
 	"github.com/Gpay-Remit/gpay-remit/logger"
@@ -214,7 +215,7 @@ func registerRoutes(router *gin.Engine, db, readDB *gorm.DB, cfg *config.Config)
 				userID, _ := c.Get("userID")
 				var user models.User
 				if err := db.First(&user, userID).Error; err != nil {
-					c.JSON(404, gin.H{"error": "User not found"})
+					middleware.AbortWithError(c, http.StatusNotFound, apperrors.CodeNotFound, "User not found", nil)
 					return
 				}
 				c.JSON(200, gin.H{"mfa_enabled": user.MFAEnabled})
@@ -349,7 +350,7 @@ func registerRoutes(router *gin.Engine, db, readDB *gorm.DB, cfg *config.Config)
 				userID, _ := c.Get("userID")
 				var user models.User
 				if err := db.First(&user, userID).Error; err != nil {
-					c.JSON(404, gin.H{"error": "User not found"})
+					middleware.AbortWithError(c, http.StatusNotFound, apperrors.CodeNotFound, "User not found", nil)
 					return
 				}
 				c.JSON(200, gin.H{"mfa_enabled": user.MFAEnabled})

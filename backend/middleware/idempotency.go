@@ -12,9 +12,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/gin-gonic/gin"
+	"github.com/Gpay-Remit/gpay-remit/errors"
 	"github.com/Gpay-Remit/gpay-remit/models"
 	"github.com/Gpay-Remit/gpay-remit/utils"
+	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 )
 
@@ -55,26 +56,20 @@ func IdempotencyMiddleware(db *gorm.DB, config ...IdempotencyConfig) gin.Handler
 		// Get idempotency key from header
 		idempotencyKey := c.GetHeader("Idempotency-Key")
 		if idempotencyKey == "" {
-			c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{
-				"error": "Idempotency-Key header is required for this request",
-			})
+			AbortWithError(c, http.StatusBadRequest, errors.CodeValidation, "Idempotency-Key header is required for this request", nil)
 			return
 		}
 
 		// Validate idempotency key format
 		if err := validateIdempotencyKey(idempotencyKey); err != nil {
-			c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{
-				"error": err.Error(),
-			})
+			AbortWithError(c, http.StatusBadRequest, errors.CodeValidation, err.Error(), nil)
 			return
 		}
 
 		// Read request body for hashing
 		bodyBytes, err := io.ReadAll(c.Request.Body)
 		if err != nil {
-			c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{
-				"error": "Failed to read request body",
-			})
+			AbortWithError(c, http.StatusBadRequest, errors.CodeValidation, "Failed to read request body", nil)
 			return
 		}
 
@@ -139,9 +134,7 @@ func IdempotencyMiddleware(db *gorm.DB, config ...IdempotencyConfig) gin.Handler
 				}
 			}
 
-			c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{
-				"error": "Failed to create idempotency record",
-			})
+			AbortWithError(c, http.StatusInternalServerError, errors.CodeInternal, "Failed to create idempotency record", nil)
 			return
 		}
 
@@ -175,8 +168,7 @@ func IdempotencyMiddleware(db *gorm.DB, config ...IdempotencyConfig) gin.Handler
 // experience from the normal repeat-request path.
 func respondFromExistingRecord(c *gin.Context, idempotencyKey string, existingRecord *models.IdempotencyRecord, requestHash string, db *gorm.DB) {
 	if existingRecord.RequestHash != requestHash {
-		c.AbortWithStatusJSON(http.StatusConflict, gin.H{
-			"error":         "Idempotency key already used with different request body",
+		AbortWithError(c, http.StatusConflict, errors.CodeConflict, "Idempotency key already used with different request body", gin.H{
 			"existing_hash": existingRecord.RequestHash,
 			"new_hash":      requestHash,
 		})
@@ -300,9 +292,7 @@ func handleConcurrentRequest(c *gin.Context, key string, record *models.Idempote
 
 		// Check timeout
 		if time.Since(startTime) > maxWaitTime {
-			c.AbortWithStatusJSON(http.StatusRequestTimeout, gin.H{
-				"error": "Request with same idempotency key is still processing",
-			})
+			AbortWithError(c, http.StatusRequestTimeout, errors.CodeRequestTimeout, "Request with same idempotency key is still processing", nil)
 			return
 		}
 

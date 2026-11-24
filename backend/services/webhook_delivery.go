@@ -104,7 +104,7 @@ func (s *WebhookDeliveryService) TriggerWebhookWithContext(event string, data ma
 
 		payloadJSON, err := json.Marshal(payload)
 		if err != nil {
-			logger.Log.WithField("webhook_id", webhook.ID).WithError(err).Error("Failed to marshal webhook payload")
+			logger.ForRequest(requestID).WithField("webhook_id", webhook.ID).WithError(err).Error("Failed to marshal webhook payload")
 			continue
 		}
 
@@ -118,7 +118,7 @@ func (s *WebhookDeliveryService) TriggerWebhookWithContext(event string, data ma
 		}
 
 		if err := s.db.Create(&delivery).Error; err != nil {
-			logger.Log.WithField("webhook_id", webhook.ID).WithError(err).Error("Failed to create webhook delivery")
+			logger.ForRequest(requestID).WithField("webhook_id", webhook.ID).WithError(err).Error("Failed to create webhook delivery")
 			continue
 		}
 
@@ -244,7 +244,7 @@ func (s *WebhookDeliveryService) deliver(webhook *models.Webhook, delivery *mode
 				metrics.WebhookRetryAttemptsTotal.WithLabelValues(kind, "success").Inc()
 			}
 
-			logger.Log.WithField("webhook_id", webhook.ID).
+			logger.ForRequest(requestID).WithField("webhook_id", webhook.ID).
 				WithField("delivery_id", delivery.ID).
 				Info("Webhook delivered successfully")
 			return
@@ -260,7 +260,7 @@ func (s *WebhookDeliveryService) deliver(webhook *models.Webhook, delivery *mode
 		maxInline, baseDelay, _ := getRetryPolicy(errorType)
 
 		// Log the error with classification
-		logLevel := logger.Log.WithField("webhook_id", webhook.ID).
+		logLevel := logger.ForRequest(requestID).WithField("webhook_id", webhook.ID).
 			WithField("delivery_id", delivery.ID).
 			WithField("attempt", delivery.AttemptCount).
 			WithField("error_type", fmt.Sprintf("%d", errorType))

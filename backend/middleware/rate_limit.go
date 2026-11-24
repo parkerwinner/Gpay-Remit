@@ -10,9 +10,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/gin-gonic/gin"
 	"github.com/Gpay-Remit/gpay-remit/config"
+	"github.com/Gpay-Remit/gpay-remit/errors"
 	"github.com/Gpay-Remit/gpay-remit/utils"
+	"github.com/gin-gonic/gin"
 )
 
 // RateLimiter stores rate limit information per user
@@ -256,8 +257,7 @@ func RateLimitMiddleware(cfg *config.Config) gin.HandlerFunc {
 		if !allowed {
 			retryAfter := retryAfterSeconds(time.Until(resetAt))
 			c.Header("Retry-After", strconv.Itoa(retryAfter))
-			c.AbortWithStatusJSON(http.StatusTooManyRequests, gin.H{
-				"error":       "rate limit exceeded",
+			AbortWithError(c, http.StatusTooManyRequests, errors.CodeRateLimited, "rate limit exceeded", gin.H{
 				"retry_after": retryAfter,
 				"reset_at":    resetAt.Format(time.RFC3339),
 			})
@@ -299,7 +299,7 @@ func AdminResetRateLimit(cfg *config.Config) gin.HandlerFunc {
 		endpoint := c.Query("endpoint")
 		
 		if userID == "" {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "user_id is required"})
+			AbortWithError(c, http.StatusBadRequest, errors.CodeValidation, "user_id is required", nil)
 			return
 		}
 

@@ -206,7 +206,11 @@ fn full_escrow_to_remittance_lifecycle() {
     assert_eq!(w.token.balance(&w.recipient), AMOUNT - expected_fee);
     assert_eq!(w.token.balance(&w.treasury), expected_fee);
     assert_eq!(w.token.balance(&w.escrow.address), 0);
-    assert_eq!(w.token.balance(&w.admin), 0, "fees go to the treasury, not the admin");
+    assert_eq!(
+        w.token.balance(&w.admin),
+        0,
+        "fees go to the treasury, not the admin"
+    );
 
     // 6. Invoice is paid and the remittance completes.
     w.hub.mark_invoice_paid(&invoice_id, &w.recipient);
@@ -265,7 +269,9 @@ fn aml_flagged_remittance_cannot_complete_but_escrow_unaffected() {
     let usd = Symbol::new(&w.env, "USD");
     w.aml.set_risk_score(&w.admin, &w.recipient, &95);
 
-    let id = w.hub.send_remittance(&w.sender, &w.recipient, &AMOUNT, &usd);
+    let id = w
+        .hub
+        .send_remittance(&w.sender, &w.recipient, &AMOUNT, &usd);
     assert_eq!(
         w.hub.get_remittance(&id).unwrap().status,
         symbol_short!("flagged")
